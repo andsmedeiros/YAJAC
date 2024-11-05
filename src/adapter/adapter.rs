@@ -1,11 +1,18 @@
 use crate::{
-    http_wrappers::Uri, 
-    resourceful::{RelatedData, Resourceful}, 
+    adapter::Parameters,
+    http_wrappers::Uri,
+    resourceful::{
+        RelatedData,
+        RelatedCollection,
+        RelatedRecord,
+        Relationships,
+        Resourceful
+    },
     spec::{
         document::{Document, ImplementationInfo},
         error::Error,
         identifier::Identifier, 
-        relationship::{self, Linkage, Relationship}, 
+        relationship::{self, Linkage, Relationship},
         resource::{self, Resource}
     }
 };
@@ -49,6 +56,12 @@ pub struct Adapter<G: UriGenerator> {
 }
 
 impl<G: UriGenerator> Adapter<G> {
+    pub fn new(uri_generator: G) -> Self {
+        Self {
+            cache: HashMap::new(),
+            uri_generator
+        }
+    }
     
     fn implementation_info() -> ImplementationInfo {
         ImplementationInfo {
@@ -62,23 +75,35 @@ impl<G: UriGenerator> Adapter<G> {
     fn link_related_data(&mut self, related_data: RelatedData) -> Linkage {
         match related_data {
             RelatedData::None => Linkage::Empty,
-            RelatedData::One(model) => {
-                let id = model.identifier.clone();
-                self.cache.insert(model.identifier.clone(), model);
-                Linkage::ToOne(id)
+            RelatedData::One(record) => {
+                match record {
+                    RelatedRecord::Unloaded(id) => Linkage::ToOne(id),
+                    RelatedRecord::Loaded(record) => {
+                        let id = record.identifier.clone();
+                        self.cache.insert(record.identifier.clone(), record);
+                        Linkage::ToOne(id)
+                    }
+                }
+
             },
             RelatedData::Many(collection) => {
-                let ids = collection.into_iter().map(|model| {
-                    let id = model.identifier.clone();
-                    self.cache.insert(model.identifier.clone(), model);
-                    id
-                }).collect();
-                Linkage::ToMany(ids)
+                match collection {
+                    RelatedCollection::Unloaded(ids) => Linkage::ToMany(ids),
+                    RelatedCollection::Loaded(records) => {
+                        let ids = records.into_iter().map(|model| {
+                            let id = model.identifier.clone();
+                            self.cache.insert(model.identifier.clone(), model);
+                            id
+                        }).collect();
+                        Linkage::ToMany(ids)
+                    }
+                }
+
             }
         }
     }
     
-    fn link_relationships(&mut self, identifier: Identifier, relationships: HashMap<String, RelatedData>)
+    fn link_relationships(&mut self, identifier: Identifier, relationships: Relationships)
         -> HashMap<String, Relationship> 
     {
         relationships
@@ -102,24 +127,24 @@ impl<G: UriGenerator> Adapter<G> {
             .collect()
     }
 
-    pub fn make_resource(&mut self, model: &impl Resourceful) -> Resource {
+    pub fn make_resource(&mut self, model: &impl Resourceful, params: &Parameters) -> Resource {
          Resource {
             identifier: model.identifier(),
-            attributes: model.attributes(),
-            relationships: model.relationships(self)
+            attributes: model.attributes(&params),
+            relationships: model.relationships(self, &params)
                 .map(|relationships| 
                     self.link_relationships(model.identifier(), relationships)
                 ),
             links: resource::Links {
                 this: self.uri_generator.uri_for_resource(&model.identifier())
             }.into(),
-            meta: model.meta()
+            meta: model.meta(&params)
         }
     }
 
-    pub fn make_resource_document(&mut self, model: &impl Resourceful) -> Document {
+    pub fn make_resource_document(&mut self, model: &impl Resourceful, params: &Parameters) -> Document {
         Document {
-            content: self.make_resource(model).into(),
+            content: self.make_resource(model, params).into(),
             meta: None,
             jsonapi: Self::implementation_info().into(),
             links: None,
@@ -127,7 +152,7 @@ impl<G: UriGenerator> Adapter<G> {
         }
     }
 
-    pub fn make_collection_document<'a, I, R>(&mut self, models: I) -> Document 
+    pub fn make_collection_document<'a, I, R>(&mut self, models: I, params: &Parameters) -> Document
     where
         I: IntoIterator<Item=&'a R>,
         R: Resourceful + 'a
@@ -135,7 +160,7 @@ impl<G: UriGenerator> Adapter<G> {
         Document {
             content: models
                 .into_iter()
-                .map(|model| self.make_resource(model))
+                .map(|model| self.make_resource(model, params))
                 .collect::<Vec<Resource>>()
                 .into(),
             meta: None,

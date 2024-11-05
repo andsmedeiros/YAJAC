@@ -1,7 +1,8 @@
 use crate::http_wrappers::Uri;
 use regex::Regex;
 use std::{
-    borrow::BorrowMut, collections::HashMap, sync::LazyLock
+    borrow::Borrow,
+    collections::HashMap, sync::LazyLock,
 };
 
 mod regex_builder {
@@ -32,10 +33,10 @@ pub struct SortingField { field: String, direction: SortDirection }
 pub type SortParameters = Vec<SortingField>;
 
 pub struct Parameters {
-    fields: Option<FieldsParameters>,
-    include: Option<IncludeParameters>,
-    filter: Option<FilterParameters>,
-    sort: Option<SortParameters>
+    pub fields: Option<FieldsParameters>,
+    pub include: Option<IncludeParameters>,
+    pub filter: Option<FilterParameters>,
+    pub sort: Option<SortParameters>
 }
 
 impl Default for Parameters {
@@ -54,6 +55,13 @@ impl Parameters {
         match uri.query() {
             None => return Parameters::default(),
             Some(query) => Self::parse_query(query)
+        }
+    }
+
+    pub fn fields_for(&self, kind: impl Borrow<str>) -> Option<&Vec<String>> {
+        match self.fields.as_ref() {
+            None => None,
+            Some(fields) => fields.get(kind.borrow())
         }
     }
 
@@ -78,7 +86,7 @@ impl Parameters {
         .collect()
     }
 
-    fn parse_query_parameter_path<'a>(path: &'a str) -> String {
+    fn parse_query_parameter_path(path: &str) -> String {
         QUERY_PARAM_PATH_SEGMENT_REGEX
             .captures_iter(path)
             .map(|c| c.extract())
@@ -116,6 +124,14 @@ impl Parameters {
                 },
                 _ => continue
             }
+        }
+
+        if !fields_params.is_empty() {
+            parameters.fields = Some(fields_params);
+        }
+
+        if !filter_params.is_empty() {
+            parameters.filter = Some(filter_params);
         }
 
         parameters
