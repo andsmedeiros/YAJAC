@@ -1,5 +1,4 @@
 use crate::{
-    adapter::Parameters,
     spec::{
         identifier::Identifier,
         resource::Resource,
