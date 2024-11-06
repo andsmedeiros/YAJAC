@@ -2,11 +2,13 @@ use crate::{
     adapter::Parameters,
     http_wrappers::Uri,
     resourceful::{
-        RelatedData,
-        RelatedCollection,
-        RelatedRecord,
         Relationships,
-        Resourceful
+        Resourceful,
+        related_data::{
+            RelatedData,
+            RelatedCollection,
+            RelatedRecord,
+        }
     },
     spec::{
         document::{Document, ImplementationInfo},
@@ -47,6 +49,35 @@ pub trait UriGenerator {
         format!("{resource}/{relationship}")
             .parse::<Uri>()
             .expect(GENERATED_INVALID_MSG)
+    }
+}
+
+pub struct DefaultUriGenerator<'a> {
+    protocol: &'a str,
+    host: &'a str,
+    namespace: &'a str
+}
+
+impl<'a> DefaultUriGenerator<'a> {
+    pub fn new(protocol: &'a str, host: &'a str, namespace: &'a str) -> Self {
+        assert!(
+            !protocol.is_empty() && !host.is_empty() ||
+            protocol.is_empty() && host.is_empty(),
+            "URL protocol and host must either be both absent of both present."
+        );
+        DefaultUriGenerator { protocol, host, namespace }
+    }
+}
+
+impl Default for DefaultUriGenerator<'_> {
+    fn default() -> Self {
+        DefaultUriGenerator::new("", "", "")
+    }
+}
+
+impl<'a> UriGenerator for DefaultUriGenerator<'a> {
+    fn base_url(&self) -> String {
+        format!("{}://{}:{}", self.protocol, self.host, self.namespace)
     }
 }
 
