@@ -2,28 +2,12 @@ use crate::{
     adapter::{Adapter, Parameters, UriGenerator},
     spec::{
         identifier::Identifier,
-        resource::Resource,
     }
 };
+use super::related_data::RelatedData;
 
 use serde_json::Value;
 use std::collections::HashMap;
-
-pub enum RelatedRecord {
-    Unloaded(Identifier),
-    Loaded(Resource)
-}
-
-pub enum RelatedCollection {
-    Unloaded(Vec<Identifier>),
-    Loaded(Vec<Resource>)
-}
-
-pub enum RelatedData {
-    None,
-    One(RelatedRecord),
-    Many(RelatedCollection),
-}
 
 pub type Attributes = HashMap<String, Value>;
 pub type Relationships = HashMap<String, RelatedData>;
