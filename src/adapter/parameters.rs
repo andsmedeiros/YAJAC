@@ -28,10 +28,14 @@ pub type FieldsParameters = HashMap<String, Vec<String>>;
 pub type IncludeParameters = Vec<String>;
 pub type FilterParameters = HashMap<String, String>;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SortDirection { Ascending, Descending }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SortingField { field: String, direction: SortDirection }
 pub type SortParameters = Vec<SortingField>;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Parameters {
     pub fields: Option<FieldsParameters>,
     pub include: Option<IncludeParameters>,
@@ -51,7 +55,7 @@ impl Default for Parameters {
 }
 
 impl Parameters {
-    pub fn new(uri: Uri) -> Parameters {
+    pub fn new(uri: &Uri) -> Parameters {
         match uri.query() {
             None => return Parameters::default(),
             Some(query) => Self::parse_query(query)
@@ -59,9 +63,9 @@ impl Parameters {
     }
 
     pub fn fields_for(&self, kind: impl Borrow<str>) -> Option<&Vec<String>> {
-        match self.fields.as_ref() {
+        match self.fields {
             None => None,
-            Some(fields) => fields.get(kind.borrow())
+            Some(ref fields) => fields.get(kind.borrow()),
         }
     }
 
@@ -138,8 +142,11 @@ impl Parameters {
     }
 }
 
-impl From<Uri> for Parameters {
-    fn from(uri: Uri) -> Self {
-        Parameters::new(uri)
+impl<U> From<U> for Parameters
+where
+    U: Borrow<Uri> + Sized
+{
+    fn from(uri: U) -> Self {
+        Parameters::new(uri.borrow())
     }
 }
