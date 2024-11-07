@@ -1,5 +1,5 @@
 use crate::{
-    adapter::{Adapter, Parameters, UriGenerator},
+    adapter::{Adapter, Context, Parameters, UriGenerator},
     spec::{
         identifier::Identifier,
     }
@@ -17,8 +17,9 @@ pub trait Resourceful {
     fn kind(&self) -> &'static str;
     fn identifier(&self) -> Identifier;
 
-    fn attributes(&self, _params: &Parameters) -> Option<Attributes> { None }
-    fn relationships<G: UriGenerator>(&self, _adapter: &mut Adapter<G>, _params: &Parameters)
+    fn attributes<G: UriGenerator>(&self, _context: &Context<G>)
+        -> Option<Attributes> { None }
+    fn relationships<G: UriGenerator>(&self, _context: &mut Context<G>)
         -> Option<Relationships> { None }
-    fn meta(&self, _params: &Parameters) -> Option<Meta> { None }
+    fn meta<G: UriGenerator>(&self, _context: &Context<G>) -> Option<Meta> { None }
 }
