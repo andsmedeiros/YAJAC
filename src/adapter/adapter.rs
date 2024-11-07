@@ -1,5 +1,5 @@
 use crate::{
-    adapter::Parameters,
+    adapter::{Context, Parameters},
     http_wrappers::Uri,
     resourceful::{
         Relationships,
@@ -18,7 +18,11 @@ use crate::{
         resource::{self, Resource}
     }
 };
-use std::collections::HashMap;
+use std::{
+    borrow::Borrow,
+    collections::HashMap
+};
+use serde_json::Value;
 
 const GENERATED_INVALID_MSG: &'static str = "Generated an invalid URI";
 
@@ -83,17 +87,87 @@ impl<'a> UriGenerator for DefaultUriGenerator<'a> {
 
 pub struct Adapter<G: UriGenerator> {    
     cache: HashMap<Identifier, Resource>,
+    uri: Uri,
+    params: Parameters,
     uri_generator: G,
 }
 
 impl<G: UriGenerator> Adapter<G> {
-    pub fn new(uri_generator: G) -> Self {
+    pub fn new(uri: Uri, uri_generator: G) -> Self {
+        let params = Parameters::from(uri.borrow());
         Self {
             cache: HashMap::new(),
+            uri,
+            params,
             uri_generator
         }
     }
-    
+
+    pub fn make_resource(&mut self, model: &impl Resourceful, params: &Parameters) -> Resource {
+        if self.cache.contains_key(&model.identifier()) {
+            return self.cache.get(&model.identifier()).unwrap().clone();
+        }
+
+        let mut context = Context::new(self, params.clone());
+
+        let attributes = model.attributes(&context);
+        let relationships = model.relationships(&mut context);
+        let meta = model.meta(&context);
+        let links = resource::Links {
+            this: self.uri_generator.uri_for_resource(&model.identifier())
+        };
+
+        Resource {
+            identifier: model.identifier(),
+            attributes,
+            relationships: relationships.map(|r|
+                self.link_relationships(model.identifier(), r)
+            ),
+            links: links.into(),
+            meta
+        }
+    }
+
+    pub fn make_resource_document(mut self, model: &impl Resourceful, params: &Parameters) -> Document {
+        Document {
+            content: self.make_resource(model, params).into(),
+            meta: None,
+            jsonapi: Self::implementation_info().into(),
+            links: None,
+            included: self.included_resources(),
+        }
+    }
+
+    pub fn make_collection_document<'a, I, R>(mut self, models: I, params: &Parameters) -> Document
+    where
+        I: IntoIterator<Item=&'a R>,
+        R: Resourceful + 'a
+    {
+        Document {
+            content: models
+                .into_iter()
+                .map(|model|
+                    self.make_resource(model, params)
+                )
+                .collect::<Vec<Resource>>()
+                .into(),
+            meta: None,
+            jsonapi: Self::implementation_info().into(),
+            links: None,
+            included: self.included_resources()
+        }
+    }
+
+    pub fn make_errors_document<I>(mut self, errors: Vec<Error>) -> Document {
+        Document {
+            content: errors.into(),
+            meta: None,
+            jsonapi: Self::implementation_info().into(),
+            links: None,
+            included: None
+        }
+    }
+
     fn implementation_info() -> ImplementationInfo {
         ImplementationInfo {
             version: Some("1.1".to_string()),
@@ -103,7 +177,21 @@ impl<G: UriGenerator> Adapter<G> {
         }
     }
 
-    fn link_related_data(&mut self, related_data: RelatedData) -> Linkage {
+    fn included_resources(mut self) -> Option<Vec<Value>> {
+        if self.cache.is_empty() {
+            None
+        } else {
+            self.cache.values()
+                .into_iter()
+                .map(|resource|
+                    serde_json::to_value(&resource).unwrap()
+                )
+                .collect::<Vec<_>>()
+                .into()
+        }
+    }
+
+    pub(crate) fn link_related_data(&mut self, related_data: RelatedData) -> Linkage {
         match related_data {
             RelatedData::None => Linkage::Empty,
             RelatedData::One(record) => {
@@ -134,7 +222,7 @@ impl<G: UriGenerator> Adapter<G> {
         }
     }
     
-    fn link_relationships(&mut self, identifier: Identifier, relationships: Relationships)
+    pub(crate) fn link_relationships(&mut self, identifier: Identifier, relationships: Relationships)
         -> HashMap<String, Relationship> 
     {
         relationships
@@ -156,58 +244,5 @@ impl<G: UriGenerator> Adapter<G> {
                 (relationship_name, relationship)
             })
             .collect()
-    }
-
-    pub fn make_resource(&mut self, model: &impl Resourceful, params: &Parameters) -> Resource {
-         Resource {
-            identifier: model.identifier(),
-            attributes: model.attributes(&params),
-            relationships: model.relationships(self, &params)
-                .map(|relationships| 
-                    self.link_relationships(model.identifier(), relationships)
-                ),
-            links: resource::Links {
-                this: self.uri_generator.uri_for_resource(&model.identifier())
-            }.into(),
-            meta: model.meta(&params)
-        }
-    }
-
-    pub fn make_resource_document(&mut self, model: &impl Resourceful, params: &Parameters) -> Document {
-        Document {
-            content: self.make_resource(model, params).into(),
-            meta: None,
-            jsonapi: Self::implementation_info().into(),
-            links: None,
-            included: None,
-        }
-    }
-
-    pub fn make_collection_document<'a, I, R>(&mut self, models: I, params: &Parameters) -> Document
-    where
-        I: IntoIterator<Item=&'a R>,
-        R: Resourceful + 'a
-    {
-        Document {
-            content: models
-                .into_iter()
-                .map(|model| self.make_resource(model, params))
-                .collect::<Vec<Resource>>()
-                .into(),
-            meta: None,
-            jsonapi: Self::implementation_info().into(),
-            links: None,
-            included: None,
-        }
-    }
-
-    pub fn make_errors_document<I>(&self, errors: Vec<Error>) -> Document {
-        Document {
-            content: errors.into(),
-            meta: None,
-            jsonapi: Self::implementation_info().into(),
-            links: None,
-            included: None
-        }
     }
 }
