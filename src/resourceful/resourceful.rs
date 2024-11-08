@@ -1,5 +1,5 @@
 use crate::{
-    adapter::{Adapter, Context, Parameters, UriGenerator},
+    adapter::{Context, UriGenerator},
     spec::{
         identifier::Identifier,
     }
