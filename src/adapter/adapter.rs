@@ -1,5 +1,5 @@
 use crate::{
-    adapter::{Context, Parameters},
+    adapter::{Context, Parameters, UriGenerator},
     http_wrappers::Uri,
     resourceful::{
         Relationships,
@@ -11,9 +11,10 @@ use crate::{
         }
     },
     spec::{
-        document::{Document, ImplementationInfo},
+        document::{self, Document, ImplementationInfo},
         error::Error,
-        identifier::Identifier, 
+        identifier::Identifier,
+        links::Link,
         relationship::{self, Linkage, Relationship},
         resource::{self, Resource}
     }
@@ -24,68 +25,7 @@ use std::{
 };
 use serde_json::Value;
 
-const GENERATED_INVALID_MSG: &'static str = "Generated an invalid URI";
-
-pub trait UriGenerator {
-    fn base_url(&self) -> String { "".to_string() }
-
-    fn uri_for_resource(&self, identifier: &Identifier) -> Uri {
-        let base = self.base_url();
-        
-        if let Identifier::Existing { kind, id } = identifier  {
-            format!("{base}/{kind}/{id}")
-                .parse::<Uri>()
-                .expect(GENERATED_INVALID_MSG)
-        } else {
-            panic!("Attempted to generate URI for unpersisted resource");
-        }
-    }
-
-    fn uri_for_relationship(&self, identifier: &Identifier, relationship: &str) -> Uri {
-        let resource = self.uri_for_resource(identifier);
-        format!("{resource}/relationships/{relationship}")
-            .parse::<Uri>()
-            .expect(GENERATED_INVALID_MSG)
-    }
-
-    fn uri_for_related(&self, identifier: &Identifier, relationship: &str) -> Uri {
-        let resource = self.uri_for_resource(identifier);
-        format!("{resource}/{relationship}")
-            .parse::<Uri>()
-            .expect(GENERATED_INVALID_MSG)
-    }
-}
-
-pub struct DefaultUriGenerator<'a> {
-    protocol: &'a str,
-    host: &'a str,
-    namespace: &'a str
-}
-
-impl<'a> DefaultUriGenerator<'a> {
-    pub fn new(protocol: &'a str, host: &'a str, namespace: &'a str) -> Self {
-        assert!(
-            !protocol.is_empty() && !host.is_empty() ||
-            protocol.is_empty() && host.is_empty(),
-            "URL protocol and host must either be both absent of both present."
-        );
-        DefaultUriGenerator { protocol, host, namespace }
-    }
-}
-
-impl Default for DefaultUriGenerator<'_> {
-    fn default() -> Self {
-        DefaultUriGenerator::new("", "", "")
-    }
-}
-
-impl<'a> UriGenerator for DefaultUriGenerator<'a> {
-    fn base_url(&self) -> String {
-        format!("{}://{}:{}", self.protocol, self.host, self.namespace)
-    }
-}
-
-pub struct Adapter<G: UriGenerator> {    
+pub struct Adapter<G: UriGenerator> {
     cache: HashMap<Identifier, Resource>,
     uri: Uri,
     params: Parameters,
@@ -128,17 +68,17 @@ impl<G: UriGenerator> Adapter<G> {
         }
     }
 
-    pub fn make_resource_document(mut self, model: &impl Resourceful, params: &Parameters) -> Document {
+    pub fn into_resource_document(mut self, model: &impl Resourceful) -> Document {
         Document {
-            content: self.make_resource(model, params).into(),
+            content: self.make_resource(model, &self.params).into(),
             meta: None,
-            jsonapi: Self::implementation_info().into(),
-            links: None,
+            jsonapi: self.implementation_info().into(),
+            links: self.document_links().into(),
             included: self.included_resources(),
         }
     }
 
-    pub fn make_collection_document<'a, I, R>(mut self, models: I, params: &Parameters) -> Document
+    pub fn into_collection_document<'a, I, R>(mut self, models: I) -> Document
     where
         I: IntoIterator<Item=&'a R>,
         R: Resourceful + 'a
@@ -147,28 +87,28 @@ impl<G: UriGenerator> Adapter<G> {
             content: models
                 .into_iter()
                 .map(|model|
-                    self.make_resource(model, params)
+                    self.make_resource(model, &self.params)
                 )
                 .collect::<Vec<Resource>>()
                 .into(),
             meta: None,
-            jsonapi: Self::implementation_info().into(),
-            links: None,
+            jsonapi: self.implementation_info().into(),
+            links: self.document_links().into(),
             included: self.included_resources()
         }
     }
 
-    pub fn make_errors_document<I>(mut self, errors: Vec<Error>) -> Document {
+    pub fn into_errors_document<I>(self, errors: Vec<Error>) -> Document {
         Document {
             content: errors.into(),
             meta: None,
-            jsonapi: Self::implementation_info().into(),
-            links: None,
+            jsonapi: self.implementation_info().into(),
+            links: self.document_links().into(),
             included: None
         }
     }
 
-    fn implementation_info() -> ImplementationInfo {
+    fn implementation_info(&self) -> ImplementationInfo {
         ImplementationInfo {
             version: Some("1.1".to_string()),
             ext: None,
@@ -177,7 +117,15 @@ impl<G: UriGenerator> Adapter<G> {
         }
     }
 
-    fn included_resources(mut self) -> Option<Vec<Value>> {
+    fn document_links(&self) -> document::Links {
+        document::Links {
+            this: Link::Uri(self.uri.clone()).into(),
+            related: None,
+            described_by: None,
+        }
+    }
+
+    fn included_resources(self) -> Option<Vec<Value>> {
         if self.cache.is_empty() {
             None
         } else {
