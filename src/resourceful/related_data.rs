@@ -4,7 +4,6 @@ use crate::{
         resource::Resource,
     }
 };
-use super::Resourceful;
 
 pub enum RelatedRecord {
     Unloaded(Identifier),
