@@ -34,6 +34,7 @@ pub struct LinkObject {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum Link {
     Uri(Uri),
     Object(LinkObject),
