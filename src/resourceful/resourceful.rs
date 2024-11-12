@@ -1,8 +1,6 @@
 use crate::{
-    adapter::{Adapter, Context, Parameters, UriGenerator},
-    spec::{
-        identifier::Identifier,
-    }
+    adapter::{Context, UriGenerator},
+    spec::identifier::Identifier,
 };
 use super::related_data::RelatedData;
 

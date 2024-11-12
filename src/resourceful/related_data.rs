@@ -1,10 +1,7 @@
-use crate::{
-    spec::{
-        identifier::Identifier,
-        resource::Resource,
-    }
+use crate::spec::{
+    identifier::Identifier,
+    resource::Resource,
 };
-use super::Resourceful;
 
 pub enum RelatedRecord {
     Unloaded(Identifier),

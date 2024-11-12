@@ -7,8 +7,7 @@ use serde::{Serialize, Deserialize};
 use ::json_api::{
     adapter::{Adapter, Context, DefaultUriGenerator, Parameters, UriGenerator},
     resourceful::{
-        Attributes, Relationships, Resourceful,
-        related_data::{RelatedCollection, RelatedData, RelatedRecord}
+        Attributes, Relationships, Resourceful
     },
     spec::identifier::Identifier,
      extract_filtered
@@ -175,9 +174,6 @@ impl Resourceful for Record<Post> {
 }
 
 fn main() {
-    struct Generator;
-    impl UriGenerator for Generator {}
-
     let database = Database::new(
         vec![
             User {
@@ -217,7 +213,7 @@ fn main() {
 
     let uri: Uri = "/users/67e55044-10b1-426f-9247-bb680e5fe0c8?fields[users]=name,active,non-existent-field&include=posts,always_empty&fields[posts]=title".parse().unwrap();
     let generator = DefaultUriGenerator::default();
-    let mut adapter = Adapter::new(uri.clone(), generator);
+    let adapter = Adapter::new(uri.clone(), generator);
     let user = database.borrow().users.find(&"67e55044-10b1-426f-9247-bb680e5fe0c8".into()).unwrap();
     let record = Record { model: user, database: Rc::downgrade(&database) };
     let document = adapter.make_resource_document(&record, &Parameters::from(uri));

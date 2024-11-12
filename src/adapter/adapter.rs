@@ -158,7 +158,7 @@ impl<G: UriGenerator> Adapter<G> {
         }
     }
 
-    pub fn make_errors_document<I>(mut self, errors: Vec<Error>) -> Document {
+    pub fn make_errors_document<I>(self, errors: Vec<Error>) -> Document {
         Document {
             content: errors.into(),
             meta: None,
@@ -177,7 +177,7 @@ impl<G: UriGenerator> Adapter<G> {
         }
     }
 
-    fn included_resources(mut self) -> Option<Vec<Value>> {
+    fn included_resources(self) -> Option<Vec<Value>> {
         if self.cache.is_empty() {
             None
         } else {
