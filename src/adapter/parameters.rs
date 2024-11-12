@@ -121,7 +121,8 @@ impl Parameters {
                             fields_params.insert(path, value);
                         },
                         Some((_, ["filter", path])) => {
-                            todo!("collect filters")
+                            let path = Self::parse_query_parameter_path(path);
+                            filter_params.insert(path, value)
                         },
                         _ => continue
                     }

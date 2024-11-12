@@ -1,8 +1,6 @@
-use crate::{
-    spec::{
-        identifier::Identifier,
-        resource::Resource,
-    }
+use crate::spec::{
+    identifier::Identifier,
+    resource::Resource,
 };
 
 pub enum RelatedRecord {
