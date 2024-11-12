@@ -13,7 +13,7 @@ macro_rules! field_entry {
 #[macro_export]
 macro_rules! extract {
     ($obj:expr, [$($field:ident),+]) => {
-        [ $( json_api::field_entry!($obj, $field), )+ ]
+        [ $( yajac::field_entry!($obj, $field), )+ ]
             .into_iter()
             .collect::<std::collections::HashMap<_, _>>()
             .into()
@@ -24,13 +24,13 @@ macro_rules! extract {
 macro_rules! extract_filtered {
     ($obj:expr, [$($field:ident),+], $filter:expr) => {
         match $filter {
-            None => json_api::extract!($obj, [$($field),+]),
+            None => yajac::extract!($obj, [$($field),+]),
             Some(filter) => filter
                 .into_iter()
                 .filter_map(|field| match field.as_str() {
                     $(
                         stringify!($field) =>
-                            json_api::field_entry!($obj, $field).into(),
+                            yajac::field_entry!($obj, $field).into(),
                     )+
                     _ => None,
                 })
