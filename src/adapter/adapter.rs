@@ -4,8 +4,7 @@ use crate::{
     resourceful::{
         Relationships,
         Resourceful,
-        related_data::{
-            RelatedData,
+        related_data::{RelatedData,
             RelatedCollection,
             RelatedRecord,
         }
@@ -70,7 +69,7 @@ impl<G: UriGenerator> Adapter<G> {
 
     pub fn into_resource_document(mut self, model: &impl Resourceful) -> Document {
         Document {
-            content: self.make_resource(model, &self.params).into(),
+            content: self.make_resource(model, &self.params.clone()).into(),
             meta: None,
             jsonapi: self.implementation_info().into(),
             links: self.document_links().into(),
@@ -87,7 +86,7 @@ impl<G: UriGenerator> Adapter<G> {
             content: models
                 .into_iter()
                 .map(|model|
-                    self.make_resource(model, &self.params)
+                    self.make_resource(model, &self.params.clone())
                 )
                 .collect::<Vec<Resource>>()
                 .into(),

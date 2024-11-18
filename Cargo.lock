@@ -41,16 +41,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49f1f14873335454500d59611f1cf4a4b0f786f9ac11f4312a78e4cf2566695b"
 
 [[package]]
-name = "json_api"
-version = "0.1.0"
-dependencies = [
- "http",
- "regex",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "memchr"
 version = "2.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -157,3 +147,13 @@ name = "unicode-ident"
 version = "1.0.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e91b56cd4cadaeb79bbf1a5645f6b4f8dc5bde8834ad5894a8db35fda9efa1fe"
+
+[[package]]
+name = "yajac"
+version = "0.1.0"
+dependencies = [
+ "http",
+ "regex",
+ "serde",
+ "serde_json",
+]
