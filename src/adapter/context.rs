@@ -5,20 +5,16 @@ use crate::{
         related_data::RelatedData
     },
 };
-use std::{
-    borrow::Borrow,
-    cell::RefCell,
-    rc::Rc
-};
+use std::borrow::Borrow;
 
-pub struct Context<G: UriGenerator> {
-    pub(super) cache: Rc<RefCell<Cache>>,
+pub struct Context<'a, G: UriGenerator> {
+    pub(super) cache: &'a mut Cache,
     pub(super) params: Parameters,
     pub(super) uri_generator: G,
 }
 
-impl<'a, G: UriGenerator> Context<G>{
-    pub(crate) fn new(cache: Rc<RefCell<Cache>>, params: Parameters, uri_generator: G) -> Self {
+impl<'a, G: UriGenerator> Context<'a, G>{
+    pub(crate) fn new(cache: &'a mut Cache, params: Parameters, uri_generator: G) -> Self {
         Self { cache, params, uri_generator }
     }
 
@@ -26,25 +22,28 @@ impl<'a, G: UriGenerator> Context<G>{
         self.params.fields_for(kind)
     }
 
-    pub fn link_one<N, R>(&self, relationship: N, resourceful: Option<R>)
+    pub fn link_one<N, R>(&mut self, relationship: N, resourceful: Option<R>)
         -> (String, RelatedData)
     where
         N: Borrow<str>,
         R: Resourceful
     {
         let related = match resourceful {
-            None => RelatedData::None,
-            Some(ref model) => if self.is_included(relationship.borrow()) {
-                make_resource(model, self).into()
-            } else {
-                model.identifier().into()
-            }
+            None => 
+                RelatedData::None,
+                
+            Some(ref model) => 
+                if self.is_included(relationship.borrow()) {
+                    make_resource(model, self).into()
+                } else {
+                    model.identifier().into()
+                }
         };
 
         (relationship.borrow().into(), related)
     }
 
-    pub fn link_many<N, R, C>(&self, relationship: N, collection: C) -> (String, RelatedData)
+    pub fn link_many<N, R, C>(&mut self, relationship: N, collection: C) -> (String, RelatedData)
     where
         N: Borrow<str>,
         R: Resourceful,

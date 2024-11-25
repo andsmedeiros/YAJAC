@@ -11,15 +11,9 @@ pub struct Cache {
     index: HashMap<Identifier, Resource>
 }
 
-impl Default for Cache {
-    fn default() -> Self {
-        Cache { index: HashMap::new() }
-    }
-}
-
 impl Cache {
     pub fn new() -> Self { 
-        Self::default() 
+        Cache { index: HashMap::new() }
     }
 
     pub fn has(&self, identifier: impl Borrow<Identifier>) -> bool {
@@ -32,7 +26,10 @@ impl Cache {
 
     pub fn register(&mut self, resource: Resource) -> Identifier {
         let identifier = resource.identifier.clone();
-        self.index.insert(resource.identifier.clone(), resource);
+        
+        if !self.has(&identifier) {
+            self.index.insert(resource.identifier.clone(), resource);
+        }
 
         identifier
     }
