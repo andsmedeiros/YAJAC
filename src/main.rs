@@ -5,7 +5,7 @@ use std::{
 };
 use serde::{Serialize, Deserialize};
 use yajac::{
-    adapter::{Context, DefaultUriGenerator, Parameters, UriGenerator},
+    adapter::{Context, DefaultUriGenerator, UriGenerator},
     http_wrappers::Uri,
     resourceful::{Attributes, Relationships, Resourceful,},
     spec::identifier::Identifier,
@@ -124,7 +124,7 @@ impl Resourceful for Record<User> {
         extract_filtered!(self.model, [name, age, active], context.fields_for(self.kind()))
     }
 
-    fn relationships<G: UriGenerator>(&self, context: &Context<G>)
+    fn relationships<G: UriGenerator>(&self, context: &mut Context<G>)
         -> Option<Relationships>
     {
         let posts = self.database.upgrade()?.borrow()
@@ -157,7 +157,7 @@ impl Resourceful for Record<Post> {
         extract_filtered!(self.model, [title, content], context.fields_for(self.kind()))
     }
 
-    fn relationships<G: UriGenerator>(&self, context: &Context<G>)
+    fn relationships<G: UriGenerator>(&self, context: &mut Context<G>)
         -> Option<Relationships>
     {
         let author = self.database.upgrade()?.borrow()
