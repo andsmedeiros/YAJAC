@@ -13,6 +13,18 @@ pub enum Linkage {
     ToMany(Vec<Identifier>),
 }
 
+impl From<Identifier> for Linkage {
+    fn from(identifier: Identifier) -> Self {
+        Linkage::ToOne(identifier)
+    }
+}
+
+impl From<Vec<Identifier>> for Linkage {
+    fn from(identifiers: Vec<Identifier>) -> Self {
+        Linkage::ToMany(identifiers)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Links {
     #[serde(rename="self", skip_serializing_if="Option::is_none")]
