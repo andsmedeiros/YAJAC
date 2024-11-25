@@ -7,18 +7,17 @@ use std::{
     collections::HashMap
 };
 
-pub struct Cache<'a> {
-    resources: Vec<Resource>,
-    index: HashMap<Identifier, &'a Resource>
+pub struct Cache {
+    index: HashMap<Identifier, Resource>
 }
 
-impl<'a> Default for Cache<'a> {
+impl Default for Cache {
     fn default() -> Self {
-        Cache { resources: Vec::new(), index: HashMap::new() }
+        Cache { index: HashMap::new() }
     }
 }
 
-impl<'a> Cache<'a> {
+impl Cache {
     pub fn new() -> Self { 
         Self::default() 
     }
@@ -28,14 +27,21 @@ impl<'a> Cache<'a> {
     }
 
     pub fn get(&self, identifier: impl Borrow<Identifier>) -> Option<&Resource> {
-        self.index.get(identifier.borrow())?.clone().into()
+        Some(self.index.get(identifier.borrow())?)
     }
 
-    pub fn register(&'a mut self, identifier: impl Borrow<Identifier>, resource: Resource) -> &Resource {
-        self.resources.push(resource);
-        let resource = self.resources.last().unwrap();
-        self.index.insert(identifier.borrow().clone(), resource);
+    pub fn register(&mut self, resource: Resource) -> Identifier {
+        let identifier = resource.identifier.clone();
+        self.index.insert(resource.identifier.clone(), resource);
 
-        resource
+        identifier
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.index.is_empty()
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &Resource> {
+        self.index.values()
     }
 }

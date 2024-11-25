@@ -1,33 +1,32 @@
 use crate::{
-    adapter::{Adapter, Parameters, UriGenerator},
+    adapter::{Cache, Parameters, UriGenerator, make_resource},
     resourceful::{
         Resourceful,
         related_data::RelatedData
     },
 };
-use std::borrow::Borrow;
+use std::{
+    borrow::Borrow,
+    cell::RefCell,
+    rc::Rc
+};
 
-pub struct Context<'a, G>
-where
-    G: UriGenerator + 'a
-{
-    adapter: &'a mut Adapter<G>,
-    pub params: Parameters,
+pub struct Context<G: UriGenerator> {
+    pub(super) cache: Rc<RefCell<Cache>>,
+    pub(super) params: Parameters,
+    pub(super) uri_generator: G,
 }
 
-impl<'a, G> Context<'a, G>
-where
-    G: UriGenerator + 'a
-{
-    pub(crate) fn new(adapter: &'a mut Adapter<G>, params: Parameters) -> Self {
-        Self { adapter, params }
+impl<'a, G: UriGenerator> Context<G>{
+    pub(crate) fn new(cache: Rc<RefCell<Cache>>, params: Parameters, uri_generator: G) -> Self {
+        Self { cache, params, uri_generator }
     }
 
     pub fn fields_for(&self, kind: impl Borrow<str>) -> Option<&Vec<String>> {
         self.params.fields_for(kind)
     }
 
-    pub fn link_one<N, R>(&mut self, relationship: N, resourceful: Option<R>)
+    pub fn link_one<N, R>(&self, relationship: N, resourceful: Option<R>)
         -> (String, RelatedData)
     where
         N: Borrow<str>,
@@ -36,7 +35,7 @@ where
         let related = match resourceful {
             None => RelatedData::None,
             Some(ref model) => if self.is_included(relationship.borrow()) {
-                self.adapter.make_resource(model, &self.params).into()
+                make_resource(model, self).into()
             } else {
                 model.identifier().into()
             }
@@ -45,7 +44,7 @@ where
         (relationship.borrow().into(), related)
     }
 
-    pub fn link_many<N, R, C>(&mut self, relationship: N, collection: C) -> (String, RelatedData)
+    pub fn link_many<N, R, C>(&self, relationship: N, collection: C) -> (String, RelatedData)
     where
         N: Borrow<str>,
         R: Resourceful,
@@ -53,7 +52,7 @@ where
     {
         let related: RelatedData = if self.is_included(relationship.borrow()) {
             collection.into_iter()
-                .map(|model| self.adapter.make_resource(&model, &self.params))
+                .map(|model| make_resource(&model, self))
                 .collect::<Vec<_>>()
                 .into()
         } else {

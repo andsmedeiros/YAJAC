@@ -17,7 +17,7 @@ pub trait Resourceful {
 
     fn attributes<G: UriGenerator>(&self, _context: &Context<G>)
         -> Option<Attributes> { None }
-    fn relationships<G: UriGenerator>(&self, _context: &mut Context<G>)
+    fn relationships<G: UriGenerator>(&self, _context: &Context<G>)
         -> Option<Relationships> { None }
     fn meta<G: UriGenerator>(&self, _context: &Context<G>) -> Option<Meta> { None }
 }

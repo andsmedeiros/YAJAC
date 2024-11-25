@@ -5,12 +5,13 @@ use std::{
 };
 use serde::{Serialize, Deserialize};
 use yajac::{
-    adapter::{Adapter, Context, DefaultUriGenerator, Parameters, UriGenerator},
+    adapter::{Context, DefaultUriGenerator, Parameters, UriGenerator},
     http_wrappers::Uri,
     resourceful::{Attributes, Relationships, Resourceful,},
     spec::identifier::Identifier,
     extract_filtered
 };
+use yajac::adapter::to_document;
 
 trait Identifiable<IdType=String> {
     fn get_id(&self) -> IdType;
@@ -123,7 +124,7 @@ impl Resourceful for Record<User> {
         extract_filtered!(self.model, [name, age, active], context.fields_for(self.kind()))
     }
 
-    fn relationships<G: UriGenerator>(&self, context: &mut Context<G>)
+    fn relationships<G: UriGenerator>(&self, context: &Context<G>)
         -> Option<Relationships>
     {
         let posts = self.database.upgrade()?.borrow()
@@ -156,7 +157,7 @@ impl Resourceful for Record<Post> {
         extract_filtered!(self.model, [title, content], context.fields_for(self.kind()))
     }
 
-    fn relationships<G: UriGenerator>(&self, context: &mut Context<G>)
+    fn relationships<G: UriGenerator>(&self, context: &Context<G>)
         -> Option<Relationships>
     {
         let author = self.database.upgrade()?.borrow()
@@ -211,10 +212,12 @@ fn main() {
 
     let uri: Uri = "/users/67e55044-10b1-426f-9247-bb680e5fe0c8?fields[users]=name,active,non-existent-field&include=posts,always_empty&fields[posts]=title".parse().unwrap();
     let generator = DefaultUriGenerator::default();
-    let adapter = Adapter::new(uri, generator);
+    // let adapter = Adapter::new(uri, generator);
     let user = database.borrow().users.find(&"67e55044-10b1-426f-9247-bb680e5fe0c8".into()).unwrap();
     let record = Record { model: user, database: Rc::downgrade(&database) };
-    let document = adapter.into_resource_document(&record);
+    // let document = adapter.into_resource_document(&record);
 
+    let document = to_document(&record, generator, uri);
+    
     println!("{}", serde_json::to_string_pretty(&document).unwrap());
 }
