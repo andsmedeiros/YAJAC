@@ -1,4 +1,5 @@
 pub mod adapter;
+pub mod error;
 pub mod http_wrappers;
 pub mod resourceful;
 pub mod spec;
