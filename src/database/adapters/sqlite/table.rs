@@ -14,13 +14,13 @@ use rusqlite::{
 use crate::routing::parameters::QueryParameters as Parameters;
 
 pub struct Table<'a> {
-    pub schema: &'a TableSchema,
+    pub table_schema: &'a TableSchema,
     pub connection: &'a Connection,
 }
 
 impl<'a> Table<'a> {
-    pub fn new(schema: &'a TableSchema, connection: &'a Connection) -> Self {
-        Self { schema, connection }
+    pub fn new(table_schema: &'a TableSchema, connection: &'a Connection) -> Self {
+        Self { table_schema, connection }
     }
 
     fn materialise_record(&self, row: &Row) -> Result<Record, Error> {
@@ -33,7 +33,7 @@ impl<'a> Table<'a> {
                 let name = column.name();
                 let value = row.get_ref_unwrap(index);
 
-                let attribute_type = self.schema.column(name)
+                let attribute_type = self.table_schema.column(name)
                     .expect("Column not found in schema");
 
                 let value = match value {
@@ -45,13 +45,13 @@ impl<'a> Table<'a> {
                         AttributeType::DateTime =>
                             Attribute::DateTime(crate::database::attributes::date_time_from_millis(value, name)?),
                         kind =>
-                            crate::database::attributes::inconsistent_schema_error(self.schema, name, "Integer", kind)?
+                            crate::database::attributes::inconsistent_schema_error(self.table_schema, name, "Integer", kind)?
                     },
                     ValueRef::Real(value) => match attribute_type {
                         AttributeType::Float =>
                             Attribute::Float(value),
                         kind =>
-                            crate::database::attributes::inconsistent_schema_error(self.schema, name, "Float", kind)?
+                            crate::database::attributes::inconsistent_schema_error(self.table_schema, name, "Float", kind)?
                     },
                     ValueRef::Text(value) => {
                         let text = String::from_utf8_lossy(value);
@@ -61,14 +61,14 @@ impl<'a> Table<'a> {
                             AttributeType::DateTime =>
                                 Attribute::DateTime(crate::database::attributes::date_time_from_iso8601(text.as_ref(), name)?),
                             kind =>
-                                crate::database::attributes::inconsistent_schema_error(self.schema, name, "Text", kind)?
+                                crate::database::attributes::inconsistent_schema_error(self.table_schema, name, "Text", kind)?
                         }
                     },
                     ValueRef::Blob(value) => match attribute_type {
                         AttributeType::Text =>
                             Attribute::Text(b64.encode(value)),
                         kind =>
-                            crate::database::attributes::inconsistent_schema_error(self.schema, name, "Blob", kind)?
+                            crate::database::attributes::inconsistent_schema_error(self.table_schema, name, "Blob", kind)?
                     }
                 };
                 Ok((name.to_string(), value))
@@ -81,8 +81,12 @@ impl<'a> Table<'a> {
 }
 
 impl<'a> TableInterface for Table<'a> {
+    fn schema(&self) -> &TableSchema {
+        self.table_schema
+    }
+    
     fn query(&self, parameters: &Parameters) -> Result<Vec<Record>, Error> {
-        let (query, bindings) = QueryBuilder::new(self.schema).query(parameters)?;
+        let (query, bindings) = QueryBuilder::new(self.table_schema).query(parameters)?;
         self.execute(query, bindings)
     }
 
@@ -92,7 +96,7 @@ impl<'a> TableInterface for Table<'a> {
     }
 
     fn find(&self, id: i32, parameters: &Parameters) -> Result<Record, Error> {
-        let (query, bindings) = QueryBuilder::new(self.schema).find(id, parameters)?;
+        let (query, bindings) = QueryBuilder::new(self.table_schema).find(id, parameters)?;
 
         let rows = self.execute(query, bindings)?;
         let row = rows.into_iter().next().ok_or_else(|| Error::RecordNotFound)?;
@@ -102,7 +106,7 @@ impl<'a> TableInterface for Table<'a> {
 
     fn insert(&self, attributes: Record, parameters: &Parameters) -> Result<Record, Error> {
         let (query, bindings) =
-            QueryBuilder::new(self.schema).insert(attributes, parameters)?;
+            QueryBuilder::new(self.table_schema).insert(attributes, parameters)?;
         let rows = self.execute(query, bindings)?;
         let row = rows.into_iter().next().ok_or_else(|| Error::RecordNotFound)?;
 
@@ -110,7 +114,7 @@ impl<'a> TableInterface for Table<'a> {
     }
 
     fn update(&self, id: i32, attributes: Record, parameters: &Parameters) -> Result<Record, Error> {
-        let (query, bindings) = QueryBuilder::new(self.schema)
+        let (query, bindings) = QueryBuilder::new(self.table_schema)
             .update(id, attributes, parameters)?;
         let rows = self.execute(query, bindings)?;
         let row = rows.into_iter().next().ok_or_else(|| Error::RecordNotFound)?;
@@ -119,7 +123,7 @@ impl<'a> TableInterface for Table<'a> {
     }
 
     fn delete(&self, id: i32) -> Result<(), Error> {
-        let (query, bindings) = QueryBuilder::new(self.schema).delete(id);
+        let (query, bindings) = QueryBuilder::new(self.table_schema).delete(id);
         debug!("{}, {:?}", query, bindings);
 
         let bindings: Vec<&dyn ToSql> = bindings
@@ -140,7 +144,7 @@ impl<'a> TableInterface for Table<'a> {
         let mut statement = self.connection.prepare(&query)?;
         let rows = statement
             .query_and_then(bindings.as_slice(), |row|
-                attributes::materialise(&self.schema, row)
+                attributes::materialise(&self.table_schema, row)
             )?
             .collect::<Result<Vec<Record>, _>>()?;
 
@@ -204,7 +208,7 @@ mod tests {
         }
 
         pub(super) fn table(&self) -> Table<'_> {
-            Table { schema: &self.schema, connection: &self.connection }
+            Table { schema: &self.table_schema, connection: &self.connection }
         }
 
         pub(super) fn seed_table(&self) -> Result<Table<'_>, Error> {

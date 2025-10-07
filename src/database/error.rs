@@ -21,6 +21,10 @@ pub enum Error {
         attribute: String,
         message: String,
     },
+    UnknownSchema {
+        schema: String,
+        message: String
+    },
     InvalidAttributeSet,
     InvalidAttribute {
         attribute: String,
@@ -67,6 +71,8 @@ impl Display for Error {
                 write!(f, "Schema '{}' is inconsistent for attribute '{}': {}", schema, attribute, message),
             SchemaValidationFailure { schema, attribute, message } =>
                 write!(f, "Invalid attribute '{}' for schema '{}': {}", attribute, schema, message),
+            UnknownSchema { schema, message } =>
+                write!(f, "Attempted to load an unknown schema '{}': {}", schema, message),
             InvalidAttributeSet =>
                 write!(f, "The provided attributes are in an unexpected format."),
             InvalidAttribute { attribute, kind, message } =>

@@ -6,5 +6,7 @@ pub mod error;
 pub mod attributes;
 pub mod adapters;
 pub mod query_parameters;
+mod registry;
+mod connection;
 
 pub use query_parameters::QueryParameters;
