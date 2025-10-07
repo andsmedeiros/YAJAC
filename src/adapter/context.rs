@@ -1,5 +1,5 @@
 use crate::{
-    adapter::{Cache, Parameters, UriGenerator, make_resource},
+    adapter::{Cache, QueryParameters, UriGenerator, make_resource},
     resourceful::{
         Resourceful,
         related_data::RelatedData
@@ -9,17 +9,17 @@ use std::borrow::Borrow;
 
 pub struct Context<'a, G: UriGenerator> {
     pub(super) cache: &'a mut Cache,
-    pub(super) params: Parameters,
+    pub(super) params: QueryParameters,
     pub(super) uri_generator: G,
 }
 
 impl<'a, G: UriGenerator> Context<'a, G>{
-    pub(crate) fn new(cache: &'a mut Cache, params: Parameters, uri_generator: G) -> Self {
+    pub(crate) fn new(cache: &'a mut Cache, params: QueryParameters, uri_generator: G) -> Self {
         Self { cache, params, uri_generator }
     }
 
-    pub fn fields_for(&self, kind: impl Borrow<str>) -> Option<&Vec<String>> {
-        self.params.fields_for(kind)
+    pub fn fields_for(&'a self, kind: impl Borrow<str>) -> Option<&'a Vec<String>> {
+        self.params.fields.as_ref()?.get(kind.borrow())
     }
 
     pub fn link_one<N, R>(&mut self, relationship: N, resourceful: Option<R>)

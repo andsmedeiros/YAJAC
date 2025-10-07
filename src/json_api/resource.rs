@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use crate::{
     http_wrappers::Uri,
-    spec::{
+    json_api::{
         identifier::Identifier,
         relationship::Relationship
     }

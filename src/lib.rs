@@ -2,7 +2,13 @@ pub mod adapter;
 pub mod error;
 pub mod http_wrappers;
 pub mod resourceful;
-pub mod spec;
+pub mod json_api;
+mod parameters;
+mod database;
+mod routing;
+
+pub use parameters::{QueryParameters, RouteParameters};
+pub use error::Error;
 
 #[macro_export]
 macro_rules! field_entry {

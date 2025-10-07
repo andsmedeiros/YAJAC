@@ -1,4 +1,4 @@
-use crate::spec::{
+use crate::json_api::{
     identifier::Identifier,
     resource::Resource,
 };

@@ -39,6 +39,12 @@ impl From<http::Uri> for Uri {
     }
 }
 
+impl From<Uri> for http::Uri {
+    fn from(value: Uri) -> Self {
+        value.0
+    }
+}
+
 impl FromStr for Uri {
     type Err = <http::Uri as FromStr>::Err;
     fn from_str(s: &str) -> Result<Self, Self::Err> {

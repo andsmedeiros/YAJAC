@@ -2,7 +2,7 @@ use crate::{
     adapter::{
         Cache,
         Context,
-        Parameters,
+        QueryParameters,
         UriGenerator
     },
     http_wrappers::Uri,
@@ -14,7 +14,7 @@ use crate::{
                        RelatedRecord,
         }
     },
-    spec::{
+    json_api::{
         document::{self, ImplementationInfo, Document},
         error::Error, 
         identifier::Identifier,
@@ -168,11 +168,11 @@ where
     R: Resourceful + 'a,
     G: UriGenerator + 'a
 {
-    let params = Parameters::new(&uri);
+    let params = QueryParameters::parse(&uri).unwrap();
     let mut cache = Cache::new();
     let mut context = Context::new(&mut cache, params, uri_generator);
 
-    let content: PrimaryContent = match Into::<Content<'a, R>>::into(content) {
+    let content: PrimaryContent = match content.into() {
         Content::Resource(model) =>
              make_resource(model, &mut context).into(),
         Content::Collection(collection) => collection

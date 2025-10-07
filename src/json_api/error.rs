@@ -5,7 +5,7 @@ use std::{
     fmt::Display
 };
 use crate::{
-    spec::links::Link,
+    json_api::links::Link,
     http_wrappers::StatusCode
 };
 
@@ -24,6 +24,19 @@ pub enum Source {
     Pointer(String),
     Parameter(String),
     Header(String)
+}
+
+impl Source {
+    pub fn pointer_for_primary_data() -> Source {
+        Source::Pointer("/data".to_string())
+    }
+
+    pub fn pointer_for_attribute<T>(attribute: T) -> Source
+    where
+        T: Display
+    {
+        Source::Pointer(format!("/data/attributes/{}", attribute))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,7 +72,7 @@ impl Default for Error {
             id: None,
             links: None,
             status: 
-                Some(http::StatusCode::INTERNAL_SERVER_ERROR.into()),
+                Some(StatusCode::INTERNAL_SERVER_ERROR),
             code: 
                 Some("InternalServerFault".into()),
             title: 

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use crate::{
     http_wrappers::Uri,
-    spec::identifier::Identifier
+    json_api::identifier::Identifier
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

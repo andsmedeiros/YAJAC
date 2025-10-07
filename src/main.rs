@@ -7,8 +7,8 @@ use serde::{Serialize, Deserialize};
 use yajac::{
     adapter::{Context, DefaultUriGenerator, UriGenerator},
     http_wrappers::Uri,
-    resourceful::{Attributes, Relationships, Resourceful,},
-    spec::identifier::Identifier,
+    resourceful::{Record as ResourcefulRecord, Relationships, Resourceful,},
+    json_api::identifier::Identifier,
     extract_filtered
 };
 use yajac::adapter::to_document;
@@ -120,7 +120,7 @@ impl Resourceful for Record<User> {
         }
     }
 
-    fn attributes<G: UriGenerator>(&self, context: &Context<G>) -> Option<Attributes> {
+    fn attributes<G: UriGenerator>(&self, context: &Context<G>) -> Option<ResourcefulRecord> {
         extract_filtered!(self.model, [name, age, active], context.fields_for(self.kind()))
     }
 
@@ -153,7 +153,7 @@ impl Resourceful for Record<Post> {
         }
     }
 
-    fn attributes<G: UriGenerator>(&self, context: &Context<G>) -> Option<Attributes> {
+    fn attributes<G: UriGenerator>(&self, context: &Context<G>) -> Option<ResourcefulRecord> {
         extract_filtered!(self.model, [title, content], context.fields_for(self.kind()))
     }
 

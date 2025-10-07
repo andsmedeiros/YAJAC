@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::spec::{
+use crate::json_api::{
     error::Error,
     resource::Resource
 };

@@ -1,6 +1,6 @@
 use crate::{
     http_wrappers::Uri,
-    spec::identifier::Identifier
+    json_api::identifier::Identifier
 };
 
 const GENERATED_INVALID_MSG: &'static str = "Generated an invalid URI";

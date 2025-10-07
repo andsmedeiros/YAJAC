@@ -2,10 +2,8 @@
 //! Also provides functions to extract those parameters from a query string, which is the only
 //! supported construction method.
 
-use crate::{
-    error::Error,
-    http_wrappers::Uri
-};
+use crate::http_wrappers::Uri;
+use super::error::Error;
 use indexmap::IndexMap;
 use regex::Regex;
 use std::{
@@ -16,7 +14,7 @@ use urlencoding::decode;
 
 mod regex_builder {
     /// Generic pattern for identifiers -- model names, field names and relationship names
-    pub(super) static ID: &'static str = r"[a-zA-Z](?:[-_]*[a-zA-Z0-9]+)*";
+    pub(crate) static ID: &'static str = r"[a-zA-Z](?:[-_]*[a-zA-Z0-9]+)*";
 }
 
 /// Matches exactly a single identifier
@@ -59,8 +57,8 @@ pub enum SortDirection { Ascending, Descending }
 /// Stores information for sorting a collection
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SortingField {
-    pub(super) field: String,
-    pub(super) direction: SortDirection
+    pub(crate) field: String,
+    pub(crate) direction: SortDirection
 }
 
 /// Enumerates possible comparison operations available for filtering
@@ -78,8 +76,8 @@ pub enum FilterOperator {
 /// Stores information for filtering a collection
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilterValue {
-    pub(super) operator: FilterOperator,
-    pub(super) value: String
+    pub(crate) operator: FilterOperator,
+    pub(crate) value: String
 }
 
 /// Stores which fields should be returned for a given model type
@@ -100,8 +98,8 @@ pub type SortParameters = Vec<SortingField>;
 /// Stores how the primary collection should be paged
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageParameters {
-    pub(super) number: u32,
-    pub(super) size: u32
+    pub(crate) number: u32,
+    pub(crate) size: u32
 }
 
 impl Default for PageParameters {
@@ -114,19 +112,19 @@ impl Default for PageParameters {
 /// Stores all possible query parameters received.
 /// Those parameters will be used later to determine which and how data should be loaded.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Parameters {
-    pub(super) fields: Option<FieldsParameters>,
-    pub(super) filter: Option<FilterParameters>,
-    pub(super) search: Option<SearchParameters>,
-    pub(super) include: Option<IncludeParameters>,
-    pub(super) sort: Option<SortParameters>,
-    pub(super) page: Option<PageParameters>,
+pub struct QueryParameters {
+    pub(crate) fields: Option<FieldsParameters>,
+    pub(crate) filter: Option<FilterParameters>,
+    pub(crate) search: Option<SearchParameters>,
+    pub(crate) include: Option<IncludeParameters>,
+    pub(crate) sort: Option<SortParameters>,
+    pub(crate) page: Option<PageParameters>,
 }
 
-impl Default for Parameters {
+impl Default for QueryParameters {
     /// Constructs a new parameters object with all parameters set to `None`
     fn default() -> Self {
-        Parameters {
+        QueryParameters {
             fields: None,
             filter: None,
             search: None,
@@ -137,15 +135,15 @@ impl Default for Parameters {
     }
 }
 
-impl Parameters {
+impl QueryParameters {
     /// Main entry point.
     /// Attempts to extract supported parameters from the provided URI.
     /// Any parsing errors (encoding errors, failed validations etc.) will cause the function to
     /// return an `Err`.
-    pub fn parse(uri: &Uri) -> Result<Parameters, Error> {
+    pub fn parse(uri: &Uri) -> Result<QueryParameters, Error> {
         match uri.query() {
             Some(query) => Self::parse_query(query),
-            None => Ok(Parameters::default()),
+            None => Ok(QueryParameters::default()),
         }
     }
 
@@ -160,7 +158,7 @@ impl Parameters {
                 if ID_REGEX.is_match(field) {
                     Ok(field.to_string())
                 } else {
-                    Err(Error::ParseFailure {
+                    Err(Error::ParseParameterFailure {
                         parameter: "fields".to_string(),
                         message: format!("Invalid field requested: '{field}'")
                     })
@@ -190,7 +188,7 @@ impl Parameters {
                         "lt" => LessThan,
                         "lte" => LessThanOrEqual,
                         "like" => Like,
-                        _ => Err(Error::ParseFailure {
+                        _ => Err(Error::ParseParameterFailure {
                             parameter: format!("filter[{field}]"),
                             message: format!("Invalid filter operator: '{operator}'")
                         })?,
@@ -199,7 +197,7 @@ impl Parameters {
 
                     Ok(FilterValue { operator, value })
                 } else {
-                    Err(Error::ParseFailure {
+                    Err(Error::ParseParameterFailure {
                         parameter: format!("filter[{field}]"),
                         message: format!("Invalid filter entry: '{entry}'")
                     })
@@ -234,7 +232,7 @@ impl Parameters {
                     let relationship = if ID_REGEX.is_match(relationship) {
                         Ok(relationship.to_string())
                     } else {
-                        Err(Error::ParseFailure {
+                        Err(Error::ParseParameterFailure {
                             parameter: "include".to_string(),
                             message: format!("Invalid relationship requested: '{relationship}'")
                         })
@@ -264,7 +262,7 @@ impl Parameters {
                         },
                     })
                 } else {
-                    Err(Error::ParseFailure {
+                    Err(Error::ParseParameterFailure {
                         parameter: "sort".to_string(),
                         message: format!("Invalid sorting entry: '{entry}'")
                     })
@@ -278,7 +276,7 @@ impl Parameters {
 
     fn parse_page(&mut self, property: &str, value: &str) -> Result<(), Error> {
         let value = value.parse::<NonZeroU32>()
-            .map_err(|_| Error::ParseFailure {
+            .map_err(|_| Error::ParseParameterFailure {
                 parameter: format!("page[{property}]"),
                 message: format!("Invalid numeric value: '{value}'")
             })?
@@ -288,7 +286,7 @@ impl Parameters {
         match property {
             "number" => page.number = value,
             "size" => page.size = value,
-            _ => Err(Error::ParseFailure {
+            _ => Err(Error::ParseParameterFailure {
                 parameter: format!("page[{property}]"),
                 message: format!("Invalid page property: '{property}'")
             })?
@@ -297,8 +295,8 @@ impl Parameters {
         Ok(())
     }
 
-    fn parse_query(query: &str) -> Result<Parameters, Error> {
-        let mut parameters = Parameters::default();
+    fn parse_query(query: &str) -> Result<QueryParameters, Error> {
+        let mut parameters = QueryParameters::default();
 
         for (entry, split) in query
             .split('&')
@@ -306,7 +304,7 @@ impl Parameters {
             .map(|entry| (entry, entry.split_once('=')))
         {
             match split
-                .ok_or_else(|| Error::ParseFailure {
+                .ok_or_else(|| Error::ParseParameterFailure {
                     parameter: entry.to_string(),
                     message: format!("Invalid query entry: '{entry}'")
                 })?
@@ -326,12 +324,12 @@ impl Parameters {
                         Some((_, ["page", property])) =>
                             parameters.parse_page(property, value)?,
                         Some((parameter, [..])) =>
-                            Err(Error::ParseFailure {
+                            Err(Error::ParseParameterFailure {
                                 parameter: parameter.to_string(),
                                 message: "Unexpected parameter provided".to_string()
                             })?,
                         None =>
-                            Err(Error::ParseFailure {
+                            Err(Error::ParseParameterFailure {
                                 parameter: key.to_string(),
                                 message: "Unknown parameter provided".to_string()
                             })?
@@ -356,7 +354,7 @@ mod tests {
     #[test]
     fn test_parse_empty_uri() {
         let uri = mock_uri("");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
         assert!(params.fields.is_none());
         assert!(params.filter.is_none());
         assert!(params.sort.is_none());
@@ -367,7 +365,7 @@ mod tests {
     #[test]
     fn test_parse_fields() {
         let uri = mock_uri("fields[model1]=col1,col2,col3&fields[model2]=col4");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
         let fields = params.fields.unwrap();
         assert_eq!(fields, IndexMap::from([
             ("model1".to_string(), vec!["col1", "col2", "col3"]),
@@ -378,7 +376,7 @@ mod tests {
     #[test]
     fn test_parse_sort() {
         let uri = mock_uri("sort=-col1,col2");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
         let sort = params.sort.unwrap();
         assert_eq!(sort.len(), 2);
         assert_eq!(sort[0].field, "col1");
@@ -390,14 +388,14 @@ mod tests {
     #[test]
     fn test_parse_pagination() {
         let uri = mock_uri("page[number]=2&page[size]=20");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
         assert_eq!(params.page, Some(PageParameters { number: 2, size: 20 }));
     }
 
     #[test]
     fn test_parse_filter_eq() {
         let uri = mock_uri("filter[col1]=eq:value1&filter[col2]=neq:value2");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
 
         assert!(params.filter.is_some());
 
@@ -411,7 +409,7 @@ mod tests {
     #[test]
     fn test_parse_mixed_uri() {
         let uri = mock_uri("fields[my_model]=col1,col2&sort=-col1&filter[col1]=gt:10&page[number]=3&page[size]=15");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
 
         // Fields check
         let fields = params.fields.unwrap();
@@ -436,35 +434,35 @@ mod tests {
     #[test]
     fn test_invalid_sort_format() {
         let uri = mock_uri("sort=--col1");
-        let params = Parameters::parse(&uri);
+        let params = QueryParameters::parse(&uri);
         assert!(params.is_err(), "Expected parsing to fail when invalid sort field is provided");
     }
 
     #[test]
     fn test_invalid_filter_format() {
         let uri = mock_uri("filter[col1]=value1"); // Missing operator:value format
-        let params = Parameters::parse(&uri);
+        let params = QueryParameters::parse(&uri);
         assert!(params.is_err(), "Expected parsing to fail when invalid filter is provided");
     }
 
     #[test]
     fn test_parse_invalid_page_size() {
         let uri = mock_uri("page[number]=2&page[size]=abc");
-        let params = Parameters::parse(&uri);
+        let params = QueryParameters::parse(&uri);
         assert!(params.is_err(), "Expected parsing to fail for invalid page size");
     }
 
     #[test]
     fn test_parse_empty_sort() {
         let uri = mock_uri("sort=");
-        let params = Parameters::parse(&uri);
+        let params = QueryParameters::parse(&uri);
         assert!(params.is_err(), "Expected parsing to fail for empty sort parameter");
     }
 
     #[test]
     fn test_parse_multiple_filters_for_same_field() {
         let uri = mock_uri("filter[col1]=eq:value1,gt:value2");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
 
         assert!(params.filter.is_some());
         let filters = params.filter.unwrap();
@@ -479,35 +477,35 @@ mod tests {
     #[test]
     fn test_parse_no_filter_value() {
         let uri = mock_uri("filter[col1]=");
-        let params = Parameters::parse(&uri);
+        let params = QueryParameters::parse(&uri);
         assert!(params.is_err(), "Expected parsing to fail for missing filter value");
     }
 
     #[test]
     fn test_parse_empty_fields() {
         let uri = mock_uri("fields=");
-        let params = Parameters::parse(&uri);
+        let params = QueryParameters::parse(&uri);
         assert!(params.is_err(), "Expected parsing to fail for empty fields");
     }
 
     #[test]
     fn test_parse_invalid_field_name() {
         let uri = mock_uri("fields=col1,invalid!field");
-        let params = Parameters::parse(&uri);
+        let params = QueryParameters::parse(&uri);
         assert!(params.is_err(), "Expected parsing to fail for invalid field name");
     }
 
     #[test]
     fn test_parse_page_only_number() {
         let uri = mock_uri("page[number]=2");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
         assert_eq!(params.page, Some(PageParameters { number: 2, size: 20 }));
     }
 
     #[test]
     fn test_parse_sort_with_invalid_characters() {
         let uri = mock_uri("sort=col@1");
-        let params = Parameters::parse(&uri);
+        let params = QueryParameters::parse(&uri);
         assert!(params.is_err(), "Expected parsing to fail for invalid sort field");
     }
 
@@ -515,7 +513,7 @@ mod tests {
     fn test_parse_filter_with_special_characters() {
         // 'value1&' should be URL-encoded as 'value1%26'
         let uri = mock_uri("filter[col1]=eq:value1%26&filter[col2]=like:special%3Avalue");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
 
         let filters = params.filter.unwrap();
 
@@ -529,7 +527,7 @@ mod tests {
     #[test]
     fn test_search_without_value() {
         let uri = mock_uri("search=");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
 
         assert!(params.search.is_none());
     }
@@ -537,7 +535,7 @@ mod tests {
     #[test]
     fn test_search_with_single_value() {
         let uri = mock_uri("search=some-value");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
 
         assert_eq!(params.search, Some(vec!["some-value".to_string()]));
     }
@@ -545,7 +543,7 @@ mod tests {
     #[test]
     fn test_search_with_multiple_values() {
         let uri = mock_uri("search=some-value,another-value");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
 
         assert_eq!(
             params.search,
@@ -556,14 +554,14 @@ mod tests {
     #[test]
     fn test_parse_include_single_value() {
         let uri = mock_uri("include=author");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
         assert_eq!(params.include, Some(vec!["author".to_string()]));
     }
 
     #[test]
     fn test_parse_include_multiple_values() {
         let uri = mock_uri("include=author,comments,tags");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
         assert_eq!(
             params.include,
             Some(vec!["author".to_string(), "comments".to_string(), "tags".to_string()])
@@ -573,42 +571,42 @@ mod tests {
     #[test]
     fn test_parse_include_empty() {
         let uri = mock_uri("include=");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
         assert!(params.include.is_none());
     }
 
     #[test]
     fn test_parse_page_only_size() {
         let uri = mock_uri("page[size]=50");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
         assert_eq!(params.page, Some(PageParameters { number: 1, size: 50 }));
     }
 
     #[test]
     fn test_parse_page_invalid_property() {
         let uri = mock_uri("page[limit]=10");
-        let params = Parameters::parse(&uri);
+        let params = QueryParameters::parse(&uri);
         assert!(params.is_err(), "Expected parsing to fail for invalid page property");
     }
 
     #[test]
     fn test_parse_page_zero_value() {
         let uri = mock_uri("page[number]=0");
-        let params = Parameters::parse(&uri);
+        let params = QueryParameters::parse(&uri);
         assert!(params.is_err(), "Expected parsing to fail for zero page number");
     }
 
     #[test]
     fn test_parse_page_negative_value() {
         let uri = mock_uri("page[size]=-5");
-        let params = Parameters::parse(&uri);
+        let params = QueryParameters::parse(&uri);
         assert!(params.is_err(), "Expected parsing to fail for negative page size");
     }
 
     #[test]
     fn test_parse_fields_with_hyphens() {
         let uri = mock_uri("fields[model]=field-name,another-field");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
         let fields = params.fields.unwrap();
         assert_eq!(fields["model"], vec!["field-name", "another-field"]);
     }
@@ -616,7 +614,7 @@ mod tests {
     #[test]
     fn test_parse_fields_with_underscores() {
         let uri = mock_uri("fields[model]=field_name,another_field");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
         let fields = params.fields.unwrap();
         assert_eq!(fields["model"], vec!["field_name", "another_field"]);
     }
@@ -624,7 +622,7 @@ mod tests {
     #[test]
     fn test_parse_fields_with_numbers() {
         let uri = mock_uri("fields[model]=field1,field2name,name3");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
         let fields = params.fields.unwrap();
         assert_eq!(fields["model"], vec!["field1", "field2name", "name3"]);
     }
@@ -632,21 +630,21 @@ mod tests {
     #[test]
     fn test_parse_fields_starting_with_hyphen() {
         let uri = mock_uri("fields[model]=-invalidfield");
-        let params = Parameters::parse(&uri);
+        let params = QueryParameters::parse(&uri);
         assert!(params.is_err(), "Expected parsing to fail for field starting with hyphen");
     }
 
     #[test]
     fn test_parse_fields_empty_value_for_model() {
         let uri = mock_uri("fields[model]=");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
         assert!(params.fields.is_none());
     }
 
     #[test]
     fn test_parse_search_with_encoded_spaces() {
         let uri = mock_uri("search=hello%20world,foo%20bar");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
         assert_eq!(
             params.search,
             Some(vec!["hello world".to_string(), "foo bar".to_string()])
@@ -656,7 +654,7 @@ mod tests {
     #[test]
     fn test_parse_include_with_encoded_values() {
         let uri = mock_uri("include=author%2Dprofile,user%2Dposts");
-        let result = Parameters::parse(&uri);
+        let result = QueryParameters::parse(&uri);
         assert!(
             result.is_err(),
             "Expected parsing to fail for includes with percent-encoded values"
@@ -666,7 +664,7 @@ mod tests {
     #[test]
     fn test_parse_filter_all_operators() {
         let uri = mock_uri("filter[age]=gte:18,lte:65&filter[status]=neq:deleted");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
         let filters = params.filter.unwrap();
 
         assert_eq!(filters["age"][0].operator, FilterOperator::GreaterThanOrEqual);
@@ -680,7 +678,7 @@ mod tests {
     #[test]
     fn test_parse_filter_like_operator() {
         let uri = mock_uri("filter[name]=like:%25john%25");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
         let filters = params.filter.unwrap();
 
         assert_eq!(filters["name"][0].operator, FilterOperator::Like);
@@ -690,7 +688,7 @@ mod tests {
     #[test]
     fn test_parse_sort_with_explicit_plus() {
         let uri = mock_uri("sort=+col1,col2");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
         let sort = params.sort.unwrap();
 
         assert_eq!(sort[0].field, "col1");
@@ -702,7 +700,7 @@ mod tests {
     #[test]
     fn test_parse_sort_mixed_directions() {
         let uri = mock_uri("sort=-field1,+field2,field3,-field4");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
         let sort = params.sort.unwrap();
 
         assert_eq!(sort.len(), 4);
@@ -715,7 +713,7 @@ mod tests {
     #[test]
     fn test_parse_all_parameters_combined() {
         let uri = mock_uri("fields[users]=id,name&filter[status]=eq:active&sort=-created_at&page[number]=2&page[size]=25&include=profile&search=query");
-        let params = Parameters::parse(&uri).unwrap();
+        let params = QueryParameters::parse(&uri).unwrap();
 
         assert!(params.fields.is_some());
         assert!(params.filter.is_some());
@@ -728,21 +726,21 @@ mod tests {
     #[test]
     fn test_parse_missing_equals_sign() {
         let uri = mock_uri("sortcol1");
-        let params = Parameters::parse(&uri);
+        let params = QueryParameters::parse(&uri);
         assert!(params.is_err(), "Expected parsing to fail for malformed query");
     }
 
     #[test]
     fn test_parse_unknown_parameter() {
         let uri = mock_uri("unknown_param=value");
-        let params = Parameters::parse(&uri);
+        let params = QueryParameters::parse(&uri);
         assert!(params.is_err(), "Expected parsing to fail for unknown parameter");
     }
 
     #[test]
     fn test_parse_filter_missing_colon() {
         let uri = mock_uri("filter[col1]=eqvalue");
-        let params = Parameters::parse(&uri);
+        let params = QueryParameters::parse(&uri);
         assert!(params.is_err(), "Expected parsing to fail for filter without colon separator");
     }
 }

@@ -1,16 +1,10 @@
 use std::{
     error::Error as StdError,
     fmt::{Display, Formatter},
-    string::FromUtf8Error,
 };
 
 #[derive(Debug, Clone)]
 pub enum Error {
-    ParseFailure {
-        parameter: String,
-        message: String,
-    },
-    InvalidEncodingFailure,
     InconsistentSchema {
         schema: String,
         attribute: String,
@@ -38,19 +32,13 @@ pub enum Error {
     DatabaseFailure {
         message: String
     },
-    RecordNotFound,
-    RequiredParameterMissing {
-        parameter: String
-    },
-    InvalidParameterValue {
-        parameter: String,
-        message: String
-    }
+    RecordNotFound
 }
 
-impl From<FromUtf8Error> for Error {
-    fn from(_: FromUtf8Error) -> Self {
-        Error::InvalidEncodingFailure
+#[cfg(feature = "sqlite")]
+impl From<rusqlite::Error> for Error {
+    fn from(error: rusqlite::Error) -> Self {
+        Error::DatabaseFailure { message: error.to_string() }
     }
 }
 
@@ -59,10 +47,6 @@ impl Display for Error {
         use Error::*;
 
         match self {
-            ParseFailure { parameter, message } =>
-                write!(fmt, "Failed to parse query parameter '{}': {}", parameter, message),
-            InvalidEncodingFailure =>
-                write!(fmt, "A parameter has an invalid encoding"),
             InconsistentSchema { schema, attribute, message } =>
                 write!(fmt, "Schema '{}' is inconsistent for attribute '{}': {}", schema, attribute, message),
             SchemaValidationFailure { schema, attribute, message } =>
@@ -79,11 +63,6 @@ impl Display for Error {
                 write!(fmt, "Failed to execute query: {}", message),
             RecordNotFound =>
                 write!(fmt, "Record not found"),
-            RequiredParameterMissing { parameter } =>
-                write!(fmt, "Required parameter '{}' was not provided", parameter),
-            InvalidParameterValue { parameter, message } =>
-                write!(fmt, "Failed to parse route parameter '{}': {}", parameter, message),
-
         }
     }
 }

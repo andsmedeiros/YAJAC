@@ -1,7 +1,7 @@
 use serde::{Serialize, Deserialize};
 use serde_json::Value;
 use crate::{
-    spec:: {
+    json_api:: {
         links::Link,
         primary_content::PrimaryContent,
     },
