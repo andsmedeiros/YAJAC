@@ -3,8 +3,8 @@ pub mod error;
 pub mod http_wrappers;
 pub mod resourceful;
 pub mod json_api;
-mod database;
-mod routing;
+pub mod database;
+pub mod routing;
 
 pub use database::QueryParameters;
 pub use routing::RouteParameters;

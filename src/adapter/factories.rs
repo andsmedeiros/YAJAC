@@ -3,9 +3,17 @@ use crate::{
     adapter::{
         Cache,
         Context,
-        UriGenerator
     },
     http_wrappers::Uri,
+    json_api::{
+        document::{self, ImplementationInfo, Document},
+        error::Error,
+        identifier::Identifier,
+        links::Link,
+        primary_content::PrimaryContent,
+        relationship::{self, Linkage, Relationship},
+        resource::{self, Resource}
+    },
     resourceful::{
         Relationships,
         Resourceful,
@@ -14,15 +22,7 @@ use crate::{
                        RelatedRecord,
         }
     },
-    json_api::{
-        document::{self, ImplementationInfo, Document},
-        error::Error, 
-        identifier::Identifier,
-        links::Link,
-        primary_content::PrimaryContent,
-        relationship::{self, Linkage, Relationship},
-        resource::{self, Resource}
-    }
+    routing::UriGenerator
 };
 use serde_json::Value;
 use std::collections::HashMap;

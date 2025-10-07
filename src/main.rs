@@ -5,9 +5,10 @@ use std::{
 };
 use serde::{Serialize, Deserialize};
 use yajac::{
-    adapter::{Context, DefaultUriGenerator, UriGenerator},
+    adapter::{Context},
     http_wrappers::Uri,
-    resourceful::{Record as ResourcefulRecord, Relationships, Resourceful,},
+    resourceful::{Record as ResourcefulRecord, Relationships, Resourceful},
+    routing::{DefaultUriGenerator, UriGenerator},
     json_api::identifier::Identifier,
     extract_filtered
 };

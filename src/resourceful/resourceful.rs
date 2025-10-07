@@ -1,5 +1,6 @@
 use crate::{
-    adapter::{Context, UriGenerator},
+    adapter::Context,
+    routing::UriGenerator,
     json_api::identifier::Identifier,
 };
 use super::related_data::RelatedData;

@@ -3,10 +3,18 @@ use crate::{
     json_api::identifier::Identifier
 };
 
-const GENERATED_INVALID_MSG: &'static str = "Generated an invalid URI";
+const GENERATED_INVALID_MSG: &'static str =
+    "Generated an invalid URI. This is a bug and should not happen!";
 
 pub trait UriGenerator {
     fn base_url(&self) -> String { "".to_string() }
+
+    fn uri_for_collection(&self, kind: &str) -> Uri {
+        let base = self.base_url();
+        format!("{}/{}", base, kind)
+            .parse::<Uri>()
+            .expect(GENERATED_INVALID_MSG)
+    }
 
     fn uri_for_resource(&self, identifier: &Identifier) -> Uri {
         let base = self.base_url();
@@ -46,7 +54,7 @@ impl<'a> DefaultUriGenerator<'a> {
         assert!(
             !protocol.is_empty() && !host.is_empty() ||
                 protocol.is_empty() && host.is_empty(),
-            "URL protocol and host must either be both absent of both present."
+            "URL protocol and host must either be both absent or both present."
         );
         DefaultUriGenerator { protocol, host, namespace }
     }

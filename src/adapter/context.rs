@@ -1,10 +1,11 @@
 use crate::{
     database::QueryParameters,
-    adapter::{Cache, UriGenerator, make_resource},
+    adapter::{Cache, make_resource},
     resourceful::{
         Resourceful,
         related_data::RelatedData
     },
+    routing::UriGenerator,
 };
 use std::borrow::Borrow;
 
