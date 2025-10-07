@@ -5,7 +5,6 @@ pub mod result;
 pub mod request;
 pub mod router;
 pub mod error;
-pub mod parameters;
 mod route_parameters;
 
 pub use context::Context;
@@ -14,3 +13,4 @@ pub use responder::{default_response, respond, respond_with};
 pub use result::Result;
 pub use request::Request;
 pub use router::{Router, RouterBuilder};
+pub use route_parameters::RouteParameters;

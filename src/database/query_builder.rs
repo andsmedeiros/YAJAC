@@ -1,9 +1,9 @@
-use crate::database::{
+use super::{
+    QueryParameters,
     attributes::{Attribute, Record},
     error::Error,
-    schema::TableSchema
+    schema::TableSchema,
 };
-use crate::routing::parameters::QueryParameters as Parameters;
 
 pub struct ExtractedAttributes {
     fields: Vec<String>,
@@ -23,10 +23,10 @@ pub type Bindings = Vec<Attribute>;
 
 pub trait QueryBuilder {
     fn new(schema: &TableSchema) -> Self;
-    fn query(&self, parameters: &Parameters) -> Result<(String, Bindings), Error>;
-    fn find(&self, id: i32, parameters: &Parameters) -> Result<(String, Bindings), Error>;
-    fn insert(&self, attributes: Record, parameters: &Parameters) -> Result<(String, Bindings), Error>;
-    fn update(&self, id: i32, attributes: Record, parameters: &Parameters) -> Result<(String, Bindings), Error>;
+    fn query(&self, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
+    fn find(&self, id: i32, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
+    fn insert(&self, attributes: Record, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
+    fn update(&self, id: i32, attributes: Record, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
     fn delete(&self, id: i32) -> (String, Bindings);
 }
 

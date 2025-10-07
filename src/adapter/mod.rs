@@ -7,5 +7,4 @@ mod adapter;
 pub use cache::*;
 pub use context::*;
 pub use factories::*;
-pub use crate::routing::parameters::QueryParameters;
 pub use uri_generator::*;

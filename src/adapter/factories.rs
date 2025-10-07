@@ -1,8 +1,8 @@
 use crate::{
+    database::QueryParameters,
     adapter::{
         Cache,
         Context,
-        QueryParameters,
         UriGenerator
     },
     http_wrappers::Uri,

@@ -2,11 +2,14 @@ use std::mem;
 use log::debug;
 use serde_json::{json, Value};
 use http::{Method, Response, StatusCode};
-use crate::{
-    routing::controller::{ReadOnlyResourceController, ResourceController},
-    routing::{default_response, Context, Request, Result},
+use super::{
+    default_response,
+    Context,
+    Request,
+    Result,
+    RouteParameters,
+    controller::{ReadOnlyResourceController, ResourceController},
 };
-use crate::routing::parameters::RouteParameters;
 
 pub trait Handler<'a, Connection: 'a>: Fn(Request, Context<'a, Connection>) -> Result + Sync + Send + 'a {  }
 

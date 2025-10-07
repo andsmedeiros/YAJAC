@@ -6,7 +6,8 @@ pub mod json_api;
 mod database;
 mod routing;
 
-pub use routing::parameters::{QueryParameters, RouteParameters};
+pub use database::QueryParameters;
+pub use routing::RouteParameters;
 pub use error::Error;
 
 #[macro_export]
