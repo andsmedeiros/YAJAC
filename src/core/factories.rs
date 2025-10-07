@@ -1,6 +1,6 @@
 use crate::{
     database::QueryParameters,
-    adapter::{
+    core::{
         Cache,
         Context,
     },
@@ -27,7 +27,7 @@ use crate::{
 use serde_json::Value;
 use std::collections::HashMap;
 
-pub enum Content<'a, R: Resourceful> {
+pub enum  Content<'a, R: Resourceful> {
     Resource(&'a R),
     Collection(Vec<&'a R>),
     Errors(Vec<Error>)

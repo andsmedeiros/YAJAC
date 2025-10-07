@@ -1,6 +1,6 @@
 use crate::{
     database::QueryParameters,
-    adapter::{Cache, make_resource},
+    core::{Cache, make_resource},
     resourceful::{
         Resourceful,
         related_data::RelatedData

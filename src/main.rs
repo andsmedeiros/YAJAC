@@ -5,14 +5,14 @@ use std::{
 };
 use serde::{Serialize, Deserialize};
 use yajac::{
-    adapter::{Context},
+    core::{Context},
     http_wrappers::Uri,
     resourceful::{Record as ResourcefulRecord, Relationships, Resourceful},
     routing::{DefaultUriGenerator, UriGenerator},
     json_api::identifier::Identifier,
     extract_filtered
 };
-use yajac::adapter::to_document;
+use yajac::core::to_document;
 
 trait Identifiable<IdType=String> {
     fn get_id(&self) -> IdType;

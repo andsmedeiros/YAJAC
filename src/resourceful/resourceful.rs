@@ -1,5 +1,5 @@
 use crate::{
-    adapter::Context,
+    core::Context,
     routing::UriGenerator,
     json_api::identifier::Identifier,
 };
