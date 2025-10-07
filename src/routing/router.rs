@@ -3,10 +3,10 @@ use log::debug;
 use serde_json::{json, Value};
 use http::{Method, Response, StatusCode};
 use crate::{
-    parameters::RouteParameters,
     routing::controller::{ReadOnlyResourceController, ResourceController},
-    routing::{Context, Request, Result, default_response},
+    routing::{default_response, Context, Request, Result},
 };
+use crate::routing::parameters::RouteParameters;
 
 pub trait Handler<'a, Connection: 'a>: Fn(Request, Context<'a, Connection>) -> Result + Sync + Send + 'a {  }
 

@@ -3,11 +3,10 @@ pub mod error;
 pub mod http_wrappers;
 pub mod resourceful;
 pub mod json_api;
-mod parameters;
 mod database;
 mod routing;
 
-pub use parameters::{QueryParameters, RouteParameters};
+pub use routing::parameters::{QueryParameters, RouteParameters};
 pub use error::Error;
 
 #[macro_export]

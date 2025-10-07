@@ -4,7 +4,7 @@ use std::{
     fmt::Display,
     str::FromStr
 };
-use super::error::Error;
+use super::error::{Error, FailtToParseParameterError, RequiredParameterMissingError};
 
 #[derive(Debug, Clone)]
 pub struct RouteParameters(HashMap<String, String>);
@@ -41,9 +41,9 @@ impl RouteParameters {
         K: Borrow<str> + Display,
     {
         self.get(key.borrow())
-            .ok_or_else(|| Error::RequiredParameterMissing {
+            .ok_or_else(|| RequiredParameterMissingError {
                 parameter: key.borrow().into(),
-            })
+            }.into())
     }
 
     pub fn get_as<T, K>(&self, key: K) -> Result<Option<T>, Error>
@@ -55,10 +55,10 @@ impl RouteParameters {
             .map(|value|
                 value
                     .parse::<T>()
-                    .map_err(|_| Error::ParseParameterFailure {
+                    .map_err(|_| FailtToParseParameterError {
                         parameter: key.borrow().into(),
                         message: "Provided parameter contains an unexpected value".to_string(),
-                    })
+                    }.into())
             )
             .transpose()
     }
@@ -69,8 +69,8 @@ impl RouteParameters {
         K: Borrow<str> + Display,
     {
         self.get_as(key.borrow())?
-            .ok_or_else(|| Error::RequiredParameterMissing {
+            .ok_or_else(|| RequiredParameterMissingError {
                 parameter: key.borrow().into(),
-            })
+            }.into())
     }
 }

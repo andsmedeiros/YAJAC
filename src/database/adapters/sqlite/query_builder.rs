@@ -1,22 +1,20 @@
 use itertools::Itertools;
-use crate::{
-    database::{
-        error::Error,
-        attributes::{Attribute, Record},
-        schema::{AttributeType, TableSchema},
-        query_builder::QueryBuilder as QueryBuilderInterface,
-    },
-    parameters::query_parameters::{
-        FieldsParameters,
-        FilterOperator,
-        FilterParameters,
-        PageParameters,
-        SearchParameters,
-        SortDirection,
-        SortingField,
-        SortParameters,
-        QueryParameters,
-    },
+use crate::database::{
+    attributes::{Attribute, Record},
+    error::Error,
+    query_builder::QueryBuilder as QueryBuilderInterface,
+    schema::{AttributeType, TableSchema},
+};
+use crate::database::query_parameters::{
+    FieldsParameters,
+    FilterOperator,
+    FilterParameters,
+    PageParameters,
+    QueryParameters,
+    SearchParameters,
+    SortDirection,
+    SortParameters,
+    SortingField,
 };
 
 struct ExtractedAttributes {
@@ -357,7 +355,6 @@ impl<'a> BuilderInterface for QueryBuilder<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::LazyLock;
     use tauri::http::Uri;
 

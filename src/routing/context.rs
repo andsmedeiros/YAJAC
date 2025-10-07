@@ -1,7 +1,5 @@
-use crate::{
-    http_wrappers::Uri,
-    parameters::{QueryParameters, RouteParameters}
-};
+use crate::http_wrappers::Uri;
+use crate::routing::parameters::{QueryParameters, RouteParameters};
 use super::error::Error;
 
 #[derive(Debug, Clone)]

@@ -1,11 +1,9 @@
-use crate::{
-    parameters::QueryParameters as Parameters,
-    database::{
-        error::Error,
-        attributes::{Attribute, Record},
-        schema::TableSchema
-    }
+use crate::database::{
+    attributes::{Attribute, Record},
+    error::Error,
+    schema::TableSchema
 };
+use crate::routing::parameters::QueryParameters as Parameters;
 
 pub struct ExtractedAttributes {
     fields: Vec<String>,

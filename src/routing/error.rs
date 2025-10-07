@@ -1,37 +1,47 @@
 use crate::{
     database::error::Error as DatabaseError,
     http_wrappers::StatusCode,
-    json_api::error::{Source},
-    parameters::error::Error as ParameterError,
+    json_api::error::Source,
 };
-use http::{Error as HttpError};
-use itertools::Itertools;
-use serde::{Serialize, Deserialize, Serializer};
-use serde_json::{Error as JsonError, Value, json};
+use http::Error as HttpError;
+use serde::{Deserialize, Serialize, Serializer};
+use serde_json::{json, Error as JsonError, Value};
 use std::{
     error::Error as StdError,
     fmt::{Display, Formatter},
 };
 
+#[derive(Debug, Clone, Serialize)]
+pub struct RequiredParameterMissingError {
+    pub parameter: String,
+}
+
+impl Display for RequiredParameterMissingError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Required parameter '{}' was not provided", self.parameter)
+    }
+}
+
+impl StdError for RequiredParameterMissingError {}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FailtToParseParameterError {
+    pub parameter: String,
+    pub message: String
+}
+
+impl Display for FailtToParseParameterError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Failed to parse parameter '{}': {}", self.parameter, self.message)
+    }
+}
+
+impl StdError for FailtToParseParameterError {}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ApiErrorKind {
     ModelValidationFailed
 }
-//
-// #[derive(Debug, Serialize, Deserialize)]
-// pub struct FieldValidationError {
-//     pub attribute: String,
-//     pub description: String,
-//     pub details: Value
-// }
-//
-// #[derive(Debug, Serialize, Deserialize)]
-// pub struct ModelValidationError {
-//     pub kind: ApiErrorKind,
-//     pub message: String,
-//     pub model: String,
-//     pub errors: Vec<FieldValidationError>
-// }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Error {
@@ -89,6 +99,26 @@ impl Display for Error {
     }
 }
 
+impl From<RequiredParameterMissingError> for Error {
+    fn from(error: RequiredParameterMissingError) -> Self {
+        Error::new(
+            StatusCode::BAD_REQUEST,
+            "RequiredParameterMissing",
+            error.to_string()
+        )
+    }
+}
+
+impl From<FailtToParseParameterError> for Error {
+    fn from(error: FailtToParseParameterError) -> Self {
+        Error::new(
+            StatusCode::BAD_REQUEST,
+            "FailedToParseParameterError",
+            error.to_string()
+        )
+    }
+}
+
 impl From<HttpError> for Error {
     fn from(error: HttpError) -> Self {
         Error::new(
@@ -113,18 +143,6 @@ impl From<JsonError> for Error {
         }))
     }
 }
-
-// impl From<FieldValidationError> for Error {
-//     fn from(error: FieldValidationError) -> Self {
-//         Error::new(
-//             StatusCode::BAD_REQUEST,
-//             "FieldValidationError",
-//             error.description
-//         )
-//             .with_source(Source::pointer_for_attribute(error.attribute))
-//             .with_meta(error.details)
-//     }
-// }
 
 impl From<Error> for Vec<Error> {
     fn from(error: Error) -> Self {
@@ -164,55 +182,4 @@ impl From<DatabaseError> for Error {
     }
 }
 
-impl From<ParameterError> for Error {
-    fn from(error: ParameterError) -> Self {
-        match error {
-            ParameterError::ParseParameterFailure { parameter, message } =>
-                Error::new(
-                    StatusCode::BAD_REQUEST,
-                    "ParameterParseFailure",
-                    message
-                    // TODO: Proper source formatting
-                )
-                .with_source(Source::Pointer(parameter)),
-            ParameterError::RequiredParameterMissing { parameter } =>
-                Error::new(
-                    StatusCode::BAD_REQUEST,
-                    "RequiredParameterMissing",
-                    format!("Required parameter '{}' was not provided", parameter),
-                ),
-            ParameterError::InvalidEncodingFailure =>
-                Error::new(
-                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    "InvalidEncodingFailure",
-                    "Encoding is not UTF-8 or is not valid"
-                )
-        }
-    }
-}
-
 impl StdError for Error {}
-//
-// impl<T> From<T> for Error
-// where
-//     T: Into<Error>
-// {
-//     fn from(value: T) -> Self {
-//         Error { content: vec![value.into()] }
-//     }
-// }
-//
-// impl<T> From<Vec<T>> for Error
-// where
-//     T: Into<Error>
-// {
-//     fn from(value: Vec<T>) -> Self {
-//         Error { content: value.into_iter().map_into().collect() }
-//     }
-// }
-
-// impl From<ModelValidationError> for Error {
-//     fn from(error: ModelValidationError) -> Self {
-//         Error::from(error.errors)
-//     }
-// }

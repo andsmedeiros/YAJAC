@@ -1,10 +1,8 @@
-use crate::{
-    database::{
-        error::Error,
-        attributes::Record,
-    },
-    parameters::QueryParameters
+use crate::database::{
+    attributes::Record,
+    error::Error,
 };
+use crate::routing::parameters::QueryParameters;
 
 pub trait Table {
     fn query(&self, parameters: &QueryParameters) -> Result<Vec<Record>, Error>;

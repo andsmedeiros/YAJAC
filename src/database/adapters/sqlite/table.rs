@@ -1,19 +1,17 @@
-use crate::{
-    database::{
-        attributes::{self, Attribute, Record},
-        error::Error,
-        schema::{AttributeType, TableSchema},
-        adapters::sqlite::QueryBuilder,
-        table::Table as TableInterface,
-    },
-    parameters::QueryParameters as Parameters,
+use crate::database::{
+    adapters::sqlite::QueryBuilder,
+    attributes::{self, Attribute, Record},
+    error::Error,
+    schema::{AttributeType, TableSchema},
+    table::Table as TableInterface,
 };
 use log::debug;
 use base64::{engine::general_purpose::STANDARD as b64, Engine as _};
 use rusqlite::{
-    Row,
     types::{ToSql, ToSqlOutput, Value as DatabaseValue, ValueRef},
+    Row,
 };
+use crate::routing::parameters::QueryParameters as Parameters;
 
 pub struct Table<'a> {
     pub schema: &'a TableSchema,

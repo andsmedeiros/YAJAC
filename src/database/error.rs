@@ -2,9 +2,15 @@ use std::{
     error::Error as StdError,
     fmt::{Display, Formatter},
 };
+use std::string::FromUtf8Error;
 
 #[derive(Debug, Clone)]
 pub enum Error {
+    ParseParameterFailure {
+        parameter: String,
+        message: String,
+    },
+    InvalidEncodingFailure,
     InconsistentSchema {
         schema: String,
         attribute: String,
@@ -42,27 +48,37 @@ impl From<rusqlite::Error> for Error {
     }
 }
 
+impl From<FromUtf8Error> for Error {
+    fn from(_: FromUtf8Error) -> Self {
+        Error::InvalidEncodingFailure
+    }
+}
+
 impl Display for Error {
-    fn fmt(&self, fmt: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         use Error::*;
 
         match self {
+            ParseParameterFailure { parameter, message } =>
+                write!(f, "Failed to parse parameter '{}': {}", parameter, message),
+            InvalidEncodingFailure =>
+                write!(f, "A provided parameter has an invalid encoding"),
             InconsistentSchema { schema, attribute, message } =>
-                write!(fmt, "Schema '{}' is inconsistent for attribute '{}': {}", schema, attribute, message),
+                write!(f, "Schema '{}' is inconsistent for attribute '{}': {}", schema, attribute, message),
             SchemaValidationFailure { schema, attribute, message } =>
-                write!(fmt, "Invalid attribute '{}' for schema '{}': {}", attribute, schema, message),
+                write!(f, "Invalid attribute '{}' for schema '{}': {}", attribute, schema, message),
             InvalidAttributeSet =>
-                write!(fmt, "The provided attributes are in an unexpected format."),
+                write!(f, "The provided attributes are in an unexpected format."),
             InvalidAttribute { attribute, kind, message } =>
-                write!(fmt, "Attribute '{}' is an invalid {}: {}", attribute, kind, message),
+                write!(f, "Attribute '{}' is an invalid {}: {}", attribute, kind, message),
             InvalidAttributeConversion { kind } =>
-                write!(fmt, "Cannot convert attribute to {}",  kind),
+                write!(f, "Cannot convert attribute to {}",  kind),
             InvalidOperation { schema, operation, message } =>
-                write!(fmt, "Operation '{}' is invalid for schema '{}': {}", operation, schema, message),
+                write!(f, "Operation '{}' is invalid for schema '{}': {}", operation, schema, message),
             DatabaseFailure { message } =>
-                write!(fmt, "Failed to execute query: {}", message),
+                write!(f, "Failed to execute query: {}", message),
             RecordNotFound =>
-                write!(fmt, "Record not found"),
+                write!(f, "Record not found"),
         }
     }
 }
