@@ -7,6 +7,7 @@ pub mod attributes;
 pub mod adapters;
 pub mod query_parameters;
 pub mod registry;
-mod connection;
+pub mod connection;
+pub mod record;
 
 pub use query_parameters::QueryParameters;
