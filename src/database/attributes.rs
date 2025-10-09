@@ -111,7 +111,7 @@ impl ToSql for Attribute {
     }
 }
 
-pub type Record = IndexMap<String, Attribute>;
+pub type Attributes = IndexMap<String, Attribute>;
 
 fn inconsistent_schema_error<T, U>(schema: &TableSchema, attribute: &str, from: T, to: U)
     -> Result<Attribute, Error>
@@ -237,7 +237,7 @@ fn attribute_from_value(value: Value, attribute: &str, attribute_type: &Attribut
     }
 }
 
-pub fn from_value(schema: &TableSchema, value: Value) -> Result<Record, Error> {
+pub fn from_value(schema: &TableSchema, value: Value) -> Result<Attributes, Error> {
     let schema_name = schema.name;
     let entries = match value {
         Value::Object(object) => object
@@ -257,7 +257,7 @@ pub fn from_value(schema: &TableSchema, value: Value) -> Result<Record, Error> {
         _ => Err(Error::InvalidAttributeSet)?
     }.collect::<Result<Vec<_>, Error>>()?;
 
-    Ok(Record::from_iter(entries.into_iter()))
+    Ok(Attributes::from_iter(entries.into_iter()))
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use super::{
     QueryParameters,
-    attributes::{Attribute, Record},
+    attributes::{Attribute, Attributes},
     error::Error,
     schema::TableSchema,
 };
@@ -25,8 +25,8 @@ pub trait QueryBuilder {
     fn new(schema: &TableSchema) -> Self;
     fn query(&self, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
     fn find(&self, id: i32, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
-    fn insert(&self, attributes: Record, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
-    fn update(&self, id: i32, attributes: Record, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
+    fn insert(&self, attributes: Attributes, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
+    fn update(&self, id: i32, attributes: Attributes, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
     fn delete(&self, id: i32) -> (String, Bindings);
 }
 

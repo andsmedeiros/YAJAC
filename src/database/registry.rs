@@ -9,7 +9,7 @@ use super::{
     schema::{RelatedTable, Relationship, TableSchema},
 };
 
-struct Registry<Adapter : AdapterInterface> {
+pub struct Registry<Adapter : AdapterInterface> {
     connection: Arc<Mutex<Adapter::Connection>>,
     contents: HashMap<&'static str, Adapter::Table>
 }
@@ -29,7 +29,7 @@ impl<Adapter : AdapterInterface> Registry<Adapter> {
 
         Ok(registry)
     }
-    
+
     pub fn table(&self, name: &str) -> Result<&Adapter::Table, Error> {
         self.contents
             .get(name)
@@ -58,29 +58,29 @@ impl<Adapter : AdapterInterface> Registry<Adapter> {
 
                 if !table_schema.columns
                     .iter()
-                    .any(|(name, _)| *name == relationship_columns.own) 
+                    .any(|(name, _)| *name == relationship_columns.own)
                 {
                     return Err(Error::SchemaValidationFailure {
                         schema: table_schema.name.to_string(),
                         attribute: relationship_name.to_string(),
                         message: format!(
-                            "Relationship refers to non-existent own column '{}'", 
+                            "Relationship refers to non-existent own column '{}'",
                             relationship_columns.own
                         )
                     })
                 }
-                
+
                 if let Some(related_schema) = validated_tables.get(related_table_name) {
                     if ! related_schema.columns
                         .iter()
-                        .any(|(name, _)| *name == relationship_columns.related) 
+                        .any(|(name, _)| *name == relationship_columns.related)
                     {
                         return Err(Error::SchemaValidationFailure {
                             schema: table_schema.name.to_string(),
                             attribute: relationship_name.to_string(),
                             message: format!(
                                 "Relationship refers to non-existent related column '{}' at table '{}'",
-                                relationship_columns.own, 
+                                relationship_columns.own,
                                 related_table_name
                             )
                         })
@@ -90,7 +90,7 @@ impl<Adapter : AdapterInterface> Registry<Adapter> {
                         schema: table_schema.name.to_string(),
                         attribute: relationship_name.to_string(),
                         message: format!(
-                            "Relationship refers to non-existent table '{}'", 
+                            "Relationship refers to non-existent table '{}'",
                             related_table_name
                         )
                     })

@@ -1,6 +1,6 @@
 use itertools::Itertools;
 use crate::database::{
-    attributes::{Attribute, Record},
+    attributes::{Attribute, Attributes},
     error::Error,
     query_builder::QueryBuilder as QueryBuilderInterface,
     schema::{AttributeType, TableSchema},
@@ -52,7 +52,7 @@ impl<'a> QueryBuilder<'a> {
         Ok(())
     }
 
-    fn build_insert_clause(&self, attributes: Record, query: &mut Vec<String>)
+    fn build_insert_clause(&self, attributes: Attributes, query: &mut Vec<String>)
                            -> Result<Bindings, Error>
     {
         let attributes = self.extract_attributes(attributes)?;
@@ -67,7 +67,7 @@ impl<'a> QueryBuilder<'a> {
         Ok(attributes.values)
     }
 
-    fn build_update_clause(&self, id: i32, attributes: Record, query: &mut Vec<String>)
+    fn build_update_clause(&self, id: i32, attributes: Attributes, query: &mut Vec<String>)
                            -> Result<Bindings, Error>
     {
         let attributes = self.extract_attributes(attributes)?;
@@ -255,7 +255,7 @@ impl<'a> QueryBuilder<'a> {
         Ok(())
     }
 
-    fn extract_attributes(&self, attributes: Record)
+    fn extract_attributes(&self, attributes: Attributes)
                           -> Result<ExtractedAttributes, Error>
     {
         self.validate_attributes(attributes.keys())?;
@@ -328,7 +328,7 @@ impl<'a> BuilderInterface for QueryBuilder<'a> {
         Ok((query.join(" ").to_string(), bindings))
     }
 
-    fn insert(&self, attributes: Record, parameters: &QueryParameters) -> Result<(String, Bindings), Error> {
+    fn insert(&self, attributes: Attributes, parameters: &QueryParameters) -> Result<(String, Bindings), Error> {
         let mut query = Vec::new();
 
         let bindings = self.build_insert_clause(attributes, &mut query)?;
@@ -337,7 +337,7 @@ impl<'a> BuilderInterface for QueryBuilder<'a> {
         Ok((query.join(" "), bindings))
     }
 
-    fn update(&self, id: i32, attributes: Record, parameters: &QueryParameters) -> Result<(String, Bindings), Error> {
+    fn update(&self, id: i32, attributes: Attributes, parameters: &QueryParameters) -> Result<(String, Bindings), Error> {
         let mut query = Vec::new();
         let bindings = self.build_update_clause(id, attributes, &mut query)?;
         self.build_returning_clause(&parameters.fields, &mut query)?;

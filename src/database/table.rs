@@ -1,6 +1,6 @@
 use super::{
     QueryParameters,
-    attributes::Record,
+    attributes::Attributes,
     connection::Connection as ConnectionInterface,
     error::Error,
     query_builder::QueryBuilder as QueryBuilderInterface,
@@ -14,17 +14,17 @@ pub trait Table<Connection : ConnectionInterface, QueryBuilder : QueryBuilderInt
 
     fn new(table_schema: &TableSchema, connection: Arc<Mutex<Connection>>) -> Self;
 
-    fn query(&self, parameters: &QueryParameters) -> Result<Vec<Record>, Error> {
+    fn query(&self, parameters: &QueryParameters) -> Result<Vec<Attributes>, Error> {
         let (query, bindings) = QueryBuilder::new(self.schema()).query(parameters)?;
         self.connection()?.query(query, bindings)
     }
 
-    fn first(&self, parameters: &QueryParameters) -> Result<Option<Record>, Error> {
+    fn first(&self, parameters: &QueryParameters) -> Result<Option<Attributes>, Error> {
         let rows = self.query(parameters)?;
         Ok(rows.into_iter().next())
     }
 
-    fn find(&self, id: i32, parameters: &QueryParameters) -> Result<Record, Error> {
+    fn find(&self, id: i32, parameters: &QueryParameters) -> Result<Attributes, Error> {
         let (query, bindings) = QueryBuilder::new(self.schema()).find(id, parameters)?;
 
         let rows = self.connection()?.query(query, bindings)?;
@@ -33,7 +33,7 @@ pub trait Table<Connection : ConnectionInterface, QueryBuilder : QueryBuilderInt
         Ok(row)
     }
 
-    fn insert(&self, attributes: Record, parameters: &QueryParameters) -> Result<Record, Error> {
+    fn insert(&self, attributes: Attributes, parameters: &QueryParameters) -> Result<Attributes, Error> {
         let (query, bindings) = QueryBuilder::new(self.schema())
             .insert(attributes, parameters)?;
         let rows = self.connection()?.query(query, bindings)?;
@@ -42,7 +42,7 @@ pub trait Table<Connection : ConnectionInterface, QueryBuilder : QueryBuilderInt
         Ok(row)
     }
 
-    fn update(&self, id: i32, attributes: Record, parameters: &QueryParameters) -> Result<Record, Error> {
+    fn update(&self, id: i32, attributes: Attributes, parameters: &QueryParameters) -> Result<Attributes, Error> {
         let (query, bindings) = QueryBuilder::new(self.schema())
             .update(id, attributes, parameters)?;
         let rows = self.connection()?.query(query, bindings)?;

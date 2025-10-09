@@ -1,6 +1,6 @@
 use crate::database::{
     adapters::sqlite::QueryBuilder,
-    attributes::{self, Attribute, Record},
+    attributes::{self, Attribute, Attributes},
     error::Error,
     schema::{AttributeType, TableSchema},
     table::Table as TableInterface,
@@ -23,7 +23,7 @@ impl<'a> Table<'a> {
         Self { table_schema, connection }
     }
 
-    fn materialise_record(&self, row: &Row) -> Result<Record, Error> {
+    fn materialise_record(&self, row: &Row) -> Result<Attributes, Error> {
         let entries = row
             .as_ref()
             .columns()
@@ -75,7 +75,7 @@ impl<'a> Table<'a> {
             })
             .collect::<Result<Vec<_>, Error>>()?;
 
-        Ok(Record::from_iter(entries.into_iter()))
+        Ok(Attributes::from_iter(entries.into_iter()))
     }
 
 }
@@ -85,17 +85,17 @@ impl<'a> TableInterface for Table<'a> {
         self.table_schema
     }
     
-    fn query(&self, parameters: &Parameters) -> Result<Vec<Record>, Error> {
+    fn query(&self, parameters: &Parameters) -> Result<Vec<Attributes>, Error> {
         let (query, bindings) = QueryBuilder::new(self.table_schema).query(parameters)?;
         self.execute(query, bindings)
     }
 
-    fn first(&self, parameters: &Parameters) -> Result<Option<Record>, Error> {
+    fn first(&self, parameters: &Parameters) -> Result<Option<Attributes>, Error> {
         let rows = self.query(parameters)?;
         Ok(rows.into_iter().next())
     }
 
-    fn find(&self, id: i32, parameters: &Parameters) -> Result<Record, Error> {
+    fn find(&self, id: i32, parameters: &Parameters) -> Result<Attributes, Error> {
         let (query, bindings) = QueryBuilder::new(self.table_schema).find(id, parameters)?;
 
         let rows = self.execute(query, bindings)?;
@@ -104,7 +104,7 @@ impl<'a> TableInterface for Table<'a> {
         Ok(row)
     }
 
-    fn insert(&self, attributes: Record, parameters: &Parameters) -> Result<Record, Error> {
+    fn insert(&self, attributes: Attributes, parameters: &Parameters) -> Result<Attributes, Error> {
         let (query, bindings) =
             QueryBuilder::new(self.table_schema).insert(attributes, parameters)?;
         let rows = self.execute(query, bindings)?;
@@ -113,7 +113,7 @@ impl<'a> TableInterface for Table<'a> {
         Ok(row)
     }
 
-    fn update(&self, id: i32, attributes: Record, parameters: &Parameters) -> Result<Record, Error> {
+    fn update(&self, id: i32, attributes: Attributes, parameters: &Parameters) -> Result<Attributes, Error> {
         let (query, bindings) = QueryBuilder::new(self.table_schema)
             .update(id, attributes, parameters)?;
         let rows = self.execute(query, bindings)?;
@@ -134,7 +134,7 @@ impl<'a> TableInterface for Table<'a> {
         Ok(())
     }
 
-    fn execute(&self, query: String, bindings: Vec<Attribute>) -> Result<Vec<Record>, Error> {
+    fn execute(&self, query: String, bindings: Vec<Attribute>) -> Result<Vec<Attributes>, Error> {
         debug!("{}, {:?}", query, bindings);
 
         let bindings: Vec<&dyn ToSql> = bindings
@@ -146,7 +146,7 @@ impl<'a> TableInterface for Table<'a> {
             .query_and_then(bindings.as_slice(), |row|
                 attributes::materialise(&self.table_schema, row)
             )?
-            .collect::<Result<Vec<Record>, _>>()?;
+            .collect::<Result<Vec<Attributes>, _>>()?;
 
         debug!("Returned {} rows", rows.len());
         Ok(rows)
