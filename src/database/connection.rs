@@ -4,6 +4,6 @@ use super::{
 };
 
 pub trait Connection {
-    fn query(&self, query: String, bindings: Vec<Attribute>) -> Result<Vec<Attributes>, Error>;
-    fn execute(&self, query: String, bindings: Vec<Attribute>) -> Result<(), Error>;
+    fn query(&mut self, query: String, bindings: Vec<Attribute>) -> Result<Vec<Attributes>, Error>;
+    fn execute(&mut self, query: String, bindings: Vec<Attribute>) -> Result<(), Error>;
 }
