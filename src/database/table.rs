@@ -61,8 +61,8 @@ pub trait Table<Connection : ConnectionInterface, QueryBuilder : QueryBuilderInt
                 rows
                     .into_iter()
                     .map(|attributes| Record {
-                        schema: self.schema(),
-                        attributes
+                        attributes,
+                        ..Record::new(self.schema())
                     })
                     .collect()
             )
