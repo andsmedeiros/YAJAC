@@ -9,5 +9,6 @@ pub mod query_parameters;
 pub mod registry;
 pub mod connection;
 pub mod record;
+mod relationships;
 
 pub use query_parameters::QueryParameters;
