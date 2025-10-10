@@ -11,6 +11,7 @@ use std::{
     sync::LazyLock,
 };
 use urlencoding::decode;
+use crate::database::error::Error::ParseParameterFailure;
 
 mod regex_builder {
     /// Generic pattern for identifiers -- model names, field names and relationship names
@@ -33,9 +34,9 @@ static SORT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 /// Matches exactly a filter directive: a supported operand and a filter term.
 /// The term can be anything and will be percent-decoded before being considered by the filter.
 ///
-/// The valid operands are: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `like`.
+/// The valid operands are: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `like`, 'in', 'nin'.
 static FILTER_REGEX: LazyLock<Regex> = LazyLock::new(||
-    Regex::new(r"\A(eq|neq|gt|gte|lt|lte|like):(.*)\z").unwrap()
+    Regex::new(r"\A(eq|neq|gt|gte|lt|lte|like|in|nin):(.*)\z").unwrap()
 );
 
 /// Matches a family parameter in the form `$family[$param]`.
@@ -69,21 +70,16 @@ pub struct SortingField {
 
 /// Enumerates possible comparison operations available for filtering
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FilterOperator {
-    Equal,
-    NotEqual,
-    GreaterThan,
-    GreaterThanOrEqual,
-    LessThan,
-    LessThanOrEqual,
-    Like,
-}
-
-/// Stores information for filtering a collection
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FilterValue {
-    pub(crate) operator: FilterOperator,
-    pub(crate) value: String
+pub enum FilterValue {
+    Equal(String),
+    NotEqual(String),
+    GreaterThan(i32),
+    GreaterThanOrEqual(i32),
+    LessThan(i32),
+    LessThanOrEqual(i32),
+    Like(String),
+    In(Vec<String>),
+    NotIn(Vec<String>),
 }
 
 /// Stores which fields should be returned for a given model type
@@ -184,24 +180,48 @@ impl QueryParameters {
             .split(",")
             .map(|entry| {
                 let result = FILTER_REGEX.captures(entry).map(|c| c.extract());
+                
+                let parse_i32 = |operator: &str, value: &str| {
+                    value.parse::<i32>().map_err(|_| Error::ParseParameterFailure {
+                        parameter: format!("filter[{field}]"),
+                        message: format!("Invalid filter value for operator '{}': '{}'", operator, value)
+                    })
+                };
+                
+                let decode_string = |value: &str| {
+                    decode(value)
+                        .map_err(|_| ParseParameterFailure {
+                            parameter: format!("filter[{field}]"),
+                            message: "Invalid encoding for field value".to_string()
+                        })
+                        .map(String::from)
+                };
+                
+                let parse_string_list = |value: &str| {
+                    value.split(",")
+                        .map(decode_string)
+                        .collect::<Result<Vec<_>, _>>()
+                };
+                
                 if let Some((_, [operator, value])) = result {
-                    use FilterOperator::*;
-                    let operator = match operator {
-                        "eq" => Equal,
-                        "neq" => NotEqual,
-                        "gt" => GreaterThan,
-                        "gte" => GreaterThanOrEqual,
-                        "lt" => LessThan,
-                        "lte" => LessThanOrEqual,
-                        "like" => Like,
+                    use FilterValue::*;
+                    let filter_value = match operator {
+                        "eq" => Equal(decode_string(value)?),
+                        "neq" => NotEqual(decode_string(value)?),
+                        "gt" => GreaterThan(parse_i32(operator, value)?),
+                        "gte" => GreaterThanOrEqual(parse_i32(operator, value)?),
+                        "lt" => LessThan(parse_i32(operator, value)?),
+                        "lte" => LessThanOrEqual(parse_i32(operator, value)?),
+                        "like" => Like(decode_string(value)?),
+                        "in" => In(parse_string_list(value)?),
+                        "nin" => NotIn(parse_string_list(value)?),
                         _ => Err(Error::ParseParameterFailure {
                             parameter: format!("filter[{field}]"),
                             message: format!("Invalid filter operator: '{operator}'")
                         })?,
                     };
-                    let value = decode(value)?.into_owned();
 
-                    Ok(FilterValue { operator, value })
+                    Ok(filter_value)
                 } else {
                     Err(Error::ParseParameterFailure {
                         parameter: format!("filter[{field}]"),
@@ -406,10 +426,8 @@ mod tests {
         assert!(params.filter.is_some());
 
         let filters = params.filter.unwrap();
-        assert_eq!(filters["col1"][0].operator, FilterOperator::Equal);
-        assert_eq!(filters["col1"][0].value, "value1");
-        assert_eq!(filters["col2"][0].operator, FilterOperator::NotEqual);
-        assert_eq!(filters["col2"][0].value, "value2");
+        assert_eq!(filters["col1"][0], FilterValue::Equal("value1".to_string()));
+        assert_eq!(filters["col2"][0], FilterValue::NotEqual("value2".to_string()));
     }
 
     #[test]
@@ -430,8 +448,7 @@ mod tests {
 
         // Filter check
         let filters = params.filter.unwrap();
-        assert_eq!(filters["col1"][0].operator, FilterOperator::GreaterThan);
-        assert_eq!(filters["col1"][0].value, "10");
+        assert_eq!(filters["col1"][0], FilterValue::GreaterThan(10));
 
         // Pagination check
         assert_eq!(params.page, Some(PageParameters { number: 3, size: 15 }));
@@ -467,17 +484,15 @@ mod tests {
 
     #[test]
     fn test_parse_multiple_filters_for_same_field() {
-        let uri = mock_uri("filter[col1]=eq:value1,gt:value2");
+        let uri = mock_uri("filter[col1]=eq:value1,gt:-20");
         let params = QueryParameters::parse(&uri).unwrap();
 
         assert!(params.filter.is_some());
         let filters = params.filter.unwrap();
 
         assert_eq!(filters["col1"].len(), 2);
-        assert_eq!(filters["col1"][0].operator, FilterOperator::Equal);
-        assert_eq!(filters["col1"][0].value, "value1");
-        assert_eq!(filters["col1"][1].operator, FilterOperator::GreaterThan);
-        assert_eq!(filters["col1"][1].value, "value2");
+        assert_eq!(filters["col1"][0], FilterValue::Equal("value1".to_string()));
+        assert_eq!(filters["col1"][1], FilterValue::GreaterThan(-20));
     }
 
     #[test]
@@ -523,11 +538,8 @@ mod tests {
 
         let filters = params.filter.unwrap();
 
-        assert_eq!(filters["col1"][0].operator, FilterOperator::Equal);
-        assert_eq!(filters["col1"][0].value, "value1&");  // '&' decoded correctly
-
-        assert_eq!(filters["col2"][0].operator, FilterOperator::Like);
-        assert_eq!(filters["col2"][0].value, "special:value");  // ':' decoded correctly
+        assert_eq!(filters["col1"][0], FilterValue::Equal("value1&".to_string()));
+        assert_eq!(filters["col2"][0], FilterValue::Like("special:value".to_string()));
     }
 
     #[test]
@@ -673,12 +685,9 @@ mod tests {
         let params = QueryParameters::parse(&uri).unwrap();
         let filters = params.filter.unwrap();
 
-        assert_eq!(filters["age"][0].operator, FilterOperator::GreaterThanOrEqual);
-        assert_eq!(filters["age"][0].value, "18");
-        assert_eq!(filters["age"][1].operator, FilterOperator::LessThanOrEqual);
-        assert_eq!(filters["age"][1].value, "65");
-        assert_eq!(filters["status"][0].operator, FilterOperator::NotEqual);
-        assert_eq!(filters["status"][0].value, "deleted");
+        assert_eq!(filters["age"][0], FilterValue::GreaterThanOrEqual(18));
+        assert_eq!(filters["age"][1], FilterValue::LessThanOrEqual(65));
+        assert_eq!(filters["status"][0], FilterValue::NotEqual("deleted".to_string()));
     }
 
     #[test]
@@ -687,8 +696,7 @@ mod tests {
         let params = QueryParameters::parse(&uri).unwrap();
         let filters = params.filter.unwrap();
 
-        assert_eq!(filters["name"][0].operator, FilterOperator::Like);
-        assert_eq!(filters["name"][0].value, "%john%");
+        assert_eq!(filters["name"][0], FilterValue::Like("%john%".to_string()));
     }
 
     #[test]
