@@ -50,6 +50,12 @@ static FAMILY_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(format!(r"\A(filter|page|fields)\[({ID})]\z").as_str()).unwrap()
 });
 
+/// Matches a possibly nested include parameter in the form `relationship.another.nested`
+static INCLUDE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    use regex_builder::ID;
+    Regex::new(format!(r"\A(?:{ID}\.)*{ID}\z").as_str()).unwrap()
+});
+
 /// Enumerates possible sort directions: ascending and descending
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SortDirection { Ascending, Descending }
@@ -229,7 +235,7 @@ impl QueryParameters {
             self.include = Some(include
                 .split(",")
                 .map(|relationship| {
-                    let relationship = if ID_REGEX.is_match(relationship) {
+                    let relationship = if INCLUDE_REGEX.is_match(relationship) {
                         Ok(relationship.to_string())
                     } else {
                         Err(Error::ParseParameterFailure {
