@@ -437,7 +437,7 @@ mod tests {
     #[test]
     fn test_select_specific_fields() {
         let builder = QueryBuilder::new(&MY_SCHEMA);
-        let parameters = parse_parameters("fields=col1,col2");
+        let parameters = parse_parameters("fields[my_table]=col1,col2");
         let (query, bindings) = builder.query(&parameters).unwrap();
 
         assert_eq!(query, "SELECT col1, col2 FROM my_table");
@@ -509,7 +509,7 @@ mod tests {
         let builder = QueryBuilder::new(&MY_SCHEMA);
         let parameters = parse_parameters(
             "\
-            fields=col1,col2&\
+            fields[my_table]=col1,col2&\
             filter[col1]=eq:value1&\
             sort=-col1&\
             page[number]=1&\
@@ -549,7 +549,7 @@ mod tests {
     #[test]
     fn test_find_with_specific_fields() {
         let builder = QueryBuilder::new(&MY_SCHEMA);
-        let parameters = parse_parameters("fields=col1,col2");
+        let parameters = parse_parameters("fields[my_table]=col1,col2");
         let (query, bindings) = builder.find(1, &parameters).unwrap();
 
         assert_eq!(query, "SELECT col1, col2 FROM my_table WHERE id = ?1");
@@ -590,7 +590,7 @@ mod tests {
         let attributes = Attributes::from([
             ("col1".to_string(), Attribute::Text("value1".to_string())),
         ]);
-        let parameters = parse_parameters("fields=id,col1");
+        let parameters = parse_parameters("fields[my_table]=id,col1");
         let (query, bindings) = builder.insert(attributes, &parameters).unwrap();
 
         assert_eq!(query, "INSERT INTO my_table(col1) VALUES (?1) RETURNING id, col1");
@@ -645,7 +645,7 @@ mod tests {
         let attributes = Attributes::from([
             ("col1".to_string(), Attribute::Text("new_value".to_string())),
         ]);
-        let parameters = parse_parameters("fields=id,col1");
+        let parameters = parse_parameters("fields[my_table]=id,col1");
         let (query, bindings) = builder.update(1, attributes, &parameters).unwrap();
 
         assert_eq!(query, "UPDATE my_table SET col1 = ?1 WHERE id = ?2 RETURNING id, col1");
@@ -772,7 +772,7 @@ mod tests {
         let attributes = Attributes::from([
             ("col1".to_string(), Attribute::Text("value1".to_string())),
         ]);
-        let parameters = parse_parameters("fields=invalid_col");
+        let parameters = parse_parameters("fields[my_table]=invalid_col");
         let result = builder.insert(attributes, &parameters);
 
         assert!(result.is_err());
@@ -784,7 +784,7 @@ mod tests {
         let attributes = Attributes::from([
             ("col1".to_string(), Attribute::Text("new_value".to_string())),
         ]);
-        let parameters = parse_parameters("fields=invalid_col");
+        let parameters = parse_parameters("fields[my_table]=invalid_col");
         let result = builder.update(1, attributes, &parameters);
 
         assert!(result.is_err());
