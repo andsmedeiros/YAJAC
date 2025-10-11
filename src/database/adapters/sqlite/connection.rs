@@ -114,7 +114,9 @@ fn build_bindings(bindings: &Vec<Attribute>) -> Vec<&dyn ToSql> {
 }
 
 impl ConnectionInterface for Connection {
-    fn query(&mut self, query: String, bindings: Vec<Attribute>, table_schema: &TableSchema) -> Result<Vec<Attributes>, Error> {
+    fn query(&mut self, query: String, bindings: Vec<Attribute>, table_schema: &TableSchema)
+        -> Result<Vec<Attributes>, Error>
+    {
         debug!("{}, {:?}", query, bindings);
 
         let bindings = build_bindings(&bindings);
@@ -151,49 +153,69 @@ mod tests {
     fn test_sqlite_conversions() {
         use rusqlite::types::{ToSqlOutput, Value as DatabaseValue};
 
-        todo!("Write adequate tests here!");
-
         let null = Attribute::Null;
-        match null.to_sql().unwrap() {
-            ToSqlOutput::Owned(DatabaseValue::Null) => {},
-            _ => panic!("Expected null database value"),
-        }
+        assert!(
+            matches!(
+                null.to_sql(),
+                Ok(ToSqlOutput::Owned(DatabaseValue::Null))
+            ),
+            "Expected null database value"
+        );
 
         let text = Attribute::Text("test".to_string());
-        match text.to_sql().unwrap() {
-            ToSqlOutput::Owned(DatabaseValue::Text(value)) => assert_eq!(value, "test"),
-            _ => panic!("Expected text database value"),
-        }
+        assert!(
+            matches!(
+                text.to_sql(),
+                Ok(ToSqlOutput::Owned(DatabaseValue::Text(ref value))) if value == "test"
+            ),
+            "Expected text database value"
+        );
 
         let integer = Attribute::Integer(123);
-        match integer.to_sql().unwrap() {
-            ToSqlOutput::Owned(DatabaseValue::Integer(value)) => assert_eq!(value, 123),
-            _ => panic!("Expected integer database value"),
-        }
+        assert!(
+            matches!(
+                integer.to_sql(),
+                Ok(ToSqlOutput::Owned(DatabaseValue::Integer(123)))
+            ),
+            "Expected integer database value"
+        );
 
         let float = Attribute::Float(1.5);
-        match float.to_sql().unwrap() {
-            ToSqlOutput::Owned(DatabaseValue::Real(value)) => assert_eq!(value, 1.5),
-            _ => panic!("Expected real database value"),
-        }
+        assert!(
+            matches!(
+                float.to_sql(),
+                Ok(ToSqlOutput::Owned(DatabaseValue::Real(value))) if value == 1.5
+            ),
+            "Expected real database value"
+        );
 
         let bool_true = Attribute::Boolean(true);
-        match bool_true.to_sql().unwrap() {
-            ToSqlOutput::Owned(DatabaseValue::Integer(value)) => assert_eq!(value, 1),
-            _ => panic!("Expected integer database value for true"),
-        }
+        assert!(
+            matches!(
+                bool_true.to_sql(),
+                Ok(ToSqlOutput::Owned(DatabaseValue::Integer(1)))
+            ),
+            "Expected integer database value for true"
+        );
 
         let bool_false = Attribute::Boolean(false);
-        match bool_false.to_sql().unwrap() {
-            ToSqlOutput::Owned(DatabaseValue::Integer(value)) => assert_eq!(value, 0),
-            _ => panic!("Expected integer database value for false"),
-        }
+        assert!(
+            matches!(
+                bool_false.to_sql(),
+                Ok(ToSqlOutput::Owned(DatabaseValue::Integer(0)))
+            ),
+            "Expected integer database value for false"
+        );
 
         let dt = Utc::now();
         let datetime = Attribute::DateTime(dt);
-        match datetime.to_sql().unwrap() {
-            ToSqlOutput::Owned(DatabaseValue::Text(value)) => assert_eq!(value, dt.to_rfc3339()),
-            _ => panic!("Expected text database value for datetime"),
-        }
+        let expected = dt.to_rfc3339();
+        assert!(
+            matches!(
+                datetime.to_sql(),
+                Ok(ToSqlOutput::Owned(DatabaseValue::Text(ref value))) if value == &expected
+            ),
+            "Expected text database value for datetime"
+        );
     }
 }
