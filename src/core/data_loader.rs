@@ -10,18 +10,17 @@ use std::{
     ptr,
     slice
 };
-use crate::database::query_parameters::IncludeParameters;
 use super::error::Error;
 
-type RecordCache = HashMap<&'static str, HashMap<i32, Record>>;
+type RecordCache<'a> = HashMap<&'a str, HashMap<i32, Record<'a>>>;
 
 struct DataLoader<'a, Adapter: AdapterInterface> {
-    registry: &'a Registry<Adapter>,
-    cache: RecordCache,
+    registry: &'a Registry<'a, Adapter>,
+    cache: RecordCache<'a>,
 }
 
 
-fn collection_schema(collection: &[Record]) -> Result<&'static TableSchema, Error> {
+fn collection_schema<'a>(collection: &'a [Record]) -> Result<&'a TableSchema, Error> {
     let mut collection = collection.iter();
     let first = collection.next()
         .ok_or_else(|| Error::DataLoadingError {
@@ -40,7 +39,7 @@ fn collection_schema(collection: &[Record]) -> Result<&'static TableSchema, Erro
 }
 
 impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
-    pub fn new(registry: &'a Registry<Adapter>) -> Self {
+    pub fn new(registry: &'a Registry<'a, Adapter>) -> Self {
         DataLoader { registry, cache: HashMap::new() }
     }
 

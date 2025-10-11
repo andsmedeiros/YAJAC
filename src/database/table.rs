@@ -7,20 +7,22 @@ use super::{
     record::Record,
     schema::TableSchema,
 };
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
-pub trait Table<Connection : ConnectionInterface, QueryBuilder : QueryBuilderInterface> {
-    fn schema(&self) -> &'static TableSchema;
-    fn connection(&self) -> Result<&mut Connection, Error>;
+pub trait Table<'a, Connection : ConnectionInterface, QueryBuilder : QueryBuilderInterface<'a>> {
+    fn new(table_schema: &'a TableSchema, connection: Arc<Mutex<Connection>>) -> Self;
 
-    fn new(table_schema: &'static TableSchema, connection: Arc<Mutex<Connection>>) -> Self;
+    fn schema(&self) -> &'a TableSchema;
 
-    fn query(&self, parameters: &QueryParameters) -> Result<Vec<Record>, Error> {
+    fn connection(&self) -> Result<MutexGuard<Connection>, Error>;
+
+
+    fn query(&self, parameters: &QueryParameters) -> Result<Vec<Record<'a>>, Error> {
         let (query, bindings) = QueryBuilder::new(self.schema()).query(parameters)?;
         self.run_fetch(query, bindings)
     }
 
-    fn first(&self, parameters: &QueryParameters) -> Result<Option<Record>, Error> {
+    fn first(&self, parameters: &QueryParameters) -> Result<Option<Record<'a>>, Error> {
         self.query(parameters)
             .map(|rows|
                 rows
@@ -29,20 +31,20 @@ pub trait Table<Connection : ConnectionInterface, QueryBuilder : QueryBuilderInt
             )
     }
 
-    fn find(&self, id: i32, parameters: &QueryParameters) -> Result<Record, Error> {
+    fn find(&self, id: i32, parameters: &QueryParameters) -> Result<Record<'a>, Error> {
         let (query, bindings) = QueryBuilder::new(self.schema()).find(id, parameters)?;
 
         self.run_fetch_single(query, bindings)
     }
 
-    fn insert(&self, attributes: Attributes, parameters: &QueryParameters) -> Result<Record, Error> {
+    fn insert(&self, attributes: Attributes, parameters: &QueryParameters) -> Result<Record<'a>, Error> {
         let (query, bindings) = QueryBuilder::new(self.schema())
             .insert(attributes, parameters)?;
 
         self.run_fetch_single(query, bindings)
     }
 
-    fn update(&self, id: i32, attributes: Attributes, parameters: &QueryParameters) -> Result<Record, Error> {
+    fn update(&self, id: i32, attributes: Attributes, parameters: &QueryParameters) -> Result<Record<'a>, Error> {
         let (query, bindings) = QueryBuilder::new(self.schema())
             .update(id, attributes, parameters)?;
 
@@ -54,9 +56,9 @@ pub trait Table<Connection : ConnectionInterface, QueryBuilder : QueryBuilderInt
         self.connection()?.execute(query, bindings)
     }
 
-    fn run_fetch(&self, query: String, bindings: Vec<Attribute>) -> Result<Vec<Record>, Error> {
+    fn run_fetch(&self, query: String, bindings: Vec<Attribute>) -> Result<Vec<Record<'a>>, Error> {
         self.connection()?
-            .query(query, bindings)
+            .query(query, bindings, self.schema())
             .map(|rows|
                 rows
                     .into_iter()
@@ -68,7 +70,7 @@ pub trait Table<Connection : ConnectionInterface, QueryBuilder : QueryBuilderInt
             )
     }
     
-    fn run_fetch_single(&self, query: String, bindings: Vec<Attribute>) -> Result<Record, Error> {
+    fn run_fetch_single(&self, query: String, bindings: Vec<Attribute>) -> Result<Record<'a>, Error> {
         self.run_fetch(query, bindings)?
             .into_iter()
             .next()

@@ -21,8 +21,8 @@ impl ExtractedAttributes {
 
 pub type Bindings = Vec<Attribute>;
 
-pub trait QueryBuilder {
-    fn new(schema: &TableSchema) -> Self;
+pub trait QueryBuilder<'a> {
+    fn new(schema: &'a TableSchema) -> Self;
     fn query(&self, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
     fn find(&self, id: i32, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
     fn insert(&self, attributes: Attributes, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;

@@ -9,19 +9,19 @@ use super::{
 pub mod sqlite;
 
 pub trait Adapter {
-    type Connection : ConnectionInterface;
-    type QueryBuilder : QueryBuilderInterface;
-    type Migrator : MigratorInterface;
-    type Table : TableInterface<Self::Connection, Self::QueryBuilder>;
+    type Connection: ConnectionInterface;
+    type QueryBuilder<'a>: QueryBuilderInterface<'a>;
+    // type Migrator: MigratorInterface;
+    type Table<'a>: TableInterface<'a, Self::Connection, Self::QueryBuilder<'a>>;
 }
 
 #[cfg(feature = "sqlite")]
-pub struct SqliteAdapter<'a>;
+pub struct SqliteAdapter;
 
 #[cfg(feature = "sqlite")]
-impl<'a> Adapter for SqliteAdapter<'a> {
-    type Table = sqlite::Table<'a>;
-    type QueryBuilder = sqlite::QueryBuilder<'a>;
-    type Migrator = sqlite::Migrator<'a>;
+impl Adapter for SqliteAdapter {
+    type Table<'a> = sqlite::Table<'a>;
+    type QueryBuilder<'a> = sqlite::QueryBuilder<'a>;
+    // type Migrator<'a> = sqlite::Migrator<'a>;
     type Connection = rusqlite::Connection;
 }

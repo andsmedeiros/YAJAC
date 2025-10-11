@@ -5,14 +5,14 @@ use super::{
 };
 
 #[derive(Debug, Clone)]
-pub struct Record {
-    pub schema: &'static TableSchema,
+pub struct Record<'a> {
+    pub schema: &'a TableSchema,
     pub attributes: Attributes,
-    pub relationships: Relationships<'static>
+    pub relationships: Relationships<'a>
 }
 
-impl Record {
-    pub fn new(schema: &'static TableSchema) -> Self {
+impl<'a> Record<'a> {
+    pub fn new(schema: &'a TableSchema) -> Self {
         Record {
             schema,
             attributes: Attributes::new(),

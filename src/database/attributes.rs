@@ -1,7 +1,6 @@
 use indexmap::IndexMap;
 use serde::{Serialize, Deserialize};
 use serde_json::Value;
-use std::fmt::Display;
 use super::{
     error::Error,
     schema::{AttributeType, DateTime, TableSchema},
@@ -90,43 +89,9 @@ impl Attribute {
     }
 }
 
-
-#[cfg(feature = "sqlite")]
-impl ToSql for Attribute {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'static>> {
-        match self {
-            Attribute::Null =>
-                Ok(ToSqlOutput::Owned(DatabaseValue::Null)),
-            Attribute::Text(ref value) =>
-                Ok(ToSqlOutput::Owned(DatabaseValue::Text(value.clone()))),
-            Attribute::Integer(value) =>
-                Ok(ToSqlOutput::Owned(DatabaseValue::Integer(value.clone()))),
-            Attribute::Float(value) =>
-                Ok(ToSqlOutput::Owned(DatabaseValue::Real(value.clone()))),
-            Attribute::Boolean(value) =>
-                Ok(ToSqlOutput::Owned(DatabaseValue::Integer(if *value { 1 } else { 0 }))),
-            Attribute::DateTime(value) =>
-                Ok(ToSqlOutput::Owned(DatabaseValue::Text(value.to_rfc3339())))
-        }
-    }
-}
-
 pub type Attributes = IndexMap<String, Attribute>;
 
-fn inconsistent_schema_error<T, U>(schema: &TableSchema, attribute: &str, from: T, to: U)
-    -> Result<Attribute, Error>
-where
-    T: Display,
-    U: Display,
-{
-    Err(Error::InconsistentSchema {
-        schema: schema.name.to_string(),
-        attribute: attribute.to_string(),
-        message: format!("Attribute stored as {from} cannot be converted to {to}", )
-    })
-}
-
-fn date_time_from_millis(millis: i64, attribute: &str) -> Result<DateTime, Error> {
+pub fn date_time_from_millis(millis: i64, attribute: &str) -> Result<DateTime, Error> {
     if let Some(date_time) = DateTime::from_timestamp_millis(millis) {
         Ok(date_time)
     } else {
@@ -138,7 +103,7 @@ fn date_time_from_millis(millis: i64, attribute: &str) -> Result<DateTime, Error
     }
 }
 
-fn date_time_from_iso8601(date_time: &str, attribute: &str) -> Result<DateTime, Error> {
+pub fn date_time_from_rfc3339(date_time: &str, attribute: &str) -> Result<DateTime, Error> {
     if let Ok(date_time) = chrono::DateTime::parse_from_rfc3339(date_time) {
         Ok(date_time.to_utc())
     } else {
@@ -156,7 +121,7 @@ fn attribute_from_value(value: Value, attribute: &str, attribute_type: &Attribut
         Value::String(value) => match attribute_type {
             AttributeType::Text => Ok(Attribute::Text(value)),
             AttributeType::DateTime =>
-                Ok(Attribute::DateTime(date_time_from_iso8601(value.as_str(), attribute)?)),
+                Ok(Attribute::DateTime(date_time_from_rfc3339(value.as_str(), attribute)?)),
             AttributeType::Boolean =>
                 match value.to_lowercase().as_str() {
                     "true" => Ok(Attribute::Boolean(true)),
@@ -298,56 +263,6 @@ mod tests {
         assert!(text.as_datetime().is_err());
         assert!(null.clone().to_string().is_err());
         assert!(null.as_i64().is_err());
-    }
-
-    #[test]
-    #[cfg(feature = "sqlite")]
-    fn test_sqlite_conversions() {
-        use rusqlite::types::{ToSqlOutput, Value as DatabaseValue};
-
-        // Test each type conversion
-        let null = Attribute::Null;
-        match null.to_sql().unwrap() {
-            ToSqlOutput::Owned(DatabaseValue::Null) => {},
-            _ => panic!("Expected null database value"),
-        }
-
-        let text = Attribute::Text("test".to_string());
-        match text.to_sql().unwrap() {
-            ToSqlOutput::Owned(DatabaseValue::Text(value)) => assert_eq!(value, "test"),
-            _ => panic!("Expected text database value"),
-        }
-
-        let integer = Attribute::Integer(123);
-        match integer.to_sql().unwrap() {
-            ToSqlOutput::Owned(DatabaseValue::Integer(value)) => assert_eq!(value, 123),
-            _ => panic!("Expected integer database value"),
-        }
-
-        let float = Attribute::Float(1.5);
-        match float.to_sql().unwrap() {
-            ToSqlOutput::Owned(DatabaseValue::Real(value)) => assert_eq!(value, 1.5),
-            _ => panic!("Expected real database value"),
-        }
-
-        let bool_true = Attribute::Boolean(true);
-        match bool_true.to_sql().unwrap() {
-            ToSqlOutput::Owned(DatabaseValue::Integer(value)) => assert_eq!(value, 1),
-            _ => panic!("Expected integer database value for true"),
-        }
-
-        let bool_false = Attribute::Boolean(false);
-        match bool_false.to_sql().unwrap() {
-            ToSqlOutput::Owned(DatabaseValue::Integer(value)) => assert_eq!(value, 0),
-            _ => panic!("Expected integer database value for false"),
-        }
-
-        let dt = Utc::now();
-        let datetime = Attribute::DateTime(dt);
-        match datetime.to_sql().unwrap() {
-            ToSqlOutput::Owned(DatabaseValue::Text(value)) => assert_eq!(value, dt.to_rfc3339()),
-            _ => panic!("Expected text database value for datetime"),
-        }
     }
 
     #[test]

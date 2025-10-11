@@ -3,19 +3,20 @@ use crate::database::{
     attributes::{Attribute, Attributes},
     error::Error,
     query_builder::QueryBuilder as QueryBuilderInterface,
+    query_parameters::{
+        FieldsParameters,
+        FilterValue,
+        FilterParameters,
+        PageParameters,
+        QueryParameters,
+        SearchParameters,
+        SortDirection,
+        SortParameters,
+        SortingField,
+    },
     schema::{AttributeType, TableSchema},
 };
-use crate::database::query_parameters::{
-    FieldsParameters,
-    FilterOperator,
-    FilterParameters,
-    PageParameters,
-    QueryParameters,
-    SearchParameters,
-    SortDirection,
-    SortParameters,
-    SortingField,
-};
+use std::{any::type_name, slice, str::FromStr};
 
 struct ExtractedAttributes {
     fields: Vec<String>,
@@ -41,14 +42,8 @@ impl<'a> QueryBuilder<'a> {
     fn build_select_clause(&self, fields: &Option<FieldsParameters>, query: &mut Vec<String>)
                            -> Result<(), Error>
     {
-        let fields = if let Some(fields) = fields {
-            self.validate_attributes(fields.iter())?;
-            fields.join(", ")
-        } else {
-            "*".to_string()
-        };
-
-        query.extend(["SELECT".to_string(), fields]);
+        let fields = self.fields_for_model(fields)?;
+        query.extend(["SELECT".to_string(), fields.join(", ")]);
         Ok(())
     }
 
@@ -118,7 +113,7 @@ impl<'a> QueryBuilder<'a> {
     fn build_where_clause(&self, filter: &Option<FilterParameters>, search: &Option<SearchParameters>, query: &mut Vec<String>)
                           -> Result<Bindings, Error>
     {
-        use FilterOperator::*;
+        use FilterValue::*;
 
         if filter.is_none() && search.is_none() {
             return Ok(Vec::new());
@@ -142,64 +137,69 @@ impl<'a> QueryBuilder<'a> {
             self.validate_attributes(filter.keys())?;
 
             for (field, filters) in filter {
+                let column = self.schema
+                    .column(field.as_str())
+                    .expect("Failed to get validated column info. This should not happen!");
+
                 for filter in filters {
-                    let operator = match filter.operator {
-                        Equal => "=",
-                        NotEqual => "!=",
-                        GreaterThan => ">",
-                        GreaterThanOrEqual => ">=",
-                        LessThan => "<",
-                        LessThanOrEqual => "<=",
-                        Like => "LIKE",
-                    };
+                    match filter {
+                        filter @ In(_) | filter @ NotIn(_) => {
+                            let (operator, values) = match filter {
+                                In(values) => ("IN", values),
+                                NotIn(values) => ("NOT IN", values),
+                                _ => unreachable!()
+                            };
 
-                    filter_query.push(format!("{field} {operator} ?{i}"));
-                    let column = self.schema
-                        .column(field.as_str())
-                        .expect("Failed to get validated column info. This should not happen!");
+                            let placeholders = values
+                                .iter()
+                                .enumerate()
+                                .map(|(pos, _)|  format!("?{}", i + pos))
+                                .join(",");
+                            filter_query.push(format!("{field} {operator} ({placeholders})"));
 
-                    let binding = if filter.operator == Like  {
-                        if matches!(column, AttributeType::Text) {
-                            Attribute::Text(format!("%{}%", filter.value))
-                        } else {
-                            return Err(Error::SchemaValidationFailure {
-                                schema: self.schema.name.to_string(),
-                                attribute: field.clone(),
-                                message: "'LIKE' operator cannot be applied to attribute".to_string()
-                            })
+                            bindings.extend(
+                                values
+                                    .iter()
+                                    .map(|value| Self::parse_for_field(column, field.as_str(), value.as_str()))
+                                    .collect::<Result<Vec<Attribute>, Error>>()?
+                            );
+                            i += values.len();
+                        },
+                        Like(value) => {
+                            let binding = if matches!(column, AttributeType::Text) {
+                                Attribute::Text(format!("%{}%", value))
+                            } else {
+                                return Err(Error::SchemaValidationFailure {
+                                    schema: self.schema.name.to_string(),
+                                    attribute: field.clone(),
+                                    message: "'LIKE' operator cannot be applied to attribute".to_string()
+                                });
+                            };
+                            filter_query.push(format!("{field} LIKE ?{i}"));
+                            bindings.push(binding);
+                            i += 1;
+                        },
+                        filter @ _ => {
+                            let parse_value = |value: &String| {
+                                Self::parse_for_field(column, field.as_str(), value.as_str())
+                            };
+
+                            let (operator, binding) = match filter {
+                                Equal(value) => ("=", parse_value(value)?),
+                                NotEqual(value) => ("!=", parse_value(value)?),
+                                GreaterThan(value) => (">", parse_value(value)?),
+                                GreaterThanOrEqual(value) => (">=", parse_value(value)?),
+                                LessThan(value) => ("<", parse_value(value)?),
+                                LessThanOrEqual(value) => ("<=", parse_value(value)?),
+                                _ => unreachable!()
+                            };
+
+                            filter_query.push(format!("{field} {operator} ?{i}"));
+                            bindings.push(binding);
+                            i += 1;
                         }
-                    } else {
-                        match column {
-                            AttributeType::Text =>
-                                Attribute::Text(filter.value.clone()),
-                            AttributeType::Integer =>
-                                Attribute::Integer(
-                                    Self::parse_attribute(field.as_str(), filter.value.as_str())?
-                                ),
-                            AttributeType::Float =>
-                                Attribute::Float(
-                                    Self::parse_attribute(field.as_str(), filter.value.as_str())?
-                                ),
-                            AttributeType::Boolean =>
-                                Attribute::Boolean(
-                                    Self::parse_attribute(field.as_str(), filter.value.as_str())?
-                                ),
-                            AttributeType::DateTime =>
-                                Attribute::DateTime(
-                                    chrono::DateTime::parse_from_rfc3339(filter.value.as_str())
-                                        .map_err(|err| Error::InvalidAttribute {
-                                            attribute: field.to_string(),
-                                            kind: "DateTime".to_string(),
-                                            message: format!("DateTime string '{}' is invalid. {}", filter.value, err)
-                                        })?
-                                        .to_utc()
-                                )
+                    }
 
-                        }
-                    };
-
-                    bindings.push(binding);
-                    i += 1;
                 }
             }
         }
@@ -211,7 +211,7 @@ impl<'a> QueryBuilder<'a> {
     fn build_order_by_clause(&self, sort: &Option<SortParameters>, query: &mut Vec<String>)
                              -> Result<(), Error>
     {
-        if let Some(ref fields) = sort {
+        if let Some(fields) = sort {
             self.validate_attributes(fields.iter().map(|f| &f.field))?;
 
             query.push("ORDER BY".to_string());
@@ -243,15 +243,8 @@ impl<'a> QueryBuilder<'a> {
     fn build_returning_clause(&self, fields: &Option<FieldsParameters>, query: &mut Vec<String>)
                               -> Result<(), Error>
     {
-        let fields = match fields {
-            Some(ref fields) => {
-                self.validate_attributes(fields.iter())?;
-                fields.join(", ")
-            },
-            None => "*".to_string()
-        };
-
-        query.push(format!("RETURNING {}", fields));
+        let fields = self.fields_for_model(fields)?;
+        query.push(format!("RETURNING {}", fields.join(", ")));
         Ok(())
     }
 
@@ -296,9 +289,54 @@ impl<'a> QueryBuilder<'a> {
                 message: "could not parse value".to_string()
             })
     }
+
+    fn parse_for_field(attribute_type: &AttributeType, field: &str, value: &str) -> Result<Attribute, Error> {
+        let attribute = match attribute_type {
+            AttributeType::Text =>
+                Attribute::Text(value.to_string()),
+            AttributeType::Integer =>
+                Attribute::Integer(Self::parse_attribute(field, value)?),
+            AttributeType::Float =>
+                Attribute::Float(Self::parse_attribute(field, value)?),
+            AttributeType::Boolean =>
+                Attribute::Boolean(Self::parse_attribute(field, value)?),
+            AttributeType::DateTime =>
+                Attribute::DateTime(
+                    chrono::DateTime::parse_from_rfc3339(value)
+                        .map_err(|err| Error::InvalidAttribute {
+                            attribute: field.to_string(),
+                            kind: "DateTime".to_string(),
+                            message: format!("DateTime string '{}' is invalid. {}", value, err)
+                        })?
+                        .to_utc()
+                )
+
+        };
+
+        Ok(attribute)
+    }
+
+    fn fields_for_model<'b>(&self, fields: &'b Option<FieldsParameters>) -> Result<Vec<&'b str>, Error> {
+        let fields = if let Some(parameters) = fields &&
+            let Some(fields) = parameters.get(self.schema.name)
+        {
+            self.validate_attributes(fields.iter())?;
+            fields
+                .iter()
+                .map(|field| field.as_str())
+                .collect()
+        } else {
+            slice::from_ref(&"*")
+                .iter()
+                .map(|value| *value)
+                .collect()
+        };
+
+        Ok(fields)
+    }
 }
 
-impl<'a> BuilderInterface for QueryBuilder<'a> {
+impl<'a> QueryBuilderInterface<'a> for QueryBuilder<'a> {
     fn new(schema: &'a TableSchema) -> Self {
         Self { schema }
     }
@@ -355,8 +393,9 @@ impl<'a> BuilderInterface for QueryBuilder<'a> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::sync::LazyLock;
-    use tauri::http::Uri;
+    use crate::http_wrappers::Uri;
 
     fn mock_schema(text_index: bool) -> TableSchema {
         TableSchema {
@@ -387,7 +426,7 @@ mod tests {
 
     #[test]
     fn test_select_all_fields() {
-        let builder = Builder::new(&MY_SCHEMA);
+        let builder = QueryBuilder::new(&MY_SCHEMA);
         let parameters = parse_parameters("");
         let (query, bindings) = builder.query(&parameters).unwrap();
 
@@ -397,7 +436,7 @@ mod tests {
 
     #[test]
     fn test_select_specific_fields() {
-        let builder = Builder::new(&MY_SCHEMA);
+        let builder = QueryBuilder::new(&MY_SCHEMA);
         let parameters = parse_parameters("fields=col1,col2");
         let (query, bindings) = builder.query(&parameters).unwrap();
 
@@ -407,7 +446,7 @@ mod tests {
 
     #[test]
     fn test_filter_single_condition() {
-        let builder = Builder::new(&MY_SCHEMA);
+        let builder = QueryBuilder::new(&MY_SCHEMA);
         let parameters = parse_parameters("filter[col1]=eq:value1");
         let (query, bindings) = builder.query(&parameters).unwrap();
 
@@ -417,7 +456,7 @@ mod tests {
 
     #[test]
     fn test_filter_multiple_conditions() {
-        let builder = Builder::new(&MY_SCHEMA);
+        let builder = QueryBuilder::new(&MY_SCHEMA);
         let parameters = parse_parameters("filter[col1]=eq:value1&filter[col2]=neq:value2");
         let (query, bindings) = builder.query(&parameters).unwrap();
 
@@ -427,7 +466,7 @@ mod tests {
 
     #[test]
     fn test_filter_with_like_operator() {
-        let builder = Builder::new(&MY_SCHEMA);
+        let builder = QueryBuilder::new(&MY_SCHEMA);
         let parameters = parse_parameters("filter[col1]=like:keyword");
         let (query, bindings) = builder.query(&parameters).unwrap();
 
@@ -437,7 +476,7 @@ mod tests {
 
     #[test]
     fn test_sort_single_field() {
-        let builder = Builder::new(&MY_SCHEMA);
+        let builder = QueryBuilder::new(&MY_SCHEMA);
         let parameters = parse_parameters("sort=-col1");
         let (query, bindings) = builder.query(&parameters).unwrap();
 
@@ -447,7 +486,7 @@ mod tests {
 
     #[test]
     fn test_sort_multiple_fields() {
-        let builder = Builder::new(&MY_SCHEMA);
+        let builder = QueryBuilder::new(&MY_SCHEMA);
         let parameters = parse_parameters("sort=-col1,col2");
         let (query, bindings) = builder.query(&parameters).unwrap();
 
@@ -457,7 +496,7 @@ mod tests {
 
     #[test]
     fn test_pagination() {
-        let builder = Builder::new(&MY_SCHEMA);
+        let builder = QueryBuilder::new(&MY_SCHEMA);
         let parameters = parse_parameters("page[number]=2&page[size]=10");
         let (query, bindings) = builder.query(&parameters).unwrap();
 
@@ -467,7 +506,7 @@ mod tests {
 
     #[test]
     fn test_complex_query_with_all_features() {
-        let builder = Builder::new(&MY_SCHEMA);
+        let builder = QueryBuilder::new(&MY_SCHEMA);
         let parameters = parse_parameters(
             "\
             fields=col1,col2&\
@@ -499,7 +538,7 @@ mod tests {
     // Find Tests
     #[test]
     fn test_find_with_all_fields() {
-        let builder = Builder::new(&MY_SCHEMA);
+        let builder = QueryBuilder::new(&MY_SCHEMA);
         let parameters = parse_parameters("");
         let (query, bindings) = builder.find(1, &parameters).unwrap();
 
@@ -509,7 +548,7 @@ mod tests {
 
     #[test]
     fn test_find_with_specific_fields() {
-        let builder = Builder::new(&MY_SCHEMA);
+        let builder = QueryBuilder::new(&MY_SCHEMA);
         let parameters = parse_parameters("fields=col1,col2");
         let (query, bindings) = builder.find(1, &parameters).unwrap();
 
@@ -520,8 +559,8 @@ mod tests {
     // Insert Tests
     #[test]
     fn test_insert_single_field() {
-        let builder = Builder::new(&MY_SCHEMA);
-        let attributes = Record::from([
+        let builder = QueryBuilder::new(&MY_SCHEMA);
+        let attributes = Attributes::from([
             ("col1".to_string(), Attribute::Text("value1".to_string())),
         ]);
         let parameters = parse_parameters("");
@@ -533,8 +572,8 @@ mod tests {
 
     #[test]
     fn test_insert_multiple_fields() {
-        let builder = Builder::new(&MY_SCHEMA);
-        let attributes = Record::from([
+        let builder = QueryBuilder::new(&MY_SCHEMA);
+        let attributes = Attributes::from([
             ("col1".to_string(), Attribute::Text("value1".to_string())),
             ("col2".to_string(), Attribute::Integer(42))
         ]);
@@ -547,8 +586,8 @@ mod tests {
 
     #[test]
     fn test_insert_with_returning_fields() {
-        let builder = Builder::new(&MY_SCHEMA);
-        let attributes = Record::from([
+        let builder = QueryBuilder::new(&MY_SCHEMA);
+        let attributes = Attributes::from([
             ("col1".to_string(), Attribute::Text("value1".to_string())),
         ]);
         let parameters = parse_parameters("fields=id,col1");
@@ -560,8 +599,8 @@ mod tests {
 
     #[test]
     fn test_insert_with_empty_attributes() {
-        let builder = Builder::new(&MY_SCHEMA);
-        let attributes = Record::new();
+        let builder = QueryBuilder::new(&MY_SCHEMA);
+        let attributes = Attributes::new();
         let parameters = parse_parameters("");
         let (query, bindings) = builder.insert(attributes, &parameters).unwrap();
 
@@ -572,8 +611,8 @@ mod tests {
     // Update Tests
     #[test]
     fn test_update_single_field() {
-        let builder = Builder::new(&MY_SCHEMA);
-        let attributes = Record::from([
+        let builder = QueryBuilder::new(&MY_SCHEMA);
+        let attributes = Attributes::from([
             ("col1".to_string(), Attribute::Text("new_value".to_string())),
         ]);
         let parameters = parse_parameters("");
@@ -585,8 +624,8 @@ mod tests {
 
     #[test]
     fn test_update_multiple_fields() {
-        let builder = Builder::new(&MY_SCHEMA);
-        let attributes = Record::from([
+        let builder = QueryBuilder::new(&MY_SCHEMA);
+        let attributes = Attributes::from([
             ("col1".to_string(), Attribute::Text("new_value".to_string())),
             ("col2".to_string(), Attribute::Integer(42))
         ]);
@@ -602,8 +641,8 @@ mod tests {
 
     #[test]
     fn test_update_with_returning_fields() {
-        let builder = Builder::new(&MY_SCHEMA);
-        let attributes = Record::from([
+        let builder = QueryBuilder::new(&MY_SCHEMA);
+        let attributes = Attributes::from([
             ("col1".to_string(), Attribute::Text("new_value".to_string())),
         ]);
         let parameters = parse_parameters("fields=id,col1");
@@ -615,8 +654,8 @@ mod tests {
 
     #[test]
     fn test_update_with_empty_attributes() {
-        let builder = Builder::new(&MY_SCHEMA);
-        let attributes = Record::new();
+        let builder = QueryBuilder::new(&MY_SCHEMA);
+        let attributes = Attributes::new();
         let parameters = parse_parameters("");
         let (query, bindings) = builder.update(1, attributes, &parameters).unwrap();
 
@@ -627,7 +666,7 @@ mod tests {
     // Delete Tests
     #[test]
     fn test_delete() {
-        let builder = Builder::new(&MY_SCHEMA);
+        let builder = QueryBuilder::new(&MY_SCHEMA);
         let (query, bindings) = builder.delete(1);
 
         assert_eq!(query, "DELETE FROM my_table WHERE id = ?1");
@@ -660,7 +699,7 @@ mod tests {
     // Additional Tests for Untested Functionality
     #[test]
     fn test_filter_with_invalid_attribute() {
-        let builder = Builder::new(&MY_SCHEMA);
+        let builder = QueryBuilder::new(&MY_SCHEMA);
         let parameters = parse_parameters("filter[invalid_col]=eq:value1");
         let result = builder.query(&parameters);
 
@@ -669,8 +708,8 @@ mod tests {
 
     #[test]
     fn test_insert_with_invalid_attribute() {
-        let builder = Builder::new(&MY_SCHEMA);
-        let attributes = Record::from([
+        let builder = QueryBuilder::new(&MY_SCHEMA);
+        let attributes = Attributes::from([
             ("invalid_col".to_string(), Attribute::Text("value1".to_string())),
         ]);
         let parameters = parse_parameters("");
@@ -681,8 +720,8 @@ mod tests {
 
     #[test]
     fn test_update_with_invalid_attribute() {
-        let builder = Builder::new(&MY_SCHEMA);
-        let attributes = Record::from([
+        let builder = QueryBuilder::new(&MY_SCHEMA);
+        let attributes = Attributes::from([
             ("invalid_col".to_string(), Attribute::Text("new_value".to_string())),
         ]);
         let parameters = parse_parameters("");
@@ -693,7 +732,7 @@ mod tests {
 
     #[test]
     fn test_filter_with_like_operator_on_non_text_attribute() {
-        let builder = Builder::new(&MY_SCHEMA);
+        let builder = QueryBuilder::new(&MY_SCHEMA);
         let parameters = parse_parameters("filter[id]=like:1");
         let result = builder.query(&parameters);
 
@@ -702,7 +741,7 @@ mod tests {
 
     #[test]
     fn test_filter_with_invalid_value_for_attribute_type() {
-        let builder = Builder::new(&MY_SCHEMA);
+        let builder = QueryBuilder::new(&MY_SCHEMA);
         let parameters = parse_parameters("filter[id]=eq:not_a_number");
         let result = builder.query(&parameters);
 
@@ -711,7 +750,7 @@ mod tests {
 
     #[test]
     fn test_filter_with_invalid_date_time_value() {
-        let builder = Builder::new(&MY_SCHEMA);
+        let builder = QueryBuilder::new(&MY_SCHEMA);
         let parameters = parse_parameters("filter[col3]=eq:invalid_date");
         let result = builder.query(&parameters);
 
@@ -720,7 +759,7 @@ mod tests {
 
     #[test]
     fn test_sort_with_invalid_attribute() {
-        let builder = Builder::new(&MY_SCHEMA);
+        let builder = QueryBuilder::new(&MY_SCHEMA);
         let parameters = parse_parameters("sort=-invalid_col");
         let result = builder.query(&parameters);
 
@@ -729,8 +768,8 @@ mod tests {
 
     #[test]
     fn test_insert_with_invalid_returning_fields() {
-        let builder = Builder::new(&MY_SCHEMA);
-        let attributes = Record::from([
+        let builder = QueryBuilder::new(&MY_SCHEMA);
+        let attributes = Attributes::from([
             ("col1".to_string(), Attribute::Text("value1".to_string())),
         ]);
         let parameters = parse_parameters("fields=invalid_col");
@@ -741,8 +780,8 @@ mod tests {
 
     #[test]
     fn test_update_with_invalid_returning_fields() {
-        let builder = Builder::new(&MY_SCHEMA);
-        let attributes = Record::from([
+        let builder = QueryBuilder::new(&MY_SCHEMA);
+        let attributes = Attributes::from([
             ("col1".to_string(), Attribute::Text("new_value".to_string())),
         ]);
         let parameters = parse_parameters("fields=invalid_col");
@@ -753,7 +792,7 @@ mod tests {
 
     #[test]
     fn test_search_with_single_term() {
-        let builder = Builder::new(&MY_SCHEMA);
+        let builder = QueryBuilder::new(&MY_SCHEMA);
         let parameters = parse_parameters("search=a-value-to-search");
 
         let (query, bindings) = builder.query(&parameters).unwrap();
@@ -771,7 +810,7 @@ mod tests {
 
     #[test]
     fn test_search_with_multiple_terms() {
-        let builder = Builder::new(&MY_SCHEMA);
+        let builder = QueryBuilder::new(&MY_SCHEMA);
         let parameters = parse_parameters("search=a-value,another-value");
 
         let (query, bindings) = builder.query(&parameters).unwrap();
@@ -792,7 +831,7 @@ mod tests {
 
     #[test]
     fn test_search_on_table_without_text_index() {
-        let builder = Builder::new(&MY_SCHEMA_NO_FTS);
+        let builder = QueryBuilder::new(&MY_SCHEMA_NO_FTS);
         let parameters = parse_parameters("search=a-value-to-search");
 
         let result = builder.query(&parameters);

@@ -4,8 +4,8 @@ use std::cmp::Ordering;
 pub struct Migration {
     pub version: usize,
     pub name: String,
-    pub(super) up: String,
-    pub(super) down: String,
+    pub(crate) up: String,
+    pub(crate) down: String,
 }
 
 impl PartialOrd for Migration {

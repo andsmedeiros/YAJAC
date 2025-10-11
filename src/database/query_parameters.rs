@@ -73,10 +73,10 @@ pub struct SortingField {
 pub enum FilterValue {
     Equal(String),
     NotEqual(String),
-    GreaterThan(i32),
-    GreaterThanOrEqual(i32),
-    LessThan(i32),
-    LessThanOrEqual(i32),
+    GreaterThan(String),
+    GreaterThanOrEqual(String),
+    LessThan(String),
+    LessThanOrEqual(String),
     Like(String),
     In(Vec<String>),
     NotIn(Vec<String>),
@@ -180,14 +180,7 @@ impl QueryParameters {
             .split(",")
             .map(|entry| {
                 let result = FILTER_REGEX.captures(entry).map(|c| c.extract());
-                
-                let parse_i32 = |operator: &str, value: &str| {
-                    value.parse::<i32>().map_err(|_| Error::ParseParameterFailure {
-                        parameter: format!("filter[{field}]"),
-                        message: format!("Invalid filter value for operator '{}': '{}'", operator, value)
-                    })
-                };
-                
+
                 let decode_string = |value: &str| {
                     decode(value)
                         .map_err(|_| ParseParameterFailure {
@@ -208,10 +201,10 @@ impl QueryParameters {
                     let filter_value = match operator {
                         "eq" => Equal(decode_string(value)?),
                         "neq" => NotEqual(decode_string(value)?),
-                        "gt" => GreaterThan(parse_i32(operator, value)?),
-                        "gte" => GreaterThanOrEqual(parse_i32(operator, value)?),
-                        "lt" => LessThan(parse_i32(operator, value)?),
-                        "lte" => LessThanOrEqual(parse_i32(operator, value)?),
+                        "gt" => GreaterThan(decode_string(value)?),
+                        "gte" => GreaterThanOrEqual(decode_string(value)?),
+                        "lt" => LessThan(decode_string(value)?),
+                        "lte" => LessThanOrEqual(decode_string(value)?),
                         "like" => Like(decode_string(value)?),
                         "in" => In(parse_string_list(value)?),
                         "nin" => NotIn(parse_string_list(value)?),
@@ -448,7 +441,7 @@ mod tests {
 
         // Filter check
         let filters = params.filter.unwrap();
-        assert_eq!(filters["col1"][0], FilterValue::GreaterThan(10));
+        assert_eq!(filters["col1"][0], FilterValue::GreaterThan("10".to_string()));
 
         // Pagination check
         assert_eq!(params.page, Some(PageParameters { number: 3, size: 15 }));
@@ -492,7 +485,7 @@ mod tests {
 
         assert_eq!(filters["col1"].len(), 2);
         assert_eq!(filters["col1"][0], FilterValue::Equal("value1".to_string()));
-        assert_eq!(filters["col1"][1], FilterValue::GreaterThan(-20));
+        assert_eq!(filters["col1"][1], FilterValue::GreaterThan("-20".to_string()));
     }
 
     #[test]
@@ -685,8 +678,8 @@ mod tests {
         let params = QueryParameters::parse(&uri).unwrap();
         let filters = params.filter.unwrap();
 
-        assert_eq!(filters["age"][0], FilterValue::GreaterThanOrEqual(18));
-        assert_eq!(filters["age"][1], FilterValue::LessThanOrEqual(65));
+        assert_eq!(filters["age"][0], FilterValue::GreaterThanOrEqual("18".to_string()));
+        assert_eq!(filters["age"][1], FilterValue::LessThanOrEqual("65".to_string()));
         assert_eq!(filters["status"][0], FilterValue::NotEqual("deleted".to_string()));
     }
 

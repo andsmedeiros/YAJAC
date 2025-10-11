@@ -316,7 +316,7 @@ mod tests {
     #[test]
     fn test_empty_database_reports_version_zero() -> Result<(), Box<dyn StdError>> {
         let conn = setup_test_db()?;
-        let migrator = Migrator::setup(&conn, test_migrations())?;
+        let migrator = Migrator::try_new(&conn, test_migrations())?;
 
         assert_eq!(migrator.current_migration_version()?, 0);
         Ok(())
@@ -325,7 +325,7 @@ mod tests {
     #[test]
     fn test_migrations_table_creation() -> Result<(), Box<dyn StdError>> {
         let conn = setup_test_db()?;
-        let _ = Migrator::setup(&conn, test_migrations())?;
+        let _ = Migrator::try_new(&conn, test_migrations())?;
 
         let table_info: Vec<(String, String)> = conn
             .prepare("PRAGMA table_info(migrations)")?
@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn test_successful_migration_sequence() -> Result<(), Box<dyn StdError>> {
         let conn = setup_test_db()?;
-        let migrator = Migrator::setup(&conn, test_migrations())?;
+        let migrator = Migrator::try_new(&conn, test_migrations())?;
 
         assert!(migrator.has_pending_migrations()?);
 
@@ -376,7 +376,7 @@ mod tests {
     #[test]
     fn test_successful_rollback_sequence() -> Result<(), Box<dyn StdError>> {
         let conn = setup_test_db()?;
-        let migrator = Migrator::setup(&conn, test_migrations())?;
+        let migrator = Migrator::try_new(&conn, test_migrations())?;
 
         // Apply all migrations
         migrator.migrate_all()?;
@@ -409,7 +409,7 @@ mod tests {
     #[test]
     fn test_invalid_sql_migration() -> Result<(), Box<dyn StdError>> {
         let conn = setup_test_db()?;
-        let migrator = Migrator::setup(&conn, failing_migrations())?;
+        let migrator = Migrator::try_new(&conn, failing_migrations())?;
 
         let result = migrator.migrate_one();
         assert!(result.is_err());
@@ -421,7 +421,7 @@ mod tests {
     #[test]
     fn test_foreign_key_violation() -> Result<(), Box<dyn StdError>> {
         let conn = setup_test_db()?;
-        let migrator = Migrator::setup(&conn, failing_migrations())?;
+        let migrator = Migrator::try_new(&conn, failing_migrations())?;
 
         // First migration should fail
         assert!(migrator.migrate_one().is_err());
@@ -434,7 +434,7 @@ mod tests {
             up: "CREATE TABLE test (id INTEGER PRIMARY KEY);".into(),
             down: "DROP TABLE test;".into(),
         };
-        let migrator = Migrator::setup(&conn, migrations)?;
+        let migrator = Migrator::try_new(&conn, migrations)?;
 
         // Now first migration should succeed
         assert!(migrator.migrate_one().is_ok());
@@ -458,7 +458,7 @@ mod tests {
 
         // Add a failing statement at the end of a migration
         migrations[0].up.push_str("THIS IS INVALID SQL;");
-        let migrator = Migrator::setup(&conn, migrations)?;
+        let migrator = Migrator::try_new(&conn, migrations)?;
 
         // Migration should fail
         assert!(migrator.migrate_one().is_err());
@@ -488,7 +488,7 @@ mod tests {
                   DROP TABLE test1;".into(),
         }];
 
-        let migrator = Migrator::setup(&conn, migrations)?;
+        let migrator = Migrator::try_new(&conn, migrations)?;
         migrator.migrate_one()?;
 
         // Verify all tables were created
@@ -530,7 +530,7 @@ mod tests {
                 test_migrations()
             ].concat();
 
-            let result = Migrator::setup(&conn, migrations);
+            let result = Migrator::try_new(&conn, migrations);
             assert!(result.is_err());
         }
 
@@ -553,7 +553,7 @@ mod tests {
                 test_migrations()
             ].concat();
 
-            let result = Migrator::setup(&conn, migrations);
+            let result = Migrator::try_new(&conn, migrations);
             assert!(result.is_err());
         }
 

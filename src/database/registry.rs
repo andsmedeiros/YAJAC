@@ -9,14 +9,14 @@ use super::{
     schema::{RelatedTable, Relationship, TableSchema},
 };
 
-pub struct Registry<Adapter : AdapterInterface> {
+pub struct Registry<'a, Adapter : AdapterInterface> {
     connection: Arc<Mutex<Adapter::Connection>>,
-    contents: HashMap<&'static str, Adapter::Table>
+    contents: HashMap<&'a str, Adapter::Table<'a>>
 }
 
-impl<Adapter : AdapterInterface> Registry<Adapter> {
-    pub fn try_new(connection: Adapter::Connection, schema: &'static [&'static TableSchema]) -> Result<Self, Error> {
-        let connection = Arc::new(Mutex::new(connection));
+impl<'a, Adapter : AdapterInterface> Registry<'a, Adapter> {
+    pub fn try_new(connection: Adapter::Connection, schema: &'a [&'a TableSchema]) -> Result<Self, Error> {
+        let mut connection = Arc::new(Mutex::new(connection));
         let registry = Self {
             connection: connection.clone(),
             contents: Self::validate_schema(schema)?
@@ -30,7 +30,7 @@ impl<Adapter : AdapterInterface> Registry<Adapter> {
         Ok(registry)
     }
 
-    pub fn table(&self, name: &str) -> Result<&Adapter::Table, Error> {
+    pub fn table(&self, name: &str) -> Result<&Adapter::Table<'a>, Error> {
         self.contents
             .get(name)
             .ok_or_else(|| Error::UnknownSchema {
@@ -39,7 +39,7 @@ impl<Adapter : AdapterInterface> Registry<Adapter> {
             })
     }
 
-    fn validate_schema<'a>(schema: &'a [&'a TableSchema]) -> Result<HashMap<&'a str, &'a TableSchema>, Error> {
+    fn validate_schema(schema: &'a [&'a TableSchema]) -> Result<HashMap<&'a str, &'a TableSchema>, Error> {
         use Relationship::*;
 
         let validated_tables : HashMap<&'a str, &'a TableSchema> = schema
