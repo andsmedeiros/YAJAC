@@ -5,8 +5,10 @@ use super::{
     error::Error,
     schema::{AttributeType, DateTime, TableSchema},
 };
+use std::fmt::{Display};
+use std::hash::{Hash, Hasher};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Attribute {
     Null,
@@ -15,6 +17,36 @@ pub enum Attribute {
     Float(f64),
     Boolean(bool),
     DateTime(DateTime),
+}
+
+impl PartialEq for Attribute {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Attribute::Null, Attribute::Null) => true,
+            (Attribute::Text(a), Attribute::Text(b)) => a == b,
+            (Attribute::Integer(a), Attribute::Integer(b)) => a == b,
+            (Attribute::Float(a), Attribute::Float(b)) =>
+                format!("{:.12}", a) == format!("{:.12}", b),
+            (Attribute::Boolean(a), Attribute::Boolean(b)) => a == b,
+            (Attribute::DateTime(a), Attribute::DateTime(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Attribute {}
+
+impl Hash for Attribute {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Attribute::Null => (),
+            Attribute::Text(value) => value.hash(state),
+            Attribute::Integer(value) => value.hash(state),
+            Attribute::Float(value) => format!("{:.12}", value).hash(state),
+            Attribute::Boolean(value) => value.hash(state),
+            Attribute::DateTime(value) => value.hash(state),
+        }
+    }
 }
 
 impl Attribute {
@@ -85,6 +117,19 @@ impl Attribute {
         match self {
             Attribute::DateTime(d) => Ok(d),
             _ => Err(Error::InvalidAttributeConversion { kind: "DateTime".to_string() }),
+        }
+    }
+}
+
+impl Display for Attribute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Attribute::Null => f.write_str("null"),
+            Attribute::Text(text) => f.write_str(text),
+            Attribute::Integer(int) => f.write_str(int.to_string().as_str()),
+            Attribute::Float(float) => f.write_str(float.to_string().as_str()),
+            Attribute::Boolean(boolean) => f.write_str(boolean.to_string().as_str()),
+            Attribute::DateTime(datetime) => f.write_str(datetime.to_string().as_str()),
         }
     }
 }
