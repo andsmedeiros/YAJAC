@@ -42,7 +42,10 @@ pub enum Error {
     DatabaseFailure {
         message: String
     },
-    RecordNotFound
+    RecordNotFound,
+    DataLoadingError {
+        message: String
+    }
 }
 
 #[cfg(feature = "sqlite")]
@@ -85,6 +88,8 @@ impl Display for Error {
                 write!(f, "Failed to execute query: {}", message),
             RecordNotFound =>
                 write!(f, "Record not found"),
+            DataLoadingError { message } =>
+                write!(f, "Failed to load relationships for primary content: {}", message),
         }
     }
 }
