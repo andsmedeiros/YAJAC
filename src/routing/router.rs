@@ -2,6 +2,10 @@ use std::mem;
 use log::debug;
 use serde_json::{json, Value};
 use http::{Method, Response, StatusCode};
+use crate::database::{
+    adapters::{Adapter as AdapterInterface},
+    registry::Registry,
+};
 use super::{
     default_response,
     Context,
@@ -11,20 +15,20 @@ use super::{
     controller::{ReadOnlyResourceController, ResourceController},
 };
 
-pub trait Handler<'a, Connection: 'a>: Fn(Request, Context<'a, Connection>) -> Result + Sync + Send + 'a {  }
+pub trait Handler<'a, Adapter: AdapterInterface + 'a>: Fn(Request, Context<'a, Adapter>) -> Result + Sync + Send + 'a {  }
 
-impl<'a, T: 'a, Connection: 'a> Handler<'a, Connection> for T
+impl<'a, T: 'a, Adapter: AdapterInterface + 'a> Handler<'a, Adapter> for T
 where
-    T: Fn(Request, Context<Connection>) -> Result + Sync + Send { }
+    T: Fn(Request, Context<Adapter>) -> Result + Sync + Send { }
 
-struct Route<'a, Connection> {
+struct Route<'a, Adapter: AdapterInterface + 'a> {
     method: Method,
     path: Vec<String>,
-    handler: Box<dyn Handler<'a, Connection>>,
+    handler: Box<dyn Handler<'a, Adapter>>,
 }
 
-impl<'a, Connection: 'a> Route<'a, Connection> {
-    fn new(method: Method, path: Vec<String>, handler: impl Handler<'a, Connection>) -> Self {
+impl<'a, Adapter: AdapterInterface + 'a> Route<'a, Adapter> {
+    fn new(method: Method, path: Vec<String>, handler: impl Handler<'a, Adapter>) -> Self {
         Route {
             method,
             path,
@@ -52,12 +56,12 @@ impl<'a, Connection: 'a> Route<'a, Connection> {
     }
 }
 
-pub struct Router<'a, Connection> {
-    routes: Vec<Route<'a, Connection>>
+pub struct Router<'a, Adapter: AdapterInterface> {
+    routes: Vec<Route<'a, Adapter>>,
 }
 
-impl<'a, Connection: 'a> Router<'a, Connection> {
-    pub fn handle(&self, database: &'a mut Connection, request: Request) -> Response<Value> {
+impl<'a, Adapter: AdapterInterface + 'a> Router<'a, Adapter> {
+    pub fn handle(&self, database: &'a Registry<'a, Adapter>, request: Request) -> Response<Value> {
         let uri = request.uri().clone();
         let path_segments: Vec<String> = uri
             .path()
@@ -91,12 +95,12 @@ impl<'a, Connection: 'a> Router<'a, Connection> {
     }
 }
 
-pub struct RouterBuilder<'a, Connection> {
+pub struct RouterBuilder<'a, Adapter: AdapterInterface> {
     prefix: Vec<String>,
-    routes: Vec<Route<'a, Connection>>,
+    routes: Vec<Route<'a, Adapter>>,
 }
 
-impl<'a, Connection: 'a> RouterBuilder<'a, Connection> {
+impl<'a, Adapter: AdapterInterface + 'a> RouterBuilder<'a, Adapter> {
     pub fn new() -> Self {
         RouterBuilder {
             prefix: Vec::new(),
@@ -104,7 +108,7 @@ impl<'a, Connection: 'a> RouterBuilder<'a, Connection> {
         }
     }
 
-    pub fn build(&mut self) -> Router<'a, Connection> {
+    pub fn build(&mut self) -> Router<'a, Adapter> {
         Router { routes: mem::take(&mut self.routes) }
     }
 
@@ -126,27 +130,27 @@ impl<'a, Connection: 'a> RouterBuilder<'a, Connection> {
         self
     }
 
-    pub fn get(&mut self, path_segment: &str, handler: impl Handler<'a, Connection>) -> &mut Self {
+    pub fn get(&mut self, path_segment: &str, handler: impl Handler<'a, Adapter>) -> &mut Self {
         self.add_route(Method::GET, path_segment, handler)
     }
 
-    pub fn post(&mut self, path_segment: &str, handler: impl Handler<'a, Connection>) -> &mut Self {
+    pub fn post(&mut self, path_segment: &str, handler: impl Handler<'a, Adapter>) -> &mut Self {
         self.add_route(Method::POST, path_segment, handler)
     }
 
-    pub fn put(&mut self, path_segment: &str, handler: impl Handler<'a, Connection>) -> &mut Self {
+    pub fn put(&mut self, path_segment: &str, handler: impl Handler<'a, Adapter>) -> &mut Self {
         self.add_route(Method::PUT, path_segment, handler)
     }
 
-    pub fn patch(&mut self, path_segment: &str, handler: impl Handler<'a, Connection>) -> &mut Self {
+    pub fn patch(&mut self, path_segment: &str, handler: impl Handler<'a, Adapter>) -> &mut Self {
         self.add_route(Method::PATCH, path_segment, handler)
     }
 
-    pub fn delete(&mut self, path_segment: &str, handler: impl Handler<'a, Connection>) -> &mut Self {
+    pub fn delete(&mut self, path_segment: &str, handler: impl Handler<'a, Adapter>) -> &mut Self {
         self.add_route(Method::DELETE, path_segment, handler)
     }
 
-    fn add_route(&mut self, method: Method, path_segments: &str, handler: impl Handler<'a, Connection>) -> &mut Self {
+    fn add_route(&mut self, method: Method, path_segments: &str, handler: impl Handler<'a, Adapter>) -> &mut Self {
         let route_path = [
             self.prefix.clone(),
             path_segments
@@ -162,7 +166,7 @@ impl<'a, Connection: 'a> RouterBuilder<'a, Connection> {
 
     pub fn read_only_resource<T>(&mut self, scope: &str) -> &mut Self
     where
-        T: ReadOnlyResourceController<Connection> + 'a
+        T: ReadOnlyResourceController<Adapter> + 'a
     {
         self.scope(scope, |route| {
             route
@@ -173,7 +177,7 @@ impl<'a, Connection: 'a> RouterBuilder<'a, Connection> {
 
     pub fn resource<T>(&mut self, scope: &str) -> &mut Self
     where
-        T: ResourceController<Connection> + 'a
+        T: ResourceController<Adapter> + 'a
     {
         self.scope(scope, |route| {
             route

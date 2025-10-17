@@ -1,5 +1,9 @@
 use crate::{
-    database::QueryParameters,
+    database::{
+        adapters::Adapter as AdapterInterface,
+        query_parameters::QueryParameters,
+        registry::Registry,
+    },
     http_wrappers::Uri,
     routing::RouteParameters,
 };
@@ -11,16 +15,15 @@ pub struct Parameters {
     pub query: QueryParameters,
 }
 
-#[derive(Debug)]
-pub struct Context<'a, Connection> {
-    pub database: &'a mut Connection,
+pub struct Context<'a, Adapter: AdapterInterface> {
+    pub database: &'a Registry<'a, Adapter>,
     pub uri: Uri,
     pub parameters: Parameters,
 }
 
-impl<'a, Connection> Context<'a, Connection> {
+impl<'a, Adapter: AdapterInterface> Context<'a, Adapter> {
     pub fn try_new(
-        database: &'a mut Connection,
+        database: &'a Registry<'a, Adapter>,
         uri: Uri,
         route_parameters: RouteParameters,
     )
