@@ -1,10 +1,11 @@
 use crate::{
+    core::error::Error as CoreError,
     database::error::Error as DatabaseError,
     http_wrappers::StatusCode,
     json_api::error::Source,
 };
 use http::Error as HttpError;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Error as JsonError, Value};
 use std::{
     error::Error as StdError,
@@ -176,8 +177,21 @@ impl From<DatabaseError> for Error {
             error => Error::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "InternalServerError",
-                &error.to_string()
+                error.to_string()
             )
+        }
+    }
+}
+
+impl From<CoreError> for Error {
+    fn from(error: CoreError) -> Self {
+        match error {
+            CoreError::DocumentSerialisationError { ..} =>
+                Error::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DocumentSerialisationError",
+                    error.to_string()
+                ),
         }
     }
 }
