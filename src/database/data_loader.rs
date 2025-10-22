@@ -15,7 +15,7 @@ use std::{
     slice
 };
 
-type RecordCache<'a> = HashMap<&'a str, HashMap<i32, Record<'a>>>;
+type RecordCache<'a> = HashMap<(&'a str, i32), Record<'a>>;
 
 pub struct DataLoader<'a, Adapter: AdapterInterface> {
     registry: &'a Registry<'a, Adapter>,
@@ -99,14 +99,14 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
         DataLoader { registry, cache: HashMap::new() }
     }
 
-    pub fn load_for_record<'b>(&mut self, record: &'b mut Record<'a>, query_parameters: &'b QueryParameters)
-                           -> Result<(), Error>
+    pub fn load_for_record<'b>(self, record: &'b mut Record<'a>, query_parameters: &'b QueryParameters)
+                           -> Result<Vec<Record<'a>>, Error>
     {
         self.load_for_collection(slice::from_mut(record), query_parameters)
     }
 
-    pub fn load_for_collection<'b>(&mut self, collection: &'b mut [Record<'a>], query_parameters: &'b QueryParameters)
-        -> Result<(), Error>
+    pub fn load_for_collection<'b>(mut self, collection: &'b mut [Record<'a>], query_parameters: &'b QueryParameters)
+        -> Result<Vec<Record<'a>>, Error>
     {
         if let Some(relationship_paths) = &query_parameters.include {
             for relationship_path in relationship_paths {
@@ -114,8 +114,9 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
             }
         }
 
-        Ok(())
+        Ok(self.cache.into_values().collect())
     }
+    
     fn load_relationship<'b>(&mut self, relationship_path: &'b str, collection: &'b mut [Record<'a>], fields: &'b Option<FieldsParameters>)
                          -> Result<(), Error>
     {
@@ -159,9 +160,7 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
 
         for mut record in related_collection {
             let id = record_id(&record)?;
-            match self.cache
-                .entry(record.schema.name).or_insert_with(|| HashMap::new())
-                .entry(id)
+            match self.cache.entry((record.schema.name, id))
             {
                 Entry::Occupied(mut existing) => {
                     merge_into(&mut record, existing.get_mut())?;
