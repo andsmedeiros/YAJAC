@@ -1,133 +1,115 @@
 use crate::{
-    database::QueryParameters,
+    database::{
+        record::Record,
+        relationships::Relationship as DatabaseRelationship,
+        schema::Relationship as SchemaRelationship,
+    },
     core::{
-        Cache,
-        Context,
+        error::Error,
     },
     http_wrappers::Uri,
     json_api::{
         document::{self, ImplementationInfo, Document},
-        error::Error,
+        error::Error as JsonApiError,
         identifier::Identifier,
         links::Link,
         primary_content::PrimaryContent,
         relationship::{self, Linkage, Relationship},
         resource::{self, Resource}
     },
-    resourceful::{
-        Relationships,
-        Resourceful,
-        related_data::{RelatedData,
-                       RelatedCollection,
-                       RelatedRecord,
-        }
-    },
     routing::UriGenerator
 };
 use serde_json::Value;
 use std::collections::HashMap;
 
-pub enum  Content<'a, R: Resourceful> {
-    Resource(&'a R),
-    Collection(Vec<&'a R>),
-    Errors(Vec<Error>)
+pub enum Content<'a> {
+    Resource(&'a Record<'a>),
+    Collection(Vec<&'a Record<'a>>),
+    Errors(Vec<JsonApiError>)
 }
 
-impl<'a, R: Resourceful> From<&'a R> for Content<'a, R> {
-    fn from(resourceful: &'a R) -> Self {
+impl<'a> From<&'a Record<'a>> for Content<'a> {
+    fn from(resourceful: &'a Record) -> Self {
         Content::Resource(resourceful)
     }
 }
 
-impl<'a, R: Resourceful> From<&'a Vec<R>> for Content<'a, R> {
-    fn from(collection: &'a Vec<R>) -> Self {
+impl<'a> From<&'a Vec<Record<'a>>> for Content<'a> {
+    fn from(collection: &'a Vec<Record<'a>>) -> Self {
         Content::Collection(collection.iter().collect())
     }
 }
 
-impl<'a, R: Resourceful> From<Vec<Error>> for Content<'a, R> {
-    fn from(errors: Vec<Error>) -> Self {
+impl<'a> From<Vec<JsonApiError>> for Content<'a> {
+    fn from(errors: Vec<JsonApiError>) -> Self {
         Content::Errors(errors)
     }
 }
 
-pub(crate) fn link_related_data(related_data: RelatedData, cache: &mut Cache) -> Linkage {
-    match related_data {
-        RelatedData::None => 
-            Linkage::Empty,
+pub fn make_resource(record: &Record, uri_generator: &dyn UriGenerator) -> Result<Resource, Error> {
+    let identifier = record.identifier()?;
 
-        RelatedData::One(record) =>
-            match record {
-                RelatedRecord::Unloaded(id) => Linkage::ToOne(id),
-                RelatedRecord::Loaded(record) => {
-                    cache.register(record).into()
-                }
-            },
-            
-        RelatedData::Many(collection) =>
-            match collection {
-                RelatedCollection::Unloaded(ids) => Linkage::ToMany(ids),
-                RelatedCollection::Loaded(records) => 
-                    records
+    let attributes = record.attributes
+        .iter()
+        .map(|(key, value)| (key.clone(), Value::from(value.clone())))
+        .collect();
+
+    let relationships = record.relationships
+        .iter()
+        .map(|(relationship, value)| -> Result<_, Error> {
+            let descriptor = record.schema.relationship(&relationship)
+                .ok_or_else(|| Error::DocumentSerialisationError {
+                    message: format!("Failed to describe relationship '{}' on model '{}'", relationship, record.kind())
+                })?;
+
+            let linkage = match (descriptor, value) {
+                (SchemaRelationship::BelongsTo(def), DatabaseRelationship::BelongsTo(id)) |
+                (SchemaRelationship::HasOne(def), DatabaseRelationship::HasOne(id)) =>
+                    Linkage::ToOne(Identifier::Existing {
+                        kind: def.table.to_string(),
+                        id: id.to_string()
+                    }),
+                (SchemaRelationship::HasMany(def), DatabaseRelationship::HasMany(ids)) =>
+                    Linkage::ToMany(ids
                         .into_iter()
-                        .map(|model| cache.register(model))
-                        .collect::<Vec<_>>()
-                        .into()
-            }
-    }
-}
-
-pub(crate) fn link_relationships<G: UriGenerator>(
-    identifier: Identifier,
-    relationships: Relationships,
-    context: &mut Context<G>
-)
-    -> HashMap<String, Relationship>
-{
-    relationships
-        .into_iter()
-        .map(|(relationship_name, related_data)| {
-            let linkage = link_related_data(related_data, context.cache);
-            let this = context.uri_generator
-                .uri_for_relationship(&identifier, relationship_name.as_str());
-            let related = context.uri_generator
-                .uri_for_related(&identifier, relationship_name.as_str());
-
-            let relationship = Relationship {
-                links: relationship::Links {
-                    this: this.into(),
-                    related: related.into()
-                }.into(),
-                data: Some(linkage),
-                meta: None
+                        .map(|id| Identifier::Existing {
+                            kind: def.table.to_string(),
+                            id: id.to_string()
+                        })
+                        .collect()
+                    ),
+                _ => Err(Error::DocumentSerialisationError {
+                    message: format!(
+                        "Relationship '{}' with value '{:?}' does not match schema definition of '{:?}'",
+                        relationship, value, descriptor
+                    )
+                })?
             };
 
-            (relationship_name, relationship)
+            let links = relationship::Links {
+                this: Some(uri_generator.uri_for_relationship(&identifier, relationship)),
+                related: Some(uri_generator.uri_for_related(&identifier, relationship))
+            };
+
+            Ok((relationship.to_string(), Relationship {
+                data: Some(linkage),
+                links: Some(links),
+                meta: None
+            }))
         })
-        .collect()
-}
+        .collect::<Result<HashMap<_, _>, _>>()?;
 
-pub fn make_resource<G: UriGenerator>(model: &impl Resourceful, context: &mut Context<G>) -> Resource {
-    if context.cache.has(&model.identifier()) {
-        return context.cache.get(&model.identifier()).unwrap().clone();
-    }
-
-    let attributes = model.attributes(&context);
-    let relationships = model.relationships(context);
-    let meta = model.meta(&context);
     let links = resource::Links {
-        this: context.uri_generator.uri_for_resource(&model.identifier())
+        this: uri_generator.uri_for_resource(&identifier),
     };
 
-    Resource {
-        identifier: model.identifier(),
-        attributes,
-        relationships: relationships.map(|r|
-            link_relationships(model.identifier(), r, context)
-        ),
+    Ok(Resource {
+        identifier,
+        attributes: Some(attributes),
+        relationships: Some(relationships),
         links: links.into(),
-        meta
-    }
+        meta: None
+    })
 }
 
 
@@ -148,48 +130,31 @@ fn document_links(uri: &Uri) -> document::Links {
     }
 }
 
-fn included_resources<G: UriGenerator>(context: Context<G>) -> Option<Vec<Value>> {
-    if context.cache.is_empty() {
-        None
-    } else {
-        context.cache.values()
-            .into_iter()
-            .map(|resource|
-                serde_json::to_value(&resource).unwrap()
-            )
-            .collect::<Vec<_>>()
-            .into()
-    }
-}
-
-pub fn to_document<'a, R, G>(content: impl Into<Content<'a, R>>, uri_generator: G, uri: Uri)
-    -> Document
-where
-    R: Resourceful + 'a,
-    G: UriGenerator + 'a
+pub fn to_document<'a, R>(content: impl Into<Content<'a>>, included: Vec<Record>, uri_generator: &dyn UriGenerator, uri: Uri)
+    -> Result<Document, Error>
 {
-    let params = QueryParameters::parse(&uri).unwrap();
-    let mut cache = Cache::new();
-    let mut context = Context::new(&mut cache, params, uri_generator);
-
     let content: PrimaryContent = match content.into() {
-        Content::Resource(model) =>
-             make_resource(model, &mut context).into(),
+        Content::Resource(record) =>
+             make_resource(record, uri_generator)?.into(),
         Content::Collection(collection) => collection
             .into_iter()
-            .map(|model| make_resource(model, &mut context))
-            .collect::<Vec<_>>()
-            .into(),
+            .map(|record| make_resource(record, uri_generator))
+            .collect::<Result<Vec<_>, _>>()?.into(),
         Content::Errors(errors) =>
             errors.into()
         
     };
 
-    Document {
+    let included = included
+        .into_iter()
+        .map(|record| make_resource(&record, uri_generator))
+        .collect::<Result<Vec<_>, Error>>()?;
+
+    Ok(Document {
         content,
         meta: None,
-        jsonapi: implementation_info().into(),
-        links: document_links(&uri).into(),
-        included: included_resources(context),
-    }
+        jsonapi: Some(implementation_info()),
+        links: Some(document_links(&uri)),
+        included: Some(included),
+    })
 }
