@@ -134,6 +134,21 @@ impl Display for Attribute {
     }
 }
 
+impl From<Attribute> for Value {
+    fn from(value: Attribute) -> Self {
+        match value {
+            Attribute::Null => Value::Null,
+            Attribute::Text(value) => Value::String(value),
+            Attribute::Integer(value) => Value::Number(value.into()),
+            Attribute::Float(value) => serde_json::Number::from_f64(value)
+                .and_then(|value| Some(Value::Number(value)))
+                .unwrap_or(Value::Null),
+            Attribute::Boolean(value) => Value::Bool(value),
+            Attribute::DateTime(value) => Value::String(value.to_rfc3339()),
+        }
+    }
+}
+
 pub type Attributes = IndexMap<String, Attribute>;
 
 pub fn date_time_from_millis(millis: i64, attribute: &str) -> Result<DateTime, Error> {
