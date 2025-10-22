@@ -72,6 +72,16 @@ fn materialise_attributes(schema: &TableSchema, row: &Row) -> Result<Attributes,
                         Attribute::Integer(value),
                     AttributeType::DateTime =>
                         Attribute::DateTime(date_time_from_millis(value, name)?),
+                    AttributeType::Boolean =>
+                        Attribute::Boolean(match value {
+                            0 => false,
+                            1 => true,
+                            _ => Err(Error::InconsistentSchema {
+                                schema: schema.name.to_string(),
+                                attribute: name.to_string(),
+                                message: format!("Integer value '{}' cannot be converted to Boolean", value),
+                            })?
+                        }),
                     kind =>
                         inconsistent_schema_error(schema, name, "Integer", kind)?
                 },
