@@ -1,9 +1,9 @@
 use super::{
-    QueryParameters,
     attributes::{Attribute, Attributes},
     connection::Connection as ConnectionInterface,
     error::Error,
     query_builder::QueryBuilder as QueryBuilderInterface,
+    query_parameters::QueryParameters,
     record::Record,
     schema::TableSchema,
 };
