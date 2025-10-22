@@ -130,7 +130,7 @@ fn document_links(uri: &Uri) -> document::Links {
     }
 }
 
-pub fn to_document<'a, R>(content: impl Into<Content<'a>>, included: Vec<Record>, uri_generator: &dyn UriGenerator, uri: Uri)
+pub fn to_document<'a>(content: impl Into<Content<'a>>, included: Vec<Record>, uri_generator: &dyn UriGenerator, uri: Uri)
     -> Result<Document, Error>
 {
     let content: PrimaryContent = match content.into() {
