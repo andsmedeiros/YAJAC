@@ -149,6 +149,12 @@ impl From<Attribute> for Value {
     }
 }
 
+impl From<&Attribute> for Value {
+    fn from(value: &Attribute) -> Self {
+        value.clone().into()
+    }
+}
+
 pub type Attributes = IndexMap<String, Attribute>;
 
 pub fn date_time_from_millis(millis: i64, attribute: &str) -> Result<DateTime, Error> {
