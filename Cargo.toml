@@ -18,5 +18,6 @@ include_dir = { version = "0.7.4", optional = true }
 base64 = { version = "0.22.1", optional = true }
 
 [features]
+default = ["sqlite"]
 sqlite = ["dep:rusqlite", "dep:base64"]
 builtin_migrations = ["dep:include_dir"]
