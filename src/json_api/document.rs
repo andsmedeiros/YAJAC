@@ -4,6 +4,7 @@ use crate::{
     json_api:: {
         links::Link,
         primary_content::PrimaryContent,
+        resource::Resource,
     },
     http_wrappers::Uri,
 };
@@ -51,5 +52,5 @@ pub struct Document {
     pub links: Option<Links>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub included: Option<Vec<Value>>,
+    pub included: Option<Vec<Resource>>,
 }
