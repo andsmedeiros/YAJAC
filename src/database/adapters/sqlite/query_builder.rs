@@ -39,11 +39,9 @@ pub struct QueryBuilder<'a> {
 }
 
 impl<'a> QueryBuilder<'a> {
-    fn build_select_clause(&self, fields: &Option<FieldsParameters>, query: &mut Vec<String>)
-                           -> Result<(), Error>
-    {
-        let fields = self.fields_for_model(fields)?;
-        query.extend(["SELECT".to_string(), fields.join(", ")]);
+    fn build_select_clause(&self, query: &mut Vec<String>) -> Result<(), Error> {
+        let fields = self.fields_for_model().join(", ");
+        query.extend(["SELECT".to_string(), fields]);
         Ok(())
     }
 
@@ -243,8 +241,8 @@ impl<'a> QueryBuilder<'a> {
     fn build_returning_clause(&self, fields: &Option<FieldsParameters>, query: &mut Vec<String>)
                               -> Result<(), Error>
     {
-        let fields = self.fields_for_model(fields)?;
-        query.push(format!("RETURNING {}", fields.join(", ")));
+        let fields = self.fields_for_model().join(", ");
+        query.push(format!("RETURNING {}", fields));
         Ok(())
     }
 
@@ -316,23 +314,8 @@ impl<'a> QueryBuilder<'a> {
         Ok(attribute)
     }
 
-    fn fields_for_model<'b>(&self, fields: &'b Option<FieldsParameters>) -> Result<Vec<&'b str>, Error> {
-        let fields = if let Some(parameters) = fields &&
-            let Some(fields) = parameters.get(self.schema.name)
-        {
-            self.validate_attributes(fields.iter())?;
-            fields
-                .iter()
-                .map(|field| field.as_str())
-                .collect()
-        } else {
-            slice::from_ref(&"*")
-                .iter()
-                .map(|value| *value)
-                .collect()
-        };
-
-        Ok(fields)
+    fn fields_for_model(&self) -> impl Iterator<Item=&str> {
+        self.schema.columns.iter().map(|(name, _)| *name)
     }
 }
 
@@ -344,7 +327,7 @@ impl<'a> QueryBuilderInterface<'a> for QueryBuilder<'a> {
     fn query(&self, parameters: &QueryParameters) -> Result<(String, Bindings), Error> {
         let mut query = Vec::new();
 
-        self.build_select_clause(&parameters.fields, &mut query)?;
+        self.build_select_clause(&mut query)?;
         self.build_from_clause(&mut query);
         self.build_join_clause(&parameters.search, &mut query)?;
         let bindings = self.build_where_clause(&parameters.filter, &parameters.search, &mut query)?;
@@ -357,7 +340,7 @@ impl<'a> QueryBuilderInterface<'a> for QueryBuilder<'a> {
     fn find(&self, id: i32, parameters: &QueryParameters) -> Result<(String, Bindings), Error> {
         let mut query = Vec::new();
 
-        self.build_select_clause(&parameters.fields, &mut query)?;
+        self.build_select_clause(&mut query)?;
         self.build_from_clause(&mut query);
         query.push("WHERE id = ?1".to_string());
 
