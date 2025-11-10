@@ -9,14 +9,13 @@ use super::{
     registry::Registry,
     schema::{RelatedTable, Relationship, TableSchema},
     table::Table,
-    query_parameters::{QueryParameters, FieldsParameters, FilterValue::In},
+    query_parameters::{QueryParameters, FilterValue::In},
 };
 use std::{
-    collections::{HashMap, hash_map::Entry, HashSet},
+    collections::{HashMap, hash_map::Entry},
     ptr,
     slice
 };
-use log::debug;
 use crate::database::data_loader::load_context::{LoadContext, RequestedFields};
 
 type RecordCache<'a> = HashMap<(&'a str, i32), Record<'a>>;
@@ -24,19 +23,6 @@ type RecordCache<'a> = HashMap<(&'a str, i32), Record<'a>>;
 pub struct DataLoader<'a, Adapter: AdapterInterface> {
     registry: &'a Registry<'a, Adapter>,
     cache: RecordCache<'a>,
-}
-
-struct Level<'a> {
-    collection: &'a [Record<'a>],
-
-}
-
-struct RelationshipToLoad<'a> {
-    descriptor: &'a Relationship,
-    relationship: &'a str,
-    related: Option<&'a str>,
-    requested: bool,
-    included: bool
 }
 
 fn collection_schema<'a>(collection: &[Record<'a>]) -> Result<&'a TableSchema, Error> {
@@ -125,10 +111,12 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
     pub fn load_for_collection<'b>(mut self, collection: &'b mut [Record<'a>], query_parameters: &'b QueryParameters)
         -> Result<Vec<Record<'a>>, Error>
     {
-        let schema = collection_schema(collection)?;
-        let context = LoadContext::new(schema, self.registry, query_parameters)?;
+        if !collection.is_empty() {
+            let schema = collection_schema(collection)?;
+            let context = LoadContext::new(schema, self.registry, query_parameters)?;
 
-        self.load_with_context(collection, &context)?;
+            self.load_with_context(collection, &context)?;
+        }
 
         Ok(self.cache.into_values().collect())
     }
@@ -148,11 +136,11 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
     {
         let mut related_collection = match descriptor {
             Relationship::BelongsTo(descriptor) =>
-                Self::load_belongs_to(relationship, descriptor, collection, context)?,
+                self.load_belongs_to(relationship, descriptor, collection, context)?,
             Relationship::HasMany(descriptor) =>
-                Self::load_has_many(relationship, descriptor, collection, context)?,
+                self.load_has_many(relationship, descriptor, collection, context)?,
             Relationship::HasOne(descriptor) =>
-                Self::load_has_one(relationship, descriptor, collection, context)?,
+                self.load_has_one(relationship, descriptor, collection, context)?,
         };
 
         if context.is_included(relationship) {
@@ -176,7 +164,7 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
         Ok(())
     }
 
-    fn load_belongs_to<'b>(relationship: &'a str, descriptor: &'a RelatedTable, collection: &'b mut [Record<'a>], context: &LoadContext<'a, 'b, Adapter>)
+    fn load_belongs_to<'b>(&mut self, relationship: &'a str, descriptor: &'a RelatedTable, collection: &'b mut [Record<'a>], context: &LoadContext<'a, 'b, Adapter>)
                            -> Result<Vec<Record<'a>>, Error>
     {
         let requested = context.is_requested(relationship);
@@ -222,7 +210,7 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
         }
     }
 
-    fn load_has_one<'b>(relationship: &'a str, descriptor: &'a RelatedTable, collection: &'b mut [Record<'a>], context: &LoadContext<'a, 'b, Adapter>)
+    fn load_has_one<'b>(&mut self, relationship: &'a str, descriptor: &'a RelatedTable, collection: &'b mut [Record<'a>], context: &LoadContext<'a, 'b, Adapter>)
                         -> Result<Vec<Record<'a>>, Error>
     {
         let table = context.registry.table(descriptor.table)?;
@@ -243,7 +231,7 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
         Ok(related_collection)
     }
 
-    fn load_has_many<'b>(relationship: &'a str, descriptor: &'a RelatedTable, collection: &'b mut [Record<'a>], context: &LoadContext<'a, 'b, Adapter>)
+    fn load_has_many<'b>(&mut self, relationship: &'a str, descriptor: &'a RelatedTable, collection: &'b mut [Record<'a>], context: &LoadContext<'a, 'b, Adapter>)
                          -> Result<Vec<Record<'a>>, Error>
     {
         let table = context.registry.table(descriptor.table)?;
