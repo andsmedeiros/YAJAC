@@ -16,6 +16,7 @@ log = "0.4.28"
 rusqlite = { version = "0.37.0", features = ["chrono", "column_decltype", "serde_json"], optional = true }
 include_dir = { version = "0.7.4", optional = true }
 base64 = { version = "0.22.1", optional = true }
+colog = "1.4.0"
 
 [features]
 default = ["sqlite"]
