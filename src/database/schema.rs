@@ -1,8 +1,9 @@
 use std::fmt::Display;
+use itertools::Itertools;
 
 pub type DateTime = chrono::DateTime<chrono::Utc>;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AttributeType {
     Text,
     Integer,
@@ -17,7 +18,7 @@ impl Display for AttributeType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RelationshipColumns {
     pub own: &'static str,
     pub related: &'static str,
@@ -29,7 +30,7 @@ impl Display for RelationshipColumns {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RelatedTable {
     pub table: &'static str,
     pub columns: RelationshipColumns,
@@ -41,11 +42,22 @@ impl Display for RelatedTable {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Relationship {
     BelongsTo(RelatedTable),
     HasMany(RelatedTable),
     HasOne(RelatedTable),
+}
+
+impl Relationship {
+    pub fn related_table(&self) -> &RelatedTable {
+        match self {
+            Relationship::BelongsTo(related_table) |
+            Relationship::HasMany(related_table) |
+            Relationship::HasOne(related_table)
+                => related_table,
+        }
+    }
 }
 
 impl Display for Relationship {
@@ -54,7 +66,7 @@ impl Display for Relationship {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TableSchema {
     pub name: &'static str,
     pub columns: &'static[(&'static str, AttributeType)],
@@ -75,6 +87,17 @@ impl TableSchema {
             .iter()
             .find(|relationship| relationship.0 == relationship_name)
             .map(|relationship| &relationship.1)
+    }
+
+    pub fn fields(&self) -> impl Iterator<Item=&'static str> {
+        let columns = self.columns
+            .iter()
+            .map(|(name, _)| *name);
+        let relationships = self.relationships
+            .iter()
+            .map(|(name, _)| *name);
+
+        columns.chain(relationships)
     }
 
     pub fn has_column(&self, column_name: &str) -> bool {
