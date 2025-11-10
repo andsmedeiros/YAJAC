@@ -128,11 +128,19 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
         let schema = collection_schema(collection)?;
         let context = LoadContext::new(schema, self.registry, query_parameters)?;
 
+        self.load_with_context(collection, &context)?;
+
+        Ok(self.cache.into_values().collect())
+    }
+
+    fn load_with_context<'b>(&mut self, collection: &'b mut [Record<'a>], context: &LoadContext<'a, 'b, Adapter>)
+                             -> Result<(), Error>
+    {
         for (relationship, descriptor) in context.relationships_to_load() {
             self.load_relationship(collection, &context, relationship, descriptor)?;
         }
 
-        Ok(self.cache.into_values().collect())
+        Ok(())
     }
 
     fn load_relationship<'b>(&mut self, collection: &'b mut [Record<'a>], context: &LoadContext<'a, 'b, Adapter>, relationship: &'a str, descriptor: &'a Relationship)
@@ -147,13 +155,10 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
                 Self::load_has_one(relationship, descriptor, collection, context)?,
         };
 
-        let derived_context = context.derive(relationship)?;
-
-        for (relationship, descriptor) in derived_context.relationships_to_load() {
-            self.load_relationship(related_collection.as_mut_slice(), &derived_context, relationship, descriptor)?;
-        }
-
         if context.is_included(relationship) {
+            let derived_context = context.derive(relationship)?;
+            self.load_with_context(related_collection.as_mut_slice(), &derived_context)?;
+
             for mut record in related_collection {
                 let id = record_id(&record)?;
                 match self.cache.entry((record.schema.name, id))
@@ -174,31 +179,47 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
     fn load_belongs_to<'b>(relationship: &'a str, descriptor: &'a RelatedTable, collection: &'b mut [Record<'a>], context: &LoadContext<'a, 'b, Adapter>)
                            -> Result<Vec<Record<'a>>, Error>
     {
-        let table = context.registry.table(descriptor.table)?;
-        let own_attributes = collection_attribute(collection, descriptor.columns.own);
-        let related_collection =
-            Self::load_collection_by(table, descriptor.columns.related, own_attributes.as_slice(), &context.fields)?;
-        let index =
-            Self::index_for_unique_attribute(related_collection.as_slice(), descriptor.columns.related, relationship)?;
+        let requested = context.is_requested(relationship);
+        let included = context.is_included(relationship);
+        let joins_on_id = descriptor.columns.related == "id";
 
-        for record in collection {
-            let id = record_id(&record)?;
+        let query_needed = included || (requested && !joins_on_id);
+        if query_needed {
+            let table = context.registry.table(descriptor.table)?;
+            let own_attributes = collection_attribute(collection, descriptor.columns.own);
+            let related_collection =
+                Self::load_collection_by(table, descriptor.columns.related, own_attributes.as_slice(), &context.fields)?;
+            let index =
+                Self::index_for_unique_attribute(related_collection.as_slice(), descriptor.columns.related, relationship)?;
 
-            if let Some(attribute) = record.attributes.get(descriptor.columns.own) {
-                let related_id = index
-                    .get(attribute)
-                    .ok_or_else(|| Error::DataLoadingError {
-                        message: format!(
-                            "Relationship '{}' of model '{}' with id '{}' references record '{}' with attribute '{}' set to '{}', but the record was not found",
-                            relationship, record.schema.name, id,
-                            descriptor.table, descriptor.columns.related, attribute
-                        )
-                    })?;
-                record.relationships.insert(relationship, BelongsTo(*related_id));
+            for record in collection {
+                let id = record_id(&record)?;
+
+                if let Some(attribute) = record.attributes.get(descriptor.columns.own) {
+                    let related_id = index
+                        .get(attribute)
+                        .ok_or_else(|| Error::DataLoadingError {
+                            message: format!(
+                                "Relationship '{}' of model '{}' with id '{}' references record '{}' with attribute '{}' set to '{}', but the record was not found",
+                                relationship, record.schema.name, id,
+                                descriptor.table, descriptor.columns.related, attribute
+                            )
+                        })?;
+                    record.relationships.insert(relationship, BelongsTo(*related_id));
+                }
             }
-        }
 
-        Ok(related_collection)
+            Ok(related_collection)
+        } else {
+            for record in collection {
+                if let Some(id) = record.attributes.get(descriptor.columns.own) {
+                    record.relationships
+                        .insert(relationship, BelongsTo(*id.as_i64()? as i32));
+                }
+            }
+
+            Ok(Vec::new())
+        }
     }
 
     fn load_has_one<'b>(relationship: &'a str, descriptor: &'a RelatedTable, collection: &'b mut [Record<'a>], context: &LoadContext<'a, 'b, Adapter>)
