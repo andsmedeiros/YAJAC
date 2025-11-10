@@ -12,17 +12,20 @@ use super::{
     query_parameters::{QueryParameters, FilterValue::In},
 };
 use std::{
-    collections::{HashMap, hash_map::Entry},
+    collections::{HashMap, hash_map::Entry, HashSet},
     ptr,
     slice
 };
 use crate::database::data_loader::load_context::{LoadContext, RequestedFields};
 
-type RecordCache<'a> = HashMap<(&'a str, i32), Record<'a>>;
+type Identifier<'a> = (&'a str, i32);
+
+type RecordCache<'a> = HashMap<Identifier<'a>, Record<'a>>;
 
 pub struct DataLoader<'a, Adapter: AdapterInterface> {
     registry: &'a Registry<'a, Adapter>,
     cache: RecordCache<'a>,
+    included_identifiers: HashSet<Identifier<'a>>,
 }
 
 fn collection_schema<'a>(collection: &[Record<'a>]) -> Result<&'a TableSchema, Error> {
@@ -99,7 +102,7 @@ fn merge_into(source: &mut Record, destination: &mut Record) -> Result<(), Error
 
 impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
     pub fn new(registry: &'a Registry<'a, Adapter>) -> Self {
-        DataLoader { registry, cache: HashMap::new() }
+        DataLoader { registry, cache: HashMap::new(), included_identifiers: HashSet::new() }
     }
 
     pub fn load_for_record<'b>(self, record: &'b mut Record<'a>, query_parameters: &'b QueryParameters)
@@ -118,7 +121,18 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
             self.load_with_context(collection, &context)?;
         }
 
-        Ok(self.cache.into_values().collect())
+        let included = self.cache
+            .into_iter()
+            .filter_map(|(identifier, record)|
+                if self.included_identifiers.contains(&identifier) {
+                    Some(record)
+                } else {
+                    None
+                }
+            )
+            .collect();
+
+        Ok(included)
     }
 
     fn load_with_context<'b>(&mut self, collection: &'b mut [Record<'a>], context: &LoadContext<'a, 'b, Adapter>)
@@ -147,16 +161,24 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
             let derived_context = context.derive(relationship)?;
             self.load_with_context(related_collection.as_mut_slice(), &derived_context)?;
 
-            for mut record in related_collection {
-                let id = record_id(&record)?;
-                match self.cache.entry((record.schema.name, id))
-                {
-                    Entry::Occupied(mut existing) => {
-                        merge_into(&mut record, existing.get_mut())?;
-                    },
-                    Entry::Vacant(entry) => {
-                        entry.insert(record);
-                    }
+            let related_identifiers = related_collection
+                .iter()
+                .map(|record|
+                    Ok((record.schema.name, record_id(record)?))
+                )
+                .collect::<Result<Vec<_>, Error>>()?;
+            self.included_identifiers.extend(related_identifiers);
+        }
+
+        for mut record in related_collection {
+            let id = record_id(&record)?;
+            match self.cache.entry((record.schema.name, id))
+            {
+                Entry::Occupied(mut existing) => {
+                    merge_into(&mut record, existing.get_mut())?;
+                },
+                Entry::Vacant(entry) => {
+                    entry.insert(record);
                 }
             }
         }
@@ -220,9 +242,11 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
         let index =
             Self::index_for_unique_attribute(related_collection.as_slice(), descriptor.columns.related, relationship)?;
 
-        for record in collection {
-            if let Some(attribute) = record.attributes.get(descriptor.columns.own) {
-                if let Some(related_id) = index.get(attribute) {
+        if context.is_requested(relationship) {
+            for record in collection {
+                if  let Some(attribute) = record.attributes.get(descriptor.columns.own) &&
+                    let Some(related_id) = index.get(attribute)
+                {
                     record.relationships.insert(relationship, HasOne(*related_id));
                 }
             }
@@ -241,9 +265,11 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
         let mut index =
             Self::index_for_repeating_attribute(related_collection.as_slice(), descriptor.columns.related, relationship)?;
 
-        for record in collection {
-            if let Some(attribute) = record.attributes.get(descriptor.columns.own) {
-                if let Some(related_ids) = index.remove(attribute) {
+        if context.is_requested(relationship) {
+            for record in collection {
+                if  let Some(attribute) = record.attributes.get(descriptor.columns.own) &&
+                    let Some(related_ids) = index.remove(attribute)
+                {
                     record.relationships.insert(relationship, HasMany(related_ids));
                 }
             }
