@@ -1,5 +1,8 @@
 mod load_context;
 
+#[cfg(test)]
+mod tests;
+
 use super::{
     adapters::Adapter as AdapterInterface,
     attributes::Attribute,
@@ -22,8 +25,8 @@ type Identifier<'a> = (&'a str, i32);
 
 type RecordCache<'a> = HashMap<Identifier<'a>, Record<'a>>;
 
-pub struct DataLoader<'a, Adapter: AdapterInterface> {
-    registry: &'a Registry<'a, Adapter>,
+pub struct DataLoader<'a, 'b, Adapter: AdapterInterface> {
+    registry: &'b Registry<'a, Adapter>,
     cache: RecordCache<'a>,
     included_identifiers: HashSet<Identifier<'a>>,
 }
@@ -100,18 +103,18 @@ fn merge_into(source: &mut Record, destination: &mut Record) -> Result<(), Error
     Ok(())
 }
 
-impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
-    pub fn new(registry: &'a Registry<'a, Adapter>) -> Self {
+impl<'a: 'b, 'b, Adapter: AdapterInterface> DataLoader<'a, 'b, Adapter> {
+    pub fn new(registry: &'b Registry<'a, Adapter>) -> Self {
         DataLoader { registry, cache: HashMap::new(), included_identifiers: HashSet::new() }
     }
 
-    pub fn load_for_record<'b>(self, record: &'b mut Record<'a>, query_parameters: &'b QueryParameters)
+    pub fn load_for_record(self, record: &'b mut Record<'a>, query_parameters: &'b QueryParameters)
                            -> Result<Vec<Record<'a>>, Error>
     {
         self.load_for_collection(slice::from_mut(record), query_parameters)
     }
 
-    pub fn load_for_collection<'b>(mut self, collection: &'b mut [Record<'a>], query_parameters: &'b QueryParameters)
+    pub fn load_for_collection(mut self, collection: &'b mut [Record<'a>], query_parameters: &'b QueryParameters)
         -> Result<Vec<Record<'a>>, Error>
     {
         if !collection.is_empty() {
@@ -135,7 +138,7 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
         Ok(included)
     }
 
-    fn load_with_context<'b>(&mut self, collection: &'b mut [Record<'a>], context: &LoadContext<'a, 'b, Adapter>)
+    fn load_with_context<'c>(&mut self, collection: &'c mut [Record<'a>], context: &LoadContext<'a, 'c, Adapter>)
                              -> Result<(), Error>
     {
         for (relationship, descriptor) in context.relationships_to_load() {
@@ -145,8 +148,8 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
         Ok(())
     }
 
-    fn load_relationship<'b>(&mut self, collection: &'b mut [Record<'a>], context: &LoadContext<'a, 'b, Adapter>, relationship: &'a str, descriptor: &'a Relationship)
-                         -> Result<(), Error>
+    fn load_relationship<'c>(&mut self, collection: &'c mut [Record<'a>], context: &LoadContext<'a, 'c, Adapter>, relationship: &'a str, descriptor: &'a Relationship)
+                             -> Result<(), Error>
     {
         let mut related_collection = match descriptor {
             Relationship::BelongsTo(descriptor) =>
@@ -186,7 +189,7 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
         Ok(())
     }
 
-    fn load_belongs_to<'b>(&mut self, relationship: &'a str, descriptor: &'a RelatedTable, collection: &'b mut [Record<'a>], context: &LoadContext<'a, 'b, Adapter>)
+    fn load_belongs_to<'c>(&mut self, relationship: &'a str, descriptor: &'a RelatedTable, collection: &'c mut [Record<'a>], context: &LoadContext<'a, 'c, Adapter>)
                            -> Result<Vec<Record<'a>>, Error>
     {
         let requested = context.is_requested(relationship);
@@ -202,29 +205,37 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
             let index =
                 Self::index_for_unique_attribute(related_collection.as_slice(), descriptor.columns.related, relationship)?;
 
-            for record in collection {
-                let id = record_id(&record)?;
+            if requested {
+                for record in collection {
+                    let id = record_id(&record)?;
 
-                if let Some(attribute) = record.attributes.get(descriptor.columns.own) {
-                    let related_id = index
-                        .get(attribute)
-                        .ok_or_else(|| Error::DataLoadingError {
-                            message: format!(
-                                "Relationship '{}' of model '{}' with id '{}' references record '{}' with attribute '{}' set to '{}', but the record was not found",
-                                relationship, record.schema.name, id,
-                                descriptor.table, descriptor.columns.related, attribute
-                            )
-                        })?;
-                    record.relationships.insert(relationship, BelongsTo(*related_id));
+                    if let Some(attribute) = record.attributes.get(descriptor.columns.own)
+                        && !matches!(attribute, Attribute::Null)
+                    {
+                        let related_id = index
+                            .get(attribute)
+                            .ok_or_else(|| Error::DataLoadingError {
+                                message: format!(
+                                    "Relationship '{}' of model '{}' with id '{}' references record '{}' with attribute '{}' set to '{}', but the record was not found",
+                                    relationship, record.schema.name, id,
+                                    descriptor.table, descriptor.columns.related, attribute
+                                )
+                            })?;
+                        record.relationships.insert(relationship, BelongsTo(*related_id));
+                    }
                 }
             }
 
             Ok(related_collection)
         } else {
-            for record in collection {
-                if let Some(id) = record.attributes.get(descriptor.columns.own) {
-                    record.relationships
-                        .insert(relationship, BelongsTo(*id.as_i64()? as i32));
+            if requested {
+                for record in collection {
+                    if let Some(id) = record.attributes.get(descriptor.columns.own) &&
+                        !matches!(id, Attribute::Null)
+                    {
+                        record.relationships
+                            .insert(relationship, BelongsTo(*id.as_i64()? as i32));
+                    }
                 }
             }
 
@@ -232,7 +243,7 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
         }
     }
 
-    fn load_has_one<'b>(&mut self, relationship: &'a str, descriptor: &'a RelatedTable, collection: &'b mut [Record<'a>], context: &LoadContext<'a, 'b, Adapter>)
+    fn load_has_one<'c>(&mut self, relationship: &'a str, descriptor: &'a RelatedTable, collection: &'c mut [Record<'a>], context: &LoadContext<'a, 'c, Adapter>)
                         -> Result<Vec<Record<'a>>, Error>
     {
         let table = context.registry.table(descriptor.table)?;
@@ -255,7 +266,7 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
         Ok(related_collection)
     }
 
-    fn load_has_many<'b>(&mut self, relationship: &'a str, descriptor: &'a RelatedTable, collection: &'b mut [Record<'a>], context: &LoadContext<'a, 'b, Adapter>)
+    fn load_has_many<'c>(&mut self, relationship: &'a str, descriptor: &'a RelatedTable, collection: &'c mut [Record<'a>], context: &LoadContext<'a, 'c, Adapter>)
                          -> Result<Vec<Record<'a>>, Error>
     {
         let table = context.registry.table(descriptor.table)?;
@@ -278,17 +289,17 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
         Ok(related_collection)
     }
 
-    fn load_collection_by<'b>(table: &Adapter::Table<'a>, column: &str, attributes: &[Option<&Attribute>], fields: &RequestedFields)
-        -> Result<Vec<Record<'a>>, Error>
+    fn load_collection_by<'c>(table: &Adapter::Table<'a>, column: &str, attributes: &[Option<&Attribute>], fields: &RequestedFields)
+                              -> Result<Vec<Record<'a>>, Error>
     {
         let attributes = attributes
-        .iter()
-        .filter_map(|entry| match entry {
-            None => None,
-            Some(Attribute::Null) => None,
-            Some(attribute) => Some(attribute.to_string()),
-        })
-        .collect();
+            .iter()
+            .filter_map(|entry| match entry {
+                None => None,
+                Some(Attribute::Null) => None,
+                Some(attribute) => Some(attribute.to_string()),
+            })
+            .collect();
 
         let query_parameters = QueryParameters {
             filter: Some([
@@ -306,8 +317,8 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
         table.query(&query_parameters)
     }
 
-    fn index_for_unique_attribute<'b>(collection: &'b [Record], attribute: &str, relationship: &str)
-                                      -> Result<HashMap<&'b Attribute, i32>, Error>
+    fn index_for_unique_attribute<'c>(collection: &'c [Record], attribute: &str, relationship: &str)
+                                      -> Result<HashMap<&'c Attribute, i32>, Error>
     {
         collection
             .iter()
@@ -327,8 +338,8 @@ impl<'a, Adapter: AdapterInterface> DataLoader<'a, Adapter> {
             .collect()
     }
 
-    fn index_for_repeating_attribute<'b>(collection: &'b [Record], attribute: &str, relationship: &str)
-        -> Result<HashMap<&'b Attribute, Vec<i32>>, Error>
+    fn index_for_repeating_attribute<'c>(collection: &'c [Record], attribute: &str, relationship: &str)
+                                         -> Result<HashMap<&'c Attribute, Vec<i32>>, Error>
     {
         let mut index = HashMap::new();
         for record in collection {
