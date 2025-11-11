@@ -40,13 +40,13 @@ pub type ModelsToLoad<'a> = BTreeMap<&'a str, &'a TableSchema>;
 
 pub struct LoadContext<'a: 'b, 'b, Adapter: AdapterInterface> {
     pub schema: &'a TableSchema,
-    pub registry: &'a Registry<'a, Adapter>,
+    pub registry: &'b Registry<'a, Adapter>,
     pub fields: RequestedFields<'b>,
     pub include: IncludedModels<'a, 'b>,
 }
 
 impl<'a: 'b, 'b, Adapter: AdapterInterface> LoadContext<'a, 'b, Adapter> {
-    pub fn new(schema: &'a TableSchema, registry: &'a Registry<'a, Adapter>, query_parameters: &'b QueryParameters)
+    pub fn new(schema: &'a TableSchema, registry: &'b Registry<'a, Adapter>, query_parameters: &'b QueryParameters)
         -> Result<LoadContext<'a, 'b, Adapter>, Error>
     {
         let (include, models) = extract_models(schema, registry, query_parameters)?;
@@ -121,7 +121,7 @@ impl<'a: 'b, 'b, Adapter: AdapterInterface> LoadContext<'a, 'b, Adapter> {
     }
 }
 
-fn extract_models<'a: 'b, 'b, Adapter: AdapterInterface>(schema: &'a TableSchema, registry: &'a Registry<'a, Adapter>, query_parameters: &'b QueryParameters)
+fn extract_models<'a: 'b, 'b, Adapter: AdapterInterface>(schema: &'a TableSchema, registry: &'b Registry<'a, Adapter>, query_parameters: &'b QueryParameters)
     -> Result<(IncludedModels<'a, 'b>, ModelsToLoad<'a>), Error>
 {
     let mut included = IncludedModels::new();
@@ -132,6 +132,7 @@ fn extract_models<'a: 'b, 'b, Adapter: AdapterInterface>(schema: &'a TableSchema
             let mut relationship;
             let mut rest = Some(relationship_path.as_str());
             let mut scope = &mut included;
+            let mut schema = schema;
 
             while let Some(path) = rest {
                 (relationship, rest) = match path.split_once(".") {
@@ -139,21 +140,23 @@ fn extract_models<'a: 'b, 'b, Adapter: AdapterInterface>(schema: &'a TableSchema
                     None => (path, None)
                 };
 
-                let descriptor = schema.relationship(relationship)
+                let (relationship, descriptor) = schema.relationships
+                    .iter()
+                    .find(|(r, _)| relationship == *r)
                     .ok_or_else(|| Error::SchemaValidationFailure {
                         schema: schema.name.to_string(),
                         attribute: relationship.to_string(),
                         message: "Invalid relationship requested".to_string(),
                     })?;
 
-                let model = registry
+                schema = registry
                     .table(descriptor.related_table().table)?
                     .schema();
 
-                models.insert(model.name, model);
+                models.insert(schema.name, schema);
 
                 scope = &mut scope
-                    .entry(descriptor.related_table().table)
+                    .entry(relationship)
                     .or_insert(IncludeNode {
                         relationship,
                         descriptor,
