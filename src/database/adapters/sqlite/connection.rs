@@ -61,8 +61,7 @@ fn materialise_attributes(schema: &TableSchema, row: &Row) -> Result<Attributes,
             let name = column.name();
             let value = row.get_ref_unwrap(index);
 
-            let attribute_type = schema.column(name)
-                .expect("Column not found in schema");
+            let attribute_type = schema.attribute_type(name)?;
 
             let value = match value {
                 ValueRef::Null =>

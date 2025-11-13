@@ -34,8 +34,8 @@ impl ExtractedAttributes {
 
 pub type Bindings = Vec<Attribute>;
 
-pub struct QueryBuilder<'a> {
-    schema: &'a TableSchema,
+pub struct QueryBuilder<'sch> {
+    schema: &'sch TableSchema<'sch>,
 }
 
 impl<'a> QueryBuilder<'a> {
@@ -135,9 +135,7 @@ impl<'a> QueryBuilder<'a> {
             self.validate_attributes(filter.keys())?;
 
             for (field, filters) in filter {
-                let column = self.schema
-                    .column(field.as_str())
-                    .expect("Failed to get validated column info. This should not happen!");
+                let kind = self.schema.attribute_type(&field)?;
 
                 for filter in filters {
                     match filter {
@@ -158,13 +156,13 @@ impl<'a> QueryBuilder<'a> {
                             bindings.extend(
                                 values
                                     .iter()
-                                    .map(|value| Self::parse_for_field(column, field.as_str(), value.as_str()))
+                                    .map(|value| Self::parse_for_field(kind.clone(), field.as_str(), value.as_str()))
                                     .collect::<Result<Vec<Attribute>, Error>>()?
                             );
                             i += values.len();
                         },
                         Like(value) => {
-                            let binding = if matches!(column, AttributeType::Text) {
+                            let binding = if matches!(kind, AttributeType::Text) {
                                 Attribute::Text(format!("%{}%", value))
                             } else {
                                 return Err(Error::SchemaValidationFailure {
@@ -179,7 +177,7 @@ impl<'a> QueryBuilder<'a> {
                         },
                         filter @ _ => {
                             let parse_value = |value: &String| {
-                                Self::parse_for_field(column, field.as_str(), value.as_str())
+                                Self::parse_for_field(kind, field.as_str(), value.as_str())
                             };
 
                             let (operator, binding) = match filter {
@@ -246,9 +244,7 @@ impl<'a> QueryBuilder<'a> {
         Ok(())
     }
 
-    fn extract_attributes(&self, attributes: Attributes)
-                          -> Result<ExtractedAttributes, Error>
-    {
+    fn extract_attributes(&self, attributes: Attributes) -> Result<ExtractedAttributes, Error> {
         self.validate_attributes(attributes.keys())?;
 
         let mut fields = Vec::<String>::new();
@@ -267,12 +263,16 @@ impl<'a> QueryBuilder<'a> {
         I: Iterator<Item=&'b String>
     {
         if let Some(field) = attributes
-            .find(|field| !self.schema.has_column(&field.as_str()))
+            .find(|field|
+                !self.schema.is_primary_key(&field) &&
+                !self.schema.has_attribute(&field) &&
+                !self.schema.has_foreign_key(&field)
+            )
         {
             Err(Error::SchemaValidationFailure {
                 schema: self.schema.name.to_string(),
                 attribute: field.to_string(),
-                message: "unknown attribute".to_string()
+                message: "Unknown attribute".to_string()
             })
         } else {
             Ok(())
@@ -288,7 +288,7 @@ impl<'a> QueryBuilder<'a> {
             })
     }
 
-    fn parse_for_field(attribute_type: &AttributeType, field: &str, value: &str) -> Result<Attribute, Error> {
+    fn parse_for_field(attribute_type: AttributeType, field: &str, value: &str) -> Result<Attribute, Error> {
         let attribute = match attribute_type {
             AttributeType::Text =>
                 Attribute::Text(value.to_string()),
@@ -315,7 +315,16 @@ impl<'a> QueryBuilder<'a> {
     }
 
     fn fields_for_model(&self) -> impl Iterator<Item=&str> {
-        self.schema.columns.iter().map(|(name, _)| *name)
+        slice::from_ref(&self.schema.primary_key.name)
+            .into_iter()
+            .chain(
+                self.schema.foreign_keys.iter().map(|(name, _)| name)
+            )
+            .chain(
+                self.schema.attributes.iter().map(|(name, _)| name)
+            )
+            .map(|name| *name)
+
     }
 }
 
@@ -378,17 +387,23 @@ impl<'a> QueryBuilderInterface<'a> for QueryBuilder<'a> {
 mod tests {
     use super::*;
     use std::sync::LazyLock;
+    use crate::database::schema::{IdentifierType, PrimaryKey};
     use crate::http_wrappers::Uri;
 
-    fn mock_schema(text_index: bool) -> TableSchema {
+    fn mock_schema(text_index: bool) -> TableSchema<'static> {
         TableSchema {
             name: "my_table",
-            columns: &[
+            primary_key: PrimaryKey {
+                name: "id",
+                kind: IdentifierType::Integer
+            },
+            attributes: &[
                 ("id", AttributeType::Integer),
                 ("col1", AttributeType::Text),
                 ("col2", AttributeType::Text),
                 ("col3", AttributeType::DateTime),
             ],
+            foreign_keys: &[],
             relationships: &[],
             text_index
         }

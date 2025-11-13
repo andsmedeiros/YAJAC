@@ -6,7 +6,6 @@ use crate::database::{
     schema::{AttributeType, TableSchema},
     table::Table as TableInterface,
 };
-use log::debug;
 use base64::{engine::general_purpose::STANDARD as b64, Engine as _};
 use rusqlite::{
     types::{ToSql, ToSqlOutput, Value as DatabaseValue, ValueRef},
@@ -15,17 +14,17 @@ use rusqlite::{
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
-pub struct Table<'a> {
-    pub table_schema: &'a TableSchema,
+pub struct Table<'sch> {
+    pub table_schema: &'sch TableSchema<'sch>,
     pub connection: Arc<Mutex<Connection>>,
 }
 
-impl<'a> TableInterface<'a, Connection, QueryBuilder<'a>> for Table<'a> {
-    fn new(table_schema: &'a TableSchema, connection: Arc<Mutex<Connection>>) -> Self {
+impl<'sch> TableInterface<'sch, Connection, QueryBuilder<'sch>> for Table<'sch> {
+    fn new(table_schema: &'sch TableSchema, connection: Arc<Mutex<Connection>>) -> Self {
         Self { table_schema, connection }
     }
 
-    fn schema(&self) -> &'a TableSchema {
+    fn schema(&self) -> &'sch TableSchema<'sch> {
         self.table_schema
     }
 
@@ -46,6 +45,7 @@ mod tests {
     };
     use rusqlite::Connection;
     use std::error::Error as StdError;
+    use crate::database::schema::{IdentifierType, PrimaryKey};
     use crate::http_wrappers::Uri;
 
     fn mock_params(query: &str) -> Result<QueryParameters, Box<dyn StdError>> {
@@ -53,22 +53,26 @@ mod tests {
         Ok(QueryParameters::parse(&uri)?)
     }
 
-    struct Context {
+    struct Context<'sch> {
         connection: Arc<Mutex<Connection>>,
-        schema: TableSchema,
+        schema: TableSchema<'sch>,
     }
 
-    impl Context {
+    impl<'sch> Context<'sch> {
         pub(super) fn new() -> Self {
             let connection = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
             let schema = TableSchema {
                 name: "my_table",
-                columns: &[
-                    ("id", AttributeType::Integer),
+                primary_key: PrimaryKey {
+                    name: "id",
+                    kind: IdentifierType::Integer
+                },
+                attributes: &[
                     ("col1", AttributeType::Text),
                     ("col2", AttributeType::Text),
                     ("col3", AttributeType::Integer),
                 ],
+                foreign_keys: &[],
                 relationships: &[],
                 text_index: true
             };

@@ -1,10 +1,11 @@
 use std::collections::HashMap;
+use super::attributes::Identifier;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Relationship {
-    BelongsTo(i32),
-    HasOne(i32),
-    HasMany(Vec<i32>),
+    BelongsTo(Identifier),
+    HasOne(Identifier),
+    HasMany(Vec<Identifier>),
 }
 
 pub type Relationships<'a> = HashMap<&'a str, Relationship>;

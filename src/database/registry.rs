@@ -6,7 +6,7 @@ use super::{
     adapters::Adapter as AdapterInterface,
     error::Error,
     table::Table,
-    schema::{RelatedTable, Relationship, TableSchema},
+    schema::{RelatedResource, Relationship, TableSchema},
 };
 
 pub struct Registry<'a, Adapter : AdapterInterface> {
@@ -14,8 +14,8 @@ pub struct Registry<'a, Adapter : AdapterInterface> {
     contents: HashMap<&'a str, Adapter::Table<'a>>
 }
 
-impl<'a, Adapter : AdapterInterface> Registry<'a, Adapter> {
-    pub fn try_new(connection: Adapter::Connection, schema: &'a [&'a TableSchema]) -> Result<Self, Error> {
+impl<'sch, Adapter : AdapterInterface> Registry<'sch, Adapter> {
+    pub fn try_new(connection: Adapter::Connection, schema: &'sch [&'sch TableSchema]) -> Result<Self, Error> {
         let mut connection = Arc::new(Mutex::new(connection));
         let registry = Self {
             connection: connection.clone(),
@@ -30,7 +30,7 @@ impl<'a, Adapter : AdapterInterface> Registry<'a, Adapter> {
         Ok(registry)
     }
 
-    pub fn table(&self, name: &str) -> Result<&Adapter::Table<'a>, Error> {
+    pub fn table(&self, name: &str) -> Result<&Adapter::Table<'sch>, Error> {
         self.contents
             .get(name)
             .ok_or_else(|| Error::UnknownSchema {
@@ -39,65 +39,92 @@ impl<'a, Adapter : AdapterInterface> Registry<'a, Adapter> {
             })
     }
 
-    fn validate_schema(schema: &'a [&'a TableSchema]) -> Result<HashMap<&'a str, &'a TableSchema>, Error> {
+    fn validate_schema(registry_schema: &'sch [&'sch TableSchema]) -> Result<HashMap<&'sch str, &'sch TableSchema<'sch>>, Error> {
         use Relationship::*;
 
-        let validated_tables : HashMap<&'a str, &'a TableSchema> = schema
+        let schema_registry: HashMap<&'sch str, &'sch TableSchema> = registry_schema
             .iter()
             .map(|schema| (schema.name, *schema))
             .collect();
 
-        for table_schema in schema {
-            for (relationship_name, relationship) in table_schema.relationships {
-                let (related_table_name, relationship_columns) = match relationship {
-                    HasOne(RelatedTable { table, columns }) |
-                    HasMany(RelatedTable { table, columns }) |
-                    BelongsTo(RelatedTable { table, columns })
-                        => (table, columns)
-                };
+        for schema in registry_schema {
+            for (relationship, descriptor) in schema.relationships {
+                match descriptor {
+                    BelongsTo(RelatedResource { resource, keys }) => {
+                        if !schema.has_foreign_key(keys.own) {
+                            Err(Error::SchemaValidationFailure {
+                                schema: schema.name.to_string(),
+                                attribute: relationship.to_string(),
+                                message: format!(
+                                    "Relationship refers to non-existent foreign key '{}'",
+                                    keys.own
+                                )
+                            })?
+                        }
 
-                if !table_schema.columns
-                    .iter()
-                    .any(|(name, _)| *name == relationship_columns.own)
-                {
-                    return Err(Error::SchemaValidationFailure {
-                        schema: table_schema.name.to_string(),
-                        attribute: relationship_name.to_string(),
-                        message: format!(
-                            "Relationship refers to non-existent own column '{}'",
-                            relationship_columns.own
-                        )
-                    })
-                }
-
-                if let Some(related_schema) = validated_tables.get(related_table_name) {
-                    if ! related_schema.columns
-                        .iter()
-                        .any(|(name, _)| *name == relationship_columns.related)
-                    {
-                        return Err(Error::SchemaValidationFailure {
-                            schema: table_schema.name.to_string(),
-                            attribute: relationship_name.to_string(),
-                            message: format!(
-                                "Relationship refers to non-existent related column '{}' at table '{}'",
-                                relationship_columns.own,
-                                related_table_name
-                            )
-                        })
+                        if let Some(related_schema) = schema_registry.get(resource) {
+                            if keys.related != "id" && !related_schema.has_attribute(keys.related) {
+                                Err(Error::SchemaValidationFailure {
+                                    schema: schema.name.to_string(),
+                                    attribute: relationship.to_string(),
+                                    message: format!(
+                                        "Relationship refers to non-existent related column '{}' at table '{}'",
+                                        keys.own, resource
+                                    )
+                                })?
+                            }
+                        } else {
+                            Err(Error::SchemaValidationFailure {
+                                schema: schema.name.to_string(),
+                                attribute: relationship.to_string(),
+                                message: format!(
+                                    "Relationship refers to non-existent resource '{}'",
+                                    resource
+                                )
+                            })?
+                        }
                     }
-                } else {
-                    return Err(Error::SchemaValidationFailure {
-                        schema: table_schema.name.to_string(),
-                        attribute: relationship_name.to_string(),
-                        message: format!(
-                            "Relationship refers to non-existent table '{}'",
-                            related_table_name
-                        )
-                    })
+                    HasOne(RelatedResource { resource, keys }) |
+                    HasMany(RelatedResource { resource, keys }) => {
+                        if keys.own != "id" && !schema.has_attribute(keys.own) {
+                            Err(Error::SchemaValidationFailure {
+                                schema: schema.name.to_string(),
+                                attribute: relationship.to_string(),
+                                message: format!(
+                                    "Relationship refers to non-existent attribute '{}'",
+                                    keys.own
+                                )
+                            })?
+                        }
+
+                        if let Some(related_schema) = schema_registry.get(resource) {
+                            if !related_schema.has_foreign_key(keys.related) {
+                                Err(Error::SchemaValidationFailure {
+                                    schema: schema.name.to_string(),
+                                    attribute: relationship.to_string(),
+                                    message: format!(
+                                        "Relationship refers to non-existent foreign key '{}' at table '{}'",
+                                        keys.related, resource
+                                    )
+                                })?
+                            }
+                        } else {
+                            Err(Error::SchemaValidationFailure {
+                                schema: schema.name.to_string(),
+                                attribute: relationship.to_string(),
+                                message: format!(
+                                    "Relationship refers to non-existent resource '{}'",
+                                    resource
+                                )
+                            })?
+                        }
+                    },
                 }
+
+
             }
         }
 
-        Ok(validated_tables)
+        Ok(schema_registry)
     }
 }

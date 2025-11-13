@@ -50,7 +50,7 @@ impl<'a> From<Vec<JsonApiError>> for Content<'a> {
 fn extract_attributes(record: &Record, query_parameters: &QueryParameters) -> HashMap<String, Value> {
     let attributes = record.attributes
         .iter()
-        .map(|(key, value)| (key.clone(), Value::from(value)));
+        .map(|(key, value)| (key.clone(), Value::from(value.clone())));
 
     if let Some(ref parameters) = query_parameters.fields {
         if let Some(model_parameters) = parameters.get(record.schema.name) {
@@ -82,14 +82,14 @@ pub fn make_resource(record: &Record, query_parameters: &QueryParameters, uri_ge
                 (SchemaRelationship::BelongsTo(def), DatabaseRelationship::BelongsTo(id)) |
                 (SchemaRelationship::HasOne(def), DatabaseRelationship::HasOne(id)) =>
                     Linkage::ToOne(Identifier::Existing {
-                        kind: def.table.to_string(),
+                        kind: def.resource.to_string(),
                         id: id.to_string()
                     }),
                 (SchemaRelationship::HasMany(def), DatabaseRelationship::HasMany(ids)) =>
                     Linkage::ToMany(ids
                         .into_iter()
                         .map(|id| Identifier::Existing {
-                            kind: def.table.to_string(),
+                            kind: def.resource.to_string(),
                             id: id.to_string()
                         })
                         .collect()

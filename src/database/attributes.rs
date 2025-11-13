@@ -1,3 +1,4 @@
+use std::any::{type_name, type_name_of_val};
 use indexmap::IndexMap;
 use serde::{Serialize, Deserialize};
 use serde_json::Value;
@@ -7,6 +8,83 @@ use super::{
 };
 use std::fmt::{Display};
 use std::hash::{Hash, Hasher};
+use crate::database::schema::IdentifierType;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
+#[serde(untagged)]
+pub enum Identifier {
+    Text(String),
+    Integer(i64)
+}
+
+impl Identifier {
+    pub fn as_string(&self) -> Result<&String, Error> {
+        match self {
+            Identifier::Text(s) => Ok(s),
+            _ => Err(Error::InvalidAttributeConversion { kind: "&String".to_string() }),
+        }
+    }
+
+    pub fn to_string(self) -> Result<String, Error> {
+        match self {
+            Identifier::Text(s) => Ok(s),
+            _ => Err(Error::InvalidAttributeConversion { kind: "String".to_string() }),
+        }
+    }
+
+    pub fn as_i64(&self) -> Result<&i64, Error> {
+        match self {
+            Identifier::Integer(i) => Ok(i),
+            _ => Err(Error::InvalidAttributeConversion { kind: "&i64".to_string() }),
+        }
+    }
+
+    pub fn to_i64(self) -> Result<i64, Error> {
+        match self {
+            Identifier::Integer(i) => Ok(i),
+            _ => Err(Error::InvalidAttributeConversion { kind: "i64".to_string() }),
+        }
+    }
+
+    pub fn try_from(attribute: Attribute) -> Result<Self, Error> {
+        let identifier = match attribute {
+            Attribute::Text(text) => Self::Text(text),
+            Attribute::Integer(integer) => Self::Integer(integer),
+            _ => Err(Error::InvalidAttributeConversion {
+                kind: type_name_of_val(&attribute).to_string()
+            })?,
+        };
+
+        Ok(identifier)
+    }
+}
+
+impl Display for Identifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Identifier::Text(text) => f.write_str(text),
+            Identifier::Integer(int) => f.write_str(int.to_string().as_str()),
+        }
+    }
+}
+
+impl From<Identifier> for Value {
+    fn from(value: Identifier) -> Self {
+        match value {
+            Identifier::Text(value) => Value::String(value),
+            Identifier::Integer(value) => Value::Number(value.into()),
+        }
+    }
+}
+
+impl From<&Identifier> for IdentifierType {
+    fn from(value: &Identifier) -> Self {
+        match value {
+            Identifier::Text(_) => IdentifierType::Text,
+            Identifier::Integer(_) => IdentifierType::Integer,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -119,6 +197,10 @@ impl Attribute {
             _ => Err(Error::InvalidAttributeConversion { kind: "DateTime".to_string() }),
         }
     }
+
+    pub fn is_valid_identifier(&self) -> bool {
+        matches!(self, Attribute::Text(_) | Attribute::Integer(_))
+    }
 }
 
 impl Display for Attribute {
@@ -130,6 +212,15 @@ impl Display for Attribute {
             Attribute::Float(float) => f.write_str(float.to_string().as_str()),
             Attribute::Boolean(boolean) => f.write_str(boolean.to_string().as_str()),
             Attribute::DateTime(datetime) => f.write_str(datetime.to_string().as_str()),
+        }
+    }
+}
+
+impl From<Identifier> for Attribute {
+    fn from(identifier: Identifier) -> Self {
+        match identifier {
+            Identifier::Text(value) => Attribute::Text(value),
+            Identifier::Integer(value) => Attribute::Integer(value),
         }
     }
 }
@@ -149,13 +240,24 @@ impl From<Attribute> for Value {
     }
 }
 
-impl From<&Attribute> for Value {
-    fn from(value: &Attribute) -> Self {
-        value.clone().into()
+impl From<&Attribute> for Option<AttributeType> {
+    fn from(attribute: &Attribute) -> Self {
+        let attribute = match attribute {
+            Attribute::Text(_) => AttributeType::Text,
+            Attribute::Integer(_) => AttributeType::Integer,
+            Attribute::Float(_) => AttributeType::Float,
+            Attribute::Boolean(_) => AttributeType::Boolean,
+            Attribute::DateTime(_) => AttributeType::DateTime,
+            _ => return None,
+        };
+
+        Some(attribute)
     }
 }
 
 pub type Attributes = IndexMap<String, Attribute>;
+
+pub type ForeignKeys<'sch> = IndexMap<&'sch str, Attribute>;
 
 pub fn date_time_from_millis(millis: i64, attribute: &str) -> Result<DateTime, Error> {
     if let Some(date_time) = DateTime::from_timestamp_millis(millis) {
@@ -181,7 +283,7 @@ pub fn date_time_from_rfc3339(date_time: &str, attribute: &str) -> Result<DateTi
     }
 }
 
-fn attribute_from_value(value: Value, attribute: &str, attribute_type: &AttributeType) -> Result<Attribute, Error> {
+fn attribute_from_value(value: Value, attribute: &str, attribute_type: AttributeType) -> Result<Attribute, Error> {
     match value {
         Value::Null => Ok(Attribute::Null),
         Value::String(value) => match attribute_type {
@@ -274,7 +376,7 @@ pub fn from_value(schema: &TableSchema, value: Value) -> Result<Attributes, Erro
         Value::Object(object) => object
             .into_iter()
             .map(|(attribute, value)|
-                match schema.column(attribute.as_str()) {
+                match schema.attribute(attribute.as_str()) {
                     Some(attribute_type) =>
                         Ok((attribute, attribute_from_value(value, schema_name, attribute_type)?)),
                     None =>
@@ -295,7 +397,7 @@ pub fn from_value(schema: &TableSchema, value: Value) -> Result<Attributes, Erro
 mod tests {
     use super::*;
     use serde_json::json;
-    use crate::database::schema::{AttributeType, TableSchema};
+    use crate::database::schema::{AttributeType, IdentifierType, PrimaryKey, TableSchema};
     use chrono::Utc;
 
     #[test]
@@ -335,12 +437,17 @@ mod tests {
     fn test_from_value_success_and_failures() {
         let schema = TableSchema {
             name: "test",
-            columns: &[
+            primary_key: PrimaryKey {
+                name: "id",
+                kind: IdentifierType::Integer
+            },
+            attributes: &[
                 ("name", AttributeType::Text),
                 ("age", AttributeType::Integer),
                 ("score", AttributeType::Float),
                 ("active", AttributeType::Boolean),
             ],
+            foreign_keys: &[],
             relationships: &[],
             text_index: false,
         };
@@ -374,9 +481,14 @@ mod tests {
     fn test_datetime_conversions() {
         let schema = TableSchema {
             name: "test",
-            columns: &[
+            primary_key: PrimaryKey {
+                name: "id",
+                kind: IdentifierType::Integer
+            },
+            attributes: &[
                 ("timestamp", AttributeType::DateTime),
             ],
+            foreign_keys: &[],
             relationships: &[],
             text_index: false,
         };
@@ -398,9 +510,14 @@ mod tests {
     fn test_boolean_conversions() {
         let schema = TableSchema {
             name: "test",
-            columns: &[
+            primary_key: PrimaryKey {
+                name: "id",
+                kind: IdentifierType::Integer
+            },
+            attributes: &[
                 ("flag", AttributeType::Boolean),
             ],
+            foreign_keys: &[],
             relationships: &[],
             text_index: false,
         };

@@ -8,10 +8,10 @@ use crate::database::schema::{Relationship, TableSchema};
 use crate::database::table::Table;
 
 #[derive(Clone)]
-pub struct IncludeNode<'a: 'b, 'b> {
-    relationship: &'b str,
-    descriptor: &'a Relationship,
-    children: BTreeMap<&'a str, IncludeNode<'a, 'b>>,
+pub struct IncludeNode<'sch: 'req, 'req> {
+    relationship: &'req str,
+    descriptor: &'sch Relationship<'sch>,
+    children: BTreeMap<&'sch str, IncludeNode<'sch, 'req>>,
 }
 
 impl<'a, 'b> PartialEq for IncludeNode<'a, 'b> {
@@ -34,20 +34,20 @@ impl<'a, 'b> Ord for IncludeNode<'a, 'b> {
     }
 }
 
-pub type RequestedFields<'a> = BTreeMap<&'a str, BTreeSet<&'a str>>;
-pub type IncludedModels<'a, 'b> = BTreeMap<&'a str, IncludeNode<'a, 'b>>;
-pub type ModelsToLoad<'a> = BTreeMap<&'a str, &'a TableSchema>;
+pub type RequestedFields<'sch> = BTreeMap<&'sch str, BTreeSet<&'sch str>>;
+pub type IncludedModels<'sch, 'req> = BTreeMap<&'sch str, IncludeNode<'sch, 'req>>;
+pub type ModelsToLoad<'sch> = BTreeMap<&'sch str, &'sch TableSchema<'sch>>;
 
-pub struct LoadContext<'a: 'b, 'b, Adapter: AdapterInterface> {
-    pub schema: &'a TableSchema,
-    pub registry: &'b Registry<'a, Adapter>,
-    pub fields: RequestedFields<'b>,
-    pub include: IncludedModels<'a, 'b>,
+pub struct LoadContext<'sch: 'req, 'req, Adapter: AdapterInterface> {
+    pub schema: &'sch TableSchema<'sch>,
+    pub registry: &'req Registry<'sch, Adapter>,
+    pub fields: RequestedFields<'req>,
+    pub include: IncludedModels<'sch, 'req>,
 }
 
-impl<'a: 'b, 'b, Adapter: AdapterInterface> LoadContext<'a, 'b, Adapter> {
-    pub fn new(schema: &'a TableSchema, registry: &'b Registry<'a, Adapter>, query_parameters: &'b QueryParameters)
-        -> Result<LoadContext<'a, 'b, Adapter>, Error>
+impl<'sch: 'req, 'req, Adapter: AdapterInterface> LoadContext<'sch, 'req, Adapter> {
+    pub fn new(schema: &'sch TableSchema<'sch>, registry: &'req Registry<'sch, Adapter>, query_parameters: &'req QueryParameters)
+               -> Result<LoadContext<'sch, 'req, Adapter>, Error>
     {
         let (include, models) = extract_models(schema, registry, query_parameters)?;
 
@@ -78,7 +78,7 @@ impl<'a: 'b, 'b, Adapter: AdapterInterface> LoadContext<'a, 'b, Adapter> {
         Ok(Self { schema, registry, fields, include })
     }
 
-    pub fn derive(&self, relationship: &str) -> Result<LoadContext<'a, 'b, Adapter>, Error> {
+    pub fn derive(&self, relationship: &str) -> Result<LoadContext<'sch, 'req, Adapter>, Error> {
         let include = self.include.get(relationship)
             .ok_or_else(|| Error::SchemaValidationFailure {
                 schema: self.schema.name.to_string(),
@@ -87,7 +87,7 @@ impl<'a: 'b, 'b, Adapter: AdapterInterface> LoadContext<'a, 'b, Adapter> {
             })?;
 
         let schema = self.registry
-            .table(include.descriptor.related_table().table)?
+            .table(include.descriptor.related_resource().resource)?
             .schema();
 
         Ok(Self {
@@ -113,7 +113,7 @@ impl<'a: 'b, 'b, Adapter: AdapterInterface> LoadContext<'a, 'b, Adapter> {
         self.is_requested(relationship) || self.is_included(relationship)
     }
 
-    pub fn relationships_to_load(&self) -> impl Iterator<Item=&'a (&'a str, Relationship)>
+    pub fn relationships_to_load(&self) -> impl Iterator<Item=&'sch (&'sch str, Relationship<'sch>)>
     {
         self.schema.relationships
             .iter()
@@ -121,8 +121,8 @@ impl<'a: 'b, 'b, Adapter: AdapterInterface> LoadContext<'a, 'b, Adapter> {
     }
 }
 
-fn extract_models<'a: 'b, 'b, Adapter: AdapterInterface>(schema: &'a TableSchema, registry: &'b Registry<'a, Adapter>, query_parameters: &'b QueryParameters)
-    -> Result<(IncludedModels<'a, 'b>, ModelsToLoad<'a>), Error>
+fn extract_models<'sch: 'req, 'req, Adapter: AdapterInterface>(schema: &'sch TableSchema<'sch>, registry: &'req Registry<'sch, Adapter>, query_parameters: &'req QueryParameters)
+                                                               -> Result<(IncludedModels<'sch, 'req>, ModelsToLoad<'sch>), Error>
 {
     let mut included = IncludedModels::new();
     let mut models = ModelsToLoad::from_iter([(schema.name, schema)]);
@@ -150,7 +150,7 @@ fn extract_models<'a: 'b, 'b, Adapter: AdapterInterface>(schema: &'a TableSchema
                     })?;
 
                 schema = registry
-                    .table(descriptor.related_table().table)?
+                    .table(descriptor.related_resource().resource)?
                     .schema();
 
                 models.insert(schema.name, schema);
