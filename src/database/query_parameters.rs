@@ -2,16 +2,13 @@
 //! Also provides functions to extract those parameters from a query string, which is the only
 //! supported construction method.
 
-use crate::http_wrappers::Uri;
 use super::error::Error;
+use crate::database::error::Error::ParseParameterFailure;
+use crate::http_wrappers::Uri;
 use indexmap::IndexMap;
 use regex::Regex;
-use std::{
-    num::NonZeroU32,
-    sync::LazyLock,
-};
+use std::{num::NonZeroU32, sync::LazyLock};
 use urlencoding::decode;
-use crate::database::error::Error::ParseParameterFailure;
 
 mod regex_builder {
     /// Generic pattern for identifiers -- model names, field names and relationship names
@@ -35,9 +32,8 @@ static SORT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 /// The term can be anything and will be percent-decoded before being considered by the filter.
 ///
 /// The valid operands are: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `like`, 'in', 'nin'.
-static FILTER_REGEX: LazyLock<Regex> = LazyLock::new(||
-    Regex::new(r"\A(eq|neq|gt|gte|lt|lte|like|in|nin):(.*)\z").unwrap()
-);
+static FILTER_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\A(eq|neq|gt|gte|lt|lte|like|in|nin):(.*)\z").unwrap());
 
 /// Matches a family parameter in the form `$family[$param]`.
 ///
@@ -59,13 +55,16 @@ static INCLUDE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Enumerates possible sort directions: ascending and descending
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SortDirection { Ascending, Descending }
+pub enum SortDirection {
+    Ascending,
+    Descending,
+}
 
 /// Stores information for sorting a collection
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SortingField {
     pub(crate) field: String,
-    pub(crate) direction: SortDirection
+    pub(crate) direction: SortDirection,
 }
 
 /// Enumerates possible comparison operations available for filtering
@@ -101,13 +100,16 @@ pub type SortParameters = Vec<SortingField>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageParameters {
     pub(crate) number: u32,
-    pub(crate) size: u32
+    pub(crate) size: u32,
 }
 
 impl Default for PageParameters {
     /// Constructs a new paging object, defaulting to first page with 20 records per page.
     fn default() -> Self {
-        Self { number: 1, size: 20 }
+        Self {
+            number: 1,
+            size: 20,
+        }
     }
 }
 
@@ -151,21 +153,21 @@ impl QueryParameters {
 
     fn parse_fields(&mut self, model: &str, fields: &str) -> Result<(), Error> {
         if fields.is_empty() {
-           return Ok(())
+            return Ok(());
         }
 
         let model_fields = fields
             .split(',')
-            .map(|field|
+            .map(|field| {
                 if ID_REGEX.is_match(field) {
                     Ok(field.to_string())
                 } else {
                     Err(Error::ParseParameterFailure {
                         parameter: "fields".to_string(),
-                        message: format!("Invalid field requested: '{field}'")
+                        message: format!("Invalid field requested: '{field}'"),
                     })
                 }
-            )
+            })
             .collect::<Result<Vec<_>, Error>>()?;
 
         self.fields
@@ -185,17 +187,18 @@ impl QueryParameters {
                     decode(value)
                         .map_err(|_| ParseParameterFailure {
                             parameter: format!("filter[{field}]"),
-                            message: "Invalid encoding for field value".to_string()
+                            message: "Invalid encoding for field value".to_string(),
                         })
                         .map(String::from)
                 };
-                
+
                 let parse_string_list = |value: &str| {
-                    value.split(",")
+                    value
+                        .split(",")
                         .map(decode_string)
                         .collect::<Result<Vec<_>, _>>()
                 };
-                
+
                 if let Some((_, [operator, value])) = result {
                     use FilterValue::*;
                     let filter_value = match operator {
@@ -210,7 +213,7 @@ impl QueryParameters {
                         "nin" => NotIn(parse_string_list(value)?),
                         _ => Err(Error::ParseParameterFailure {
                             parameter: format!("filter[{field}]"),
-                            message: format!("Invalid filter operator: '{operator}'")
+                            message: format!("Invalid filter operator: '{operator}'"),
                         })?,
                     };
 
@@ -218,13 +221,14 @@ impl QueryParameters {
                 } else {
                     Err(Error::ParseParameterFailure {
                         parameter: format!("filter[{field}]"),
-                        message: format!("Invalid filter entry: '{entry}'")
+                        message: format!("Invalid filter entry: '{entry}'"),
                     })
                 }
             })
             .collect::<Result<Vec<_>, Error>>()?;
 
-        self.filter.get_or_insert_default()
+        self.filter
+            .get_or_insert_default()
             .insert(field.to_string(), filter);
 
         Ok(())
@@ -232,11 +236,12 @@ impl QueryParameters {
 
     fn parse_search(&mut self, values: &str) -> Result<(), Error> {
         if !values.is_empty() {
-            self.search = Some(values
-                .split(",")
-                .filter(|entry| !entry.is_empty())
-                .map(|value| Ok(decode(value)?.into_owned()))
-                .collect::<Result<Vec<_>, Error>>()?
+            self.search = Some(
+                values
+                    .split(",")
+                    .filter(|entry| !entry.is_empty())
+                    .map(|value| Ok(decode(value)?.into_owned()))
+                    .collect::<Result<Vec<_>, Error>>()?,
             )
         }
 
@@ -245,21 +250,24 @@ impl QueryParameters {
 
     fn parse_include(&mut self, include: &str) -> Result<(), Error> {
         if !include.is_empty() {
-            self.include = Some(include
-                .split(",")
-                .map(|relationship| {
-                    let relationship = if INCLUDE_REGEX.is_match(relationship) {
-                        Ok(relationship.to_string())
-                    } else {
-                        Err(Error::ParseParameterFailure {
-                            parameter: "include".to_string(),
-                            message: format!("Invalid relationship requested: '{relationship}'")
-                        })
-                    }?;
+            self.include = Some(
+                include
+                    .split(",")
+                    .map(|relationship| {
+                        let relationship = if INCLUDE_REGEX.is_match(relationship) {
+                            Ok(relationship.to_string())
+                        } else {
+                            Err(Error::ParseParameterFailure {
+                                parameter: "include".to_string(),
+                                message: format!(
+                                    "Invalid relationship requested: '{relationship}'"
+                                ),
+                            })
+                        }?;
 
-                    Ok(relationship)
-                })
-                .collect::<Result<Vec<_>, Error>>()?
+                        Ok(relationship)
+                    })
+                    .collect::<Result<Vec<_>, Error>>()?,
             );
         }
 
@@ -267,37 +275,39 @@ impl QueryParameters {
     }
 
     fn parse_sort(&mut self, entries: &str) -> Result<(), Error> {
-        self.sort = Some(entries
-            .split(",")
-            .map(|entry| {
-                let result = SORT_REGEX.captures(entry).map(|c| c.extract());
-                if let Some((_, [sign, field])) = result {
-                    Ok(SortingField {
-                        field: field.to_string(),
-                        direction: match sign {
-                            "-" => SortDirection::Descending,
-                            "" | "+" => SortDirection::Ascending,
-                            _ => unreachable!(),
-                        },
-                    })
-                } else {
-                    Err(Error::ParseParameterFailure {
-                        parameter: "sort".to_string(),
-                        message: format!("Invalid sorting entry: '{entry}'")
-                    })
-                }
-            })
-            .collect::<Result<Vec<_>, Error>>()?
+        self.sort = Some(
+            entries
+                .split(",")
+                .map(|entry| {
+                    let result = SORT_REGEX.captures(entry).map(|c| c.extract());
+                    if let Some((_, [sign, field])) = result {
+                        Ok(SortingField {
+                            field: field.to_string(),
+                            direction: match sign {
+                                "-" => SortDirection::Descending,
+                                "" | "+" => SortDirection::Ascending,
+                                _ => unreachable!(),
+                            },
+                        })
+                    } else {
+                        Err(Error::ParseParameterFailure {
+                            parameter: "sort".to_string(),
+                            message: format!("Invalid sorting entry: '{entry}'"),
+                        })
+                    }
+                })
+                .collect::<Result<Vec<_>, Error>>()?,
         );
 
         Ok(())
     }
 
     fn parse_page(&mut self, property: &str, value: &str) -> Result<(), Error> {
-        let value = value.parse::<NonZeroU32>()
+        let value = value
+            .parse::<NonZeroU32>()
             .map_err(|_| Error::ParseParameterFailure {
                 parameter: format!("page[{property}]"),
-                message: format!("Invalid numeric value: '{value}'")
+                message: format!("Invalid numeric value: '{value}'"),
             })?
             .get();
 
@@ -307,8 +317,8 @@ impl QueryParameters {
             "size" => page.size = value,
             _ => Err(Error::ParseParameterFailure {
                 parameter: format!("page[{property}]"),
-                message: format!("Invalid page property: '{property}'")
-            })?
+                message: format!("Invalid page property: '{property}'"),
+            })?,
         };
 
         Ok(())
@@ -322,37 +332,26 @@ impl QueryParameters {
             .filter(|s| !s.is_empty())
             .map(|entry| (entry, entry.split_once('=')))
         {
-            match split
-                .ok_or_else(|| Error::ParseParameterFailure {
-                    parameter: entry.to_string(),
-                    message: format!("Invalid query entry: '{entry}'")
-                })?
-            {
-                ("search", value) =>
-                    parameters.parse_search(value)?,
-                ("include", include) =>
-                    parameters.parse_include(include)?,
-                ("sort", sort) =>
-                    parameters.parse_sort(sort)?,
-                (key, value) =>
-                    match FAMILY_REGEX.captures(key).map(|c| c.extract()) {
-                        Some((_, ["fields", model])) =>
-                            parameters.parse_fields(model, value)?,
-                        Some((_, ["filter", field])) =>
-                            parameters.parse_filter(field, value)?,
-                        Some((_, ["page", property])) =>
-                            parameters.parse_page(property, value)?,
-                        Some((parameter, [..])) =>
-                            Err(Error::ParseParameterFailure {
-                                parameter: parameter.to_string(),
-                                message: "Unexpected parameter provided".to_string()
-                            })?,
-                        None =>
-                            Err(Error::ParseParameterFailure {
-                                parameter: key.to_string(),
-                                message: "Unknown parameter provided".to_string()
-                            })?
-                    }
+            match split.ok_or_else(|| Error::ParseParameterFailure {
+                parameter: entry.to_string(),
+                message: format!("Invalid query entry: '{entry}'"),
+            })? {
+                ("search", value) => parameters.parse_search(value)?,
+                ("include", include) => parameters.parse_include(include)?,
+                ("sort", sort) => parameters.parse_sort(sort)?,
+                (key, value) => match FAMILY_REGEX.captures(key).map(|c| c.extract()) {
+                    Some((_, ["fields", model])) => parameters.parse_fields(model, value)?,
+                    Some((_, ["filter", field])) => parameters.parse_filter(field, value)?,
+                    Some((_, ["page", property])) => parameters.parse_page(property, value)?,
+                    Some((parameter, [..])) => Err(Error::ParseParameterFailure {
+                        parameter: parameter.to_string(),
+                        message: "Unexpected parameter provided".to_string(),
+                    })?,
+                    None => Err(Error::ParseParameterFailure {
+                        parameter: key.to_string(),
+                        message: "Unknown parameter provided".to_string(),
+                    })?,
+                },
             }
         }
 
@@ -386,10 +385,13 @@ mod tests {
         let uri = mock_uri("fields[model1]=col1,col2,col3&fields[model2]=col4");
         let params = QueryParameters::parse(&uri).unwrap();
         let fields = params.fields.unwrap();
-        assert_eq!(fields, IndexMap::from([
-            ("model1".to_string(), vec!["col1", "col2", "col3"]),
-            ("model2".to_string(), vec!["col4"]),
-        ]));
+        assert_eq!(
+            fields,
+            IndexMap::from([
+                ("model1".to_string(), vec!["col1", "col2", "col3"]),
+                ("model2".to_string(), vec!["col4"]),
+            ])
+        );
     }
 
     #[test]
@@ -408,7 +410,13 @@ mod tests {
     fn test_parse_pagination() {
         let uri = mock_uri("page[number]=2&page[size]=20");
         let params = QueryParameters::parse(&uri).unwrap();
-        assert_eq!(params.page, Some(PageParameters { number: 2, size: 20 }));
+        assert_eq!(
+            params.page,
+            Some(PageParameters {
+                number: 2,
+                size: 20
+            })
+        );
     }
 
     #[test]
@@ -420,19 +428,25 @@ mod tests {
 
         let filters = params.filter.unwrap();
         assert_eq!(filters["col1"][0], FilterValue::Equal("value1".to_string()));
-        assert_eq!(filters["col2"][0], FilterValue::NotEqual("value2".to_string()));
+        assert_eq!(
+            filters["col2"][0],
+            FilterValue::NotEqual("value2".to_string())
+        );
     }
 
     #[test]
     fn test_parse_mixed_uri() {
-        let uri = mock_uri("fields[my_model]=col1,col2&sort=-col1&filter[col1]=gt:10&page[number]=3&page[size]=15");
+        let uri = mock_uri(
+            "fields[my_model]=col1,col2&sort=-col1&filter[col1]=gt:10&page[number]=3&page[size]=15",
+        );
         let params = QueryParameters::parse(&uri).unwrap();
 
         // Fields check
         let fields = params.fields.unwrap();
-        assert_eq!(fields, IndexMap::from([
-            ("my_model".to_string(), vec!["col1", "col2"]),
-        ]));
+        assert_eq!(
+            fields,
+            IndexMap::from([("my_model".to_string(), vec!["col1", "col2"]),])
+        );
 
         // Sort check
         let sort = params.sort.unwrap();
@@ -441,38 +455,59 @@ mod tests {
 
         // Filter check
         let filters = params.filter.unwrap();
-        assert_eq!(filters["col1"][0], FilterValue::GreaterThan("10".to_string()));
+        assert_eq!(
+            filters["col1"][0],
+            FilterValue::GreaterThan("10".to_string())
+        );
 
         // Pagination check
-        assert_eq!(params.page, Some(PageParameters { number: 3, size: 15 }));
+        assert_eq!(
+            params.page,
+            Some(PageParameters {
+                number: 3,
+                size: 15
+            })
+        );
     }
 
     #[test]
     fn test_invalid_sort_format() {
         let uri = mock_uri("sort=--col1");
         let params = QueryParameters::parse(&uri);
-        assert!(params.is_err(), "Expected parsing to fail when invalid sort field is provided");
+        assert!(
+            params.is_err(),
+            "Expected parsing to fail when invalid sort field is provided"
+        );
     }
 
     #[test]
     fn test_invalid_filter_format() {
         let uri = mock_uri("filter[col1]=value1"); // Missing operator:value format
         let params = QueryParameters::parse(&uri);
-        assert!(params.is_err(), "Expected parsing to fail when invalid filter is provided");
+        assert!(
+            params.is_err(),
+            "Expected parsing to fail when invalid filter is provided"
+        );
     }
 
     #[test]
     fn test_parse_invalid_page_size() {
         let uri = mock_uri("page[number]=2&page[size]=abc");
         let params = QueryParameters::parse(&uri);
-        assert!(params.is_err(), "Expected parsing to fail for invalid page size");
+        assert!(
+            params.is_err(),
+            "Expected parsing to fail for invalid page size"
+        );
     }
 
     #[test]
     fn test_parse_empty_sort() {
         let uri = mock_uri("sort=");
         let params = QueryParameters::parse(&uri);
-        assert!(params.is_err(), "Expected parsing to fail for empty sort parameter");
+        assert!(
+            params.is_err(),
+            "Expected parsing to fail for empty sort parameter"
+        );
     }
 
     #[test]
@@ -485,14 +520,20 @@ mod tests {
 
         assert_eq!(filters["col1"].len(), 2);
         assert_eq!(filters["col1"][0], FilterValue::Equal("value1".to_string()));
-        assert_eq!(filters["col1"][1], FilterValue::GreaterThan("-20".to_string()));
+        assert_eq!(
+            filters["col1"][1],
+            FilterValue::GreaterThan("-20".to_string())
+        );
     }
 
     #[test]
     fn test_parse_no_filter_value() {
         let uri = mock_uri("filter[col1]=");
         let params = QueryParameters::parse(&uri);
-        assert!(params.is_err(), "Expected parsing to fail for missing filter value");
+        assert!(
+            params.is_err(),
+            "Expected parsing to fail for missing filter value"
+        );
     }
 
     #[test]
@@ -506,21 +547,33 @@ mod tests {
     fn test_parse_invalid_field_name() {
         let uri = mock_uri("fields=col1,invalid!field");
         let params = QueryParameters::parse(&uri);
-        assert!(params.is_err(), "Expected parsing to fail for invalid field name");
+        assert!(
+            params.is_err(),
+            "Expected parsing to fail for invalid field name"
+        );
     }
 
     #[test]
     fn test_parse_page_only_number() {
         let uri = mock_uri("page[number]=2");
         let params = QueryParameters::parse(&uri).unwrap();
-        assert_eq!(params.page, Some(PageParameters { number: 2, size: 20 }));
+        assert_eq!(
+            params.page,
+            Some(PageParameters {
+                number: 2,
+                size: 20
+            })
+        );
     }
 
     #[test]
     fn test_parse_sort_with_invalid_characters() {
         let uri = mock_uri("sort=col@1");
         let params = QueryParameters::parse(&uri);
-        assert!(params.is_err(), "Expected parsing to fail for invalid sort field");
+        assert!(
+            params.is_err(),
+            "Expected parsing to fail for invalid sort field"
+        );
     }
 
     #[test]
@@ -531,8 +584,14 @@ mod tests {
 
         let filters = params.filter.unwrap();
 
-        assert_eq!(filters["col1"][0], FilterValue::Equal("value1&".to_string()));
-        assert_eq!(filters["col2"][0], FilterValue::Like("special:value".to_string()));
+        assert_eq!(
+            filters["col1"][0],
+            FilterValue::Equal("value1&".to_string())
+        );
+        assert_eq!(
+            filters["col2"][0],
+            FilterValue::Like("special:value".to_string())
+        );
     }
 
     #[test]
@@ -575,7 +634,11 @@ mod tests {
         let params = QueryParameters::parse(&uri).unwrap();
         assert_eq!(
             params.include,
-            Some(vec!["author".to_string(), "comments".to_string(), "tags".to_string()])
+            Some(vec![
+                "author".to_string(),
+                "comments".to_string(),
+                "tags".to_string()
+            ])
         );
     }
 
@@ -590,28 +653,43 @@ mod tests {
     fn test_parse_page_only_size() {
         let uri = mock_uri("page[size]=50");
         let params = QueryParameters::parse(&uri).unwrap();
-        assert_eq!(params.page, Some(PageParameters { number: 1, size: 50 }));
+        assert_eq!(
+            params.page,
+            Some(PageParameters {
+                number: 1,
+                size: 50
+            })
+        );
     }
 
     #[test]
     fn test_parse_page_invalid_property() {
         let uri = mock_uri("page[limit]=10");
         let params = QueryParameters::parse(&uri);
-        assert!(params.is_err(), "Expected parsing to fail for invalid page property");
+        assert!(
+            params.is_err(),
+            "Expected parsing to fail for invalid page property"
+        );
     }
 
     #[test]
     fn test_parse_page_zero_value() {
         let uri = mock_uri("page[number]=0");
         let params = QueryParameters::parse(&uri);
-        assert!(params.is_err(), "Expected parsing to fail for zero page number");
+        assert!(
+            params.is_err(),
+            "Expected parsing to fail for zero page number"
+        );
     }
 
     #[test]
     fn test_parse_page_negative_value() {
         let uri = mock_uri("page[size]=-5");
         let params = QueryParameters::parse(&uri);
-        assert!(params.is_err(), "Expected parsing to fail for negative page size");
+        assert!(
+            params.is_err(),
+            "Expected parsing to fail for negative page size"
+        );
     }
 
     #[test]
@@ -642,7 +720,10 @@ mod tests {
     fn test_parse_fields_starting_with_hyphen() {
         let uri = mock_uri("fields[model]=-invalidfield");
         let params = QueryParameters::parse(&uri);
-        assert!(params.is_err(), "Expected parsing to fail for field starting with hyphen");
+        assert!(
+            params.is_err(),
+            "Expected parsing to fail for field starting with hyphen"
+        );
     }
 
     #[test]
@@ -678,9 +759,18 @@ mod tests {
         let params = QueryParameters::parse(&uri).unwrap();
         let filters = params.filter.unwrap();
 
-        assert_eq!(filters["age"][0], FilterValue::GreaterThanOrEqual("18".to_string()));
-        assert_eq!(filters["age"][1], FilterValue::LessThanOrEqual("65".to_string()));
-        assert_eq!(filters["status"][0], FilterValue::NotEqual("deleted".to_string()));
+        assert_eq!(
+            filters["age"][0],
+            FilterValue::GreaterThanOrEqual("18".to_string())
+        );
+        assert_eq!(
+            filters["age"][1],
+            FilterValue::LessThanOrEqual("65".to_string())
+        );
+        assert_eq!(
+            filters["status"][0],
+            FilterValue::NotEqual("deleted".to_string())
+        );
     }
 
     #[test]
@@ -719,7 +809,9 @@ mod tests {
 
     #[test]
     fn test_parse_all_parameters_combined() {
-        let uri = mock_uri("fields[users]=id,name&filter[status]=eq:active&sort=-created_at&page[number]=2&page[size]=25&include=profile&search=query");
+        let uri = mock_uri(
+            "fields[users]=id,name&filter[status]=eq:active&sort=-created_at&page[number]=2&page[size]=25&include=profile&search=query",
+        );
         let params = QueryParameters::parse(&uri).unwrap();
 
         assert!(params.fields.is_some());
@@ -734,20 +826,29 @@ mod tests {
     fn test_parse_missing_equals_sign() {
         let uri = mock_uri("sortcol1");
         let params = QueryParameters::parse(&uri);
-        assert!(params.is_err(), "Expected parsing to fail for malformed query");
+        assert!(
+            params.is_err(),
+            "Expected parsing to fail for malformed query"
+        );
     }
 
     #[test]
     fn test_parse_unknown_parameter() {
         let uri = mock_uri("unknown_param=value");
         let params = QueryParameters::parse(&uri);
-        assert!(params.is_err(), "Expected parsing to fail for unknown parameter");
+        assert!(
+            params.is_err(),
+            "Expected parsing to fail for unknown parameter"
+        );
     }
 
     #[test]
     fn test_parse_filter_missing_colon() {
         let uri = mock_uri("filter[col1]=eqvalue");
         let params = QueryParameters::parse(&uri);
-        assert!(params.is_err(), "Expected parsing to fail for filter without colon separator");
+        assert!(
+            params.is_err(),
+            "Expected parsing to fail for filter without colon separator"
+        );
     }
 }

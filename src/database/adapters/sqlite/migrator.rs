@@ -1,7 +1,7 @@
 use crate::database::migrator::{Error, Migration, Migrator as MigratorInterface};
 use chrono::Utc;
 use log::{debug, info};
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use std::error::Error as StdError;
 
 pub struct Migrator<'a> {
@@ -13,27 +13,24 @@ impl MigratorInterface for Migrator<'_> {
     fn get_migrations(&self) -> &[Migration] {
         self.migrations.as_slice()
     }
-    
+
     fn current_migration_version(&self) -> Result<usize, Box<dyn StdError>> {
-        let version = self.connection
+        let version = self
+            .connection
             .query_row(
                 "SELECT version FROM migrations ORDER BY version DESC LIMIT 1",
                 [],
-                |row| row.get(0)
+                |row| row.get(0),
             )
             .optional()
-            .map(|r|
-                r.unwrap_or(0) as usize
-            )?;
+            .map(|r| r.unwrap_or(0) as usize)?;
 
         Ok(version)
     }
 
-
     fn has_pending_migrations(&self) -> Result<bool, Box<dyn StdError>> {
         Ok(!self.pending_migrations()?.is_empty())
     }
-
 
     fn migrate_one(&self) -> Result<(), Box<dyn StdError>> {
         self.ensure_migrations_table_exists()?;
@@ -43,10 +40,11 @@ impl MigratorInterface for Migrator<'_> {
         info!("Current migration version: {}.", current_version);
 
         if let Some(migration) = self.pending_migrations()?.iter().next() {
-            info!("Running migration #{}: {}.", migration.version, migration.name);
-            self.in_transaction(|transaction|
-                Self::run_migration(&transaction, migration)
-            )
+            info!(
+                "Running migration #{}: {}.",
+                migration.version, migration.name
+            );
+            self.in_transaction(|transaction| Self::run_migration(&transaction, migration))
         } else {
             info!("No migration is pending");
             Ok(())
@@ -61,10 +59,11 @@ impl MigratorInterface for Migrator<'_> {
         info!("Current migration version: {}.", current_version);
 
         if let Some(migration) = self.executed_migrations()?.iter().last() {
-            info!("Rolling back migration #{}: {}.", migration.version, migration.name);
-            self.in_transaction(|transaction|
-                Self::rollback_migration(&transaction, migration)
-            )
+            info!(
+                "Rolling back migration #{}: {}.",
+                migration.version, migration.name
+            );
+            self.in_transaction(|transaction| Self::rollback_migration(&transaction, migration))
         } else {
             info!("No migration to rollback.");
             Ok(())
@@ -83,7 +82,10 @@ impl MigratorInterface for Migrator<'_> {
         if !migrations.is_empty() {
             self.in_transaction(|transaction| {
                 for migration in migrations {
-                    info!("Running migration #{}: {}.", migration.version, migration.name);
+                    info!(
+                        "Running migration #{}: {}.",
+                        migration.version, migration.name
+                    );
                     Self::run_migration(&transaction, &migration)?;
                 }
                 Ok(())
@@ -109,7 +111,10 @@ impl MigratorInterface for Migrator<'_> {
         if !migrations.is_empty() {
             self.in_transaction(|transaction| {
                 for migration in migrations.iter().rev() {
-                    info!("Rolling back migration #{}: {}.", migration.version, migration.name);
+                    info!(
+                        "Rolling back migration #{}: {}.",
+                        migration.version, migration.name
+                    );
                     Self::rollback_migration(&transaction, migration)?;
                 }
                 Ok(())
@@ -126,9 +131,10 @@ impl MigratorInterface for Migrator<'_> {
 }
 
 impl<'a> Migrator<'a> {
-    pub fn try_new(connection: &'a Connection, migrations: Vec<Migration>)
-                   -> Result<Self, Box<dyn StdError>>
-    {
+    pub fn try_new(
+        connection: &'a Connection,
+        migrations: Vec<Migration>,
+    ) -> Result<Self, Box<dyn StdError>> {
         for pair in migrations.windows(2) {
             if pair[0].version == pair[1].version {
                 Err(Error::RepeatingMigrationRegistry)?;
@@ -139,42 +145,42 @@ impl<'a> Migrator<'a> {
             }
         }
 
-        let migrator = Migrator { connection, migrations };
+        let migrator = Migrator {
+            connection,
+            migrations,
+        };
         migrator.ensure_migrations_table_exists()?;
 
         Ok(migrator)
     }
 
-    
     fn ensure_migrations_table_exists(&self) -> Result<(), Box<dyn StdError>> {
         debug!("Ensuring migrations table exists.");
-        self.connection
-            .execute(
-                "\
+        self.connection.execute(
+            "\
                 CREATE TABLE IF NOT EXISTS migrations (\
                     version INTEGER NOT NULL PRIMARY KEY, \
                     name TEXT NOT NULL, \
                     migrated_at INTEGER NOT NULL\
                 )\
             ",
-                [],
-            )?;
+            [],
+        )?;
 
         Ok(())
     }
 
-    fn migration_index(&self, current_version: usize)
-        -> Result<usize, Box<dyn StdError>>
-    {
-        let index = self.migrations
+    fn migration_index(&self, current_version: usize) -> Result<usize, Box<dyn StdError>> {
+        let index = self
+            .migrations
             .iter()
             .position(|m| m.version == current_version)
-            .ok_or_else(||
+            .ok_or_else(|| {
                 format!(
                     "Migration #{}, reported by database as latest, does not exist in registry.",
                     current_version
                 )
-            )?;
+            })?;
 
         Ok(index)
     }
@@ -200,7 +206,8 @@ impl<'a> Migrator<'a> {
     }
 
     fn in_transaction<B>(&self, block: B) -> Result<(), Box<dyn StdError>>
-    where B: FnOnce(&Transaction) -> Result<(), Box<dyn StdError>>
+    where
+        B: FnOnce(&Transaction) -> Result<(), Box<dyn StdError>>,
     {
         let transaction = self.connection.unchecked_transaction()?;
         block(&transaction)?;
@@ -209,30 +216,34 @@ impl<'a> Migrator<'a> {
             .map_err(|err| format!("Failed to commit transaction: {}", err).into())
     }
 
-    fn run_migration(transaction: &Transaction, migration: &Migration) -> Result<(), Box<dyn StdError>> {
+    fn run_migration(
+        transaction: &Transaction,
+        migration: &Migration,
+    ) -> Result<(), Box<dyn StdError>> {
         transaction.execute_batch(&migration.up)?;
-        transaction
-            .execute(
-                "\
+        transaction.execute(
+            "\
                     INSERT INTO migrations (version, name, migrated_at) \
                     VALUES ($1, $2, $3)\
                 ",
-                params![migration.version, migration.name, Utc::now()],
-            )?;
+            params![migration.version, migration.name, Utc::now()],
+        )?;
 
         Ok(())
     }
 
-    fn rollback_migration(transaction: &Transaction, migration: &Migration) -> Result<(), Box<dyn StdError>> {
+    fn rollback_migration(
+        transaction: &Transaction,
+        migration: &Migration,
+    ) -> Result<(), Box<dyn StdError>> {
         transaction.execute_batch(&migration.down)?;
-        transaction
-            .execute(
-                "\
+        transaction.execute(
+            "\
                     DELETE FROM migrations \
                     WHERE version = $1\
                 ",
-                params![migration.version],
-            )?;
+            params![migration.version],
+        )?;
 
         Ok(())
     }
@@ -295,7 +306,8 @@ mod tests {
                 up: "CREATE TABLE dependent (
                          id INTEGER PRIMARY KEY,
                          test_id INTEGER NOT NULL REFERENCES test(id)
-                     );".into(),
+                     );"
+                .into(),
                 down: "DROP TABLE dependent; DROP TABLE test;".into(),
             },
             Migration {
@@ -303,7 +315,7 @@ mod tests {
                 name: "violates_foreign_key".into(),
                 up: "INSERT INTO dependent (id, test_id) VALUES (1, 999);".into(),
                 down: "DELETE FROM dependent WHERE id = 1;".into(),
-            }
+            },
         ]
     }
 
@@ -350,20 +362,26 @@ mod tests {
         // First migration - creates users table
         migrator.migrate_one()?;
         assert_eq!(migrator.current_migration_version()?, 1);
-        assert!(conn.query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'",
-            [],
-            |row| row.get::<_, i32>(0)
-        ).is_ok());
+        assert!(
+            conn.query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'",
+                [],
+                |row| row.get::<_, i32>(0)
+            )
+            .is_ok()
+        );
 
         // Second migration - adds email column
         migrator.migrate_one()?;
         assert_eq!(migrator.current_migration_version()?, 2);
-        assert!(conn.query_row(
-            "SELECT 1 FROM pragma_table_info('users') WHERE name='email'",
-            [],
-            |_| Ok(())
-        ).is_ok());
+        assert!(
+            conn.query_row(
+                "SELECT 1 FROM pragma_table_info('users') WHERE name='email'",
+                [],
+                |_| Ok(())
+            )
+            .is_ok()
+        );
 
         // Complete remaining migrations
         migrator.migrate_all()?;
@@ -386,21 +404,23 @@ mod tests {
         // Rollback timestamps migration
         migrator.rollback_one()?;
         assert_eq!(migrator.current_migration_version()?, 3);
-        assert!(conn.query_row(
-            "SELECT created_at FROM users LIMIT 0",
-            [],
-            |_| Ok(())
-        ).is_err());
+        assert!(
+            conn.query_row("SELECT created_at FROM users LIMIT 0", [], |_| Ok(()))
+                .is_err()
+        );
         assert!(migrator.has_pending_migrations()?);
 
         // Rollback remaining migrations
         migrator.rollback_all()?;
         assert_eq!(migrator.current_migration_version()?, 0);
-        assert!(conn.query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'",
-            [],
-            |_| Ok(())
-        ).is_err());
+        assert!(
+            conn.query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'",
+                [],
+                |_| Ok(())
+            )
+            .is_err()
+        );
         assert!(migrator.has_pending_migrations()?);
 
         Ok(())
@@ -465,11 +485,14 @@ mod tests {
 
         // Database should be in initial state
         assert_eq!(migrator.current_migration_version()?, 0);
-        assert!(conn.query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'",
-            [],
-            |_| Ok(())
-        ).is_err());
+        assert!(
+            conn.query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'",
+                [],
+                |_| Ok(())
+            )
+            .is_err()
+        );
 
         Ok(())
     }
@@ -482,10 +505,12 @@ mod tests {
             name: "multiple_statements".into(),
             up: "CREATE TABLE test1 (id INTEGER PRIMARY KEY);
                  CREATE TABLE test2 (id INTEGER PRIMARY KEY);
-                 CREATE TABLE test3 (id INTEGER PRIMARY KEY);".into(),
+                 CREATE TABLE test3 (id INTEGER PRIMARY KEY);"
+                .into(),
             down: "DROP TABLE test3;
                   DROP TABLE test2;
-                  DROP TABLE test1;".into(),
+                  DROP TABLE test1;"
+                .into(),
         }];
 
         let migrator = Migrator::try_new(&conn, migrations)?;
@@ -493,22 +518,34 @@ mod tests {
 
         // Verify all tables were created
         for i in 1..=3 {
-            assert!(conn.query_row(
-                &format!("SELECT 1 FROM sqlite_master WHERE type='table' AND name='test{}'", i),
-                [],
-                |_| Ok(())
-            ).is_ok());
+            assert!(
+                conn.query_row(
+                    &format!(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='test{}'",
+                        i
+                    ),
+                    [],
+                    |_| Ok(())
+                )
+                .is_ok()
+            );
         }
 
         migrator.rollback_one()?;
 
         // Verify all tables were dropped
         for i in 1..=3 {
-            assert!(conn.query_row(
-                &format!("SELECT 1 FROM sqlite_master WHERE type='table' AND name='test{}'", i),
-                [],
-                |_| Ok(())
-            ).is_err());
+            assert!(
+                conn.query_row(
+                    &format!(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='test{}'",
+                        i
+                    ),
+                    [],
+                    |_| Ok(())
+                )
+                .is_err()
+            );
         }
 
         Ok(())
@@ -519,16 +556,15 @@ mod tests {
         if cfg!(debug_assertions) {
             let conn = setup_test_db()?;
             let migrations = [
-                vec![
-                    Migration {
-                        version: 1, // Duplicate version
-                        name: "duplicate_version".into(),
-                        up: "CREATE TABLE test (id INTEGER PRIMARY KEY);".into(),
-                        down: "DROP TABLE test;".into(),
-                    }
-                ],
-                test_migrations()
-            ].concat();
+                vec![Migration {
+                    version: 1, // Duplicate version
+                    name: "duplicate_version".into(),
+                    up: "CREATE TABLE test (id INTEGER PRIMARY KEY);".into(),
+                    down: "DROP TABLE test;".into(),
+                }],
+                test_migrations(),
+            ]
+            .concat();
 
             let result = Migrator::try_new(&conn, migrations);
             assert!(result.is_err());
@@ -542,16 +578,15 @@ mod tests {
         if cfg!(debug_assertions) {
             let conn = setup_test_db()?;
             let migrations = [
-                vec![
-                    Migration {
-                        version: 5, // Unsorted migration
-                        name: "unsorted_migration".into(),
-                        up: "CREATE TABLE other (id INTEGER PRIMARY KEY);".into(),
-                        down: "DROP TABLE other;".into(),
-                    }
-                ],
-                test_migrations()
-            ].concat();
+                vec![Migration {
+                    version: 5, // Unsorted migration
+                    name: "unsorted_migration".into(),
+                    up: "CREATE TABLE other (id INTEGER PRIMARY KEY);".into(),
+                    down: "DROP TABLE other;".into(),
+                }],
+                test_migrations(),
+            ]
+            .concat();
 
             let result = Migrator::try_new(&conn, migrations);
             assert!(result.is_err());

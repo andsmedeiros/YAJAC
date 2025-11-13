@@ -1,13 +1,9 @@
-use serde::{Serialize, Deserialize};
-use serde_json::Value;
 use crate::{
-    json_api:: {
-        links::Link,
-        primary_content::PrimaryContent,
-        resource::Resource,
-    },
     http_wrappers::Uri,
+    json_api::{links::Link, primary_content::PrimaryContent, resource::Resource},
 };
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ImplementationInfo {

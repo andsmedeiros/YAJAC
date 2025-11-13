@@ -1,5 +1,5 @@
-mod uri;
 mod status_code;
+mod uri;
 
-pub use uri::Uri;
 pub use status_code::StatusCode;
+pub use uri::Uri;

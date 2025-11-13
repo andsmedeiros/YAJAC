@@ -1,13 +1,7 @@
-use serde::{Serialize, Deserialize};
+use crate::{http_wrappers::StatusCode, json_api::links::Link};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{
-    error::Error as StdError,
-    fmt::Display
-};
-use crate::{
-    json_api::links::Link,
-    http_wrappers::StatusCode
-};
+use std::{error::Error as StdError, fmt::Display};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Links {
@@ -16,14 +10,14 @@ pub struct Links {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "type")]
-    pub kind: Option<Link>
+    pub kind: Option<Link>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Source {
     Pointer(String),
     Parameter(String),
-    Header(String)
+    Header(String),
 }
 
 impl Source {
@@ -33,7 +27,7 @@ impl Source {
 
     pub fn pointer_for_attribute<T>(attribute: T) -> Source
     where
-        T: Display
+        T: Display,
     {
         Source::Pointer(format!("/data/attributes/{}", attribute))
     }
@@ -63,7 +57,7 @@ pub struct Error {
     pub source: Option<Source>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Value>
+    pub meta: Option<Value>,
 }
 
 impl Default for Error {
@@ -71,15 +65,12 @@ impl Default for Error {
         Error {
             id: None,
             links: None,
-            status: 
-                Some(StatusCode::INTERNAL_SERVER_ERROR),
-            code: 
-                Some("InternalServerFault".into()),
-            title: 
-                Some("An unexpected error occurred. No more information is available.".into()),
+            status: Some(StatusCode::INTERNAL_SERVER_ERROR),
+            code: Some("InternalServerFault".into()),
+            title: Some("An unexpected error occurred. No more information is available.".into()),
             detail: None,
             source: None,
-            meta: None
+            meta: None,
         }
     }
 }

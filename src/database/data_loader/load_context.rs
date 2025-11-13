@@ -1,11 +1,11 @@
-use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
-use crate::database::error::Error;
-use crate::database::adapters::Adapter as AdapterInterface;
 use crate::database::QueryParameters;
+use crate::database::adapters::Adapter as AdapterInterface;
+use crate::database::error::Error;
 use crate::database::registry::Registry;
 use crate::database::schema::{Relationship, TableSchema};
 use crate::database::table::Table;
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone)]
 pub struct IncludeNode<'sch: 'req, 'req> {
@@ -46,47 +46,55 @@ pub struct LoadContext<'sch: 'req, 'req, Adapter: AdapterInterface> {
 }
 
 impl<'sch: 'req, 'req, Adapter: AdapterInterface> LoadContext<'sch, 'req, Adapter> {
-    pub fn new(schema: &'sch TableSchema<'sch>, registry: &'req Registry<'sch, Adapter>, query_parameters: &'req QueryParameters)
-               -> Result<LoadContext<'sch, 'req, Adapter>, Error>
-    {
+    pub fn new(
+        schema: &'sch TableSchema<'sch>,
+        registry: &'req Registry<'sch, Adapter>,
+        query_parameters: &'req QueryParameters,
+    ) -> Result<LoadContext<'sch, 'req, Adapter>, Error> {
         let (include, models) = extract_models(schema, registry, query_parameters)?;
 
-        let fields: RequestedFields =
-            if let Some(ref requested_fields) = query_parameters.fields {
-                models
-                    .iter()
-                    .map(|(model, schema)|
-                        match requested_fields.iter().find(|(name, _)| name.as_str() == *model) {
-                            Some((_, fields)) => (*model, fields
-                                .iter()
-                                .map(|field| field.as_str())
-                                .collect()
-                            ),
-                            None => (*model, schema.fields().collect())
+        let fields: RequestedFields = if let Some(ref requested_fields) = query_parameters.fields {
+            models
+                .iter()
+                .map(|(model, schema)| {
+                    match requested_fields
+                        .iter()
+                        .find(|(name, _)| name.as_str() == *model)
+                    {
+                        Some((_, fields)) => {
+                            (*model, fields.iter().map(|field| field.as_str()).collect())
                         }
-                    )
-                    .collect()
-            } else {
-                models
-                    .iter()
-                    .map(|(model, schema)|
-                        (*model, schema.fields().collect())
-                    )
-                    .collect()
-            };
+                        None => (*model, schema.fields().collect()),
+                    }
+                })
+                .collect()
+        } else {
+            models
+                .iter()
+                .map(|(model, schema)| (*model, schema.fields().collect()))
+                .collect()
+        };
 
-        Ok(Self { schema, registry, fields, include })
+        Ok(Self {
+            schema,
+            registry,
+            fields,
+            include,
+        })
     }
 
     pub fn derive(&self, relationship: &str) -> Result<LoadContext<'sch, 'req, Adapter>, Error> {
-        let include = self.include.get(relationship)
-            .ok_or_else(|| Error::SchemaValidationFailure {
-                schema: self.schema.name.to_string(),
-                attribute: relationship.to_string(),
-                message: "Invalid relationship requested".to_string(),
-            })?;
+        let include =
+            self.include
+                .get(relationship)
+                .ok_or_else(|| Error::SchemaValidationFailure {
+                    schema: self.schema.name.to_string(),
+                    attribute: relationship.to_string(),
+                    message: "Invalid relationship requested".to_string(),
+                })?;
 
-        let schema = self.registry
+        let schema = self
+            .registry
             .table(include.descriptor.related_resource().resource)?
             .schema();
 
@@ -94,36 +102,40 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> LoadContext<'sch, 'req, Adapte
             schema,
             registry: self.registry,
             fields: self.fields.clone(),
-            include: include.children.clone()
+            include: include.children.clone(),
         })
     }
 
     pub fn is_requested(&self, field: &str) -> bool {
         match self.fields.get(self.schema.name) {
             Some(fields) => fields.contains(field),
-            None => false
+            None => false,
         }
     }
-    
+
     pub fn is_included(&self, relationship: &str) -> bool {
         self.include.contains_key(relationship)
     }
-    
+
     pub fn should_load(&self, relationship: &str) -> bool {
         self.is_requested(relationship) || self.is_included(relationship)
     }
 
-    pub fn relationships_to_load(&self) -> impl Iterator<Item=&'sch (&'sch str, Relationship<'sch>)>
-    {
-        self.schema.relationships
+    pub fn relationships_to_load(
+        &self,
+    ) -> impl Iterator<Item = &'sch (&'sch str, Relationship<'sch>)> {
+        self.schema
+            .relationships
             .iter()
             .filter(|(relationship, _)| self.should_load(*relationship))
     }
 }
 
-fn extract_models<'sch: 'req, 'req, Adapter: AdapterInterface>(schema: &'sch TableSchema<'sch>, registry: &'req Registry<'sch, Adapter>, query_parameters: &'req QueryParameters)
-                                                               -> Result<(IncludedModels<'sch, 'req>, ModelsToLoad<'sch>), Error>
-{
+fn extract_models<'sch: 'req, 'req, Adapter: AdapterInterface>(
+    schema: &'sch TableSchema<'sch>,
+    registry: &'req Registry<'sch, Adapter>,
+    query_parameters: &'req QueryParameters,
+) -> Result<(IncludedModels<'sch, 'req>, ModelsToLoad<'sch>), Error> {
     let mut included = IncludedModels::new();
     let mut models = ModelsToLoad::from_iter([(schema.name, schema)]);
 
@@ -137,10 +149,11 @@ fn extract_models<'sch: 'req, 'req, Adapter: AdapterInterface>(schema: &'sch Tab
             while let Some(path) = rest {
                 (relationship, rest) = match path.split_once(".") {
                     Some((relationship, rest)) => (relationship, Some(rest)),
-                    None => (path, None)
+                    None => (path, None),
                 };
 
-                let (relationship, descriptor) = schema.relationships
+                let (relationship, descriptor) = schema
+                    .relationships
                     .iter()
                     .find(|(r, _)| relationship == *r)
                     .ok_or_else(|| Error::SchemaValidationFailure {
@@ -160,7 +173,7 @@ fn extract_models<'sch: 'req, 'req, Adapter: AdapterInterface>(schema: &'sch Tab
                     .or_insert(IncludeNode {
                         relationship,
                         descriptor,
-                        children: BTreeMap::new()
+                        children: BTreeMap::new(),
                     })
                     .children;
             }

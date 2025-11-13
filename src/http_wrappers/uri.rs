@@ -1,11 +1,11 @@
+use serde::de::{Error, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
     convert::{AsMut, AsRef},
-    fmt::{Display,Formatter},
+    fmt::{Display, Formatter},
     ops::{Deref, DerefMut},
-    str::FromStr
+    str::FromStr,
 };
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde::de::{Error, Visitor};
 
 #[derive(Debug, Clone)]
 pub struct Uri(http::Uri);
@@ -18,19 +18,27 @@ impl Display for Uri {
 
 impl Deref for Uri {
     type Target = http::Uri;
-    fn deref(&self) -> &Self::Target { &self.0 }
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 impl DerefMut for Uri {
-    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0 }
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 impl AsRef<http::Uri> for Uri {
-    fn as_ref(&self) -> &http::Uri { &self.0 }
+    fn as_ref(&self) -> &http::Uri {
+        &self.0
+    }
 }
 
 impl AsMut<http::Uri> for Uri {
-    fn as_mut(&mut self) -> &mut http::Uri { &mut self.0 }
+    fn as_mut(&mut self) -> &mut http::Uri {
+        &mut self.0
+    }
 }
 
 impl From<http::Uri> for Uri {

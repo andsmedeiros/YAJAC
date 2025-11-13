@@ -1,8 +1,5 @@
-use http::{
-    Response, StatusCode,
-    response::Builder as ResponseBuilder
-};
 use crate::routing::Error;
+use http::{Response, StatusCode, response::Builder as ResponseBuilder};
 pub fn default_response() -> ResponseBuilder {
     Response::builder()
         .header("Access-Control-Allow-Origin", "*")
@@ -10,10 +7,7 @@ pub fn default_response() -> ResponseBuilder {
 }
 
 pub fn respond_with<T>(code: StatusCode, payload: T) -> Result<Response<T>, Error> {
-    Ok(default_response()
-        .status(code)
-        .body(payload)?
-    )
+    Ok(default_response().status(code).body(payload)?)
 }
 
 pub fn respond<T>(payload: T) -> Result<Response<T>, Error> {

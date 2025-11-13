@@ -1,48 +1,56 @@
-use std::any::{type_name, type_name_of_val};
-use indexmap::IndexMap;
-use serde::{Serialize, Deserialize};
-use serde_json::Value;
 use super::{
     error::Error,
     schema::{AttributeType, DateTime, TableSchema},
 };
-use std::fmt::{Display};
-use std::hash::{Hash, Hasher};
 use crate::database::schema::IdentifierType;
+use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::any::type_name_of_val;
+use std::fmt::Display;
+use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 #[serde(untagged)]
 pub enum Identifier {
     Text(String),
-    Integer(i64)
+    Integer(i64),
 }
 
 impl Identifier {
     pub fn as_string(&self) -> Result<&String, Error> {
         match self {
             Identifier::Text(s) => Ok(s),
-            _ => Err(Error::InvalidAttributeConversion { kind: "&String".to_string() }),
+            _ => Err(Error::InvalidAttributeConversion {
+                kind: "&String".to_string(),
+            }),
         }
     }
 
     pub fn to_string(self) -> Result<String, Error> {
         match self {
             Identifier::Text(s) => Ok(s),
-            _ => Err(Error::InvalidAttributeConversion { kind: "String".to_string() }),
+            _ => Err(Error::InvalidAttributeConversion {
+                kind: "String".to_string(),
+            }),
         }
     }
 
     pub fn as_i64(&self) -> Result<&i64, Error> {
         match self {
             Identifier::Integer(i) => Ok(i),
-            _ => Err(Error::InvalidAttributeConversion { kind: "&i64".to_string() }),
+            _ => Err(Error::InvalidAttributeConversion {
+                kind: "&i64".to_string(),
+            }),
         }
     }
 
     pub fn to_i64(self) -> Result<i64, Error> {
         match self {
             Identifier::Integer(i) => Ok(i),
-            _ => Err(Error::InvalidAttributeConversion { kind: "i64".to_string() }),
+            _ => Err(Error::InvalidAttributeConversion {
+                kind: "i64".to_string(),
+            }),
         }
     }
 
@@ -51,7 +59,7 @@ impl Identifier {
             Attribute::Text(text) => Self::Text(text),
             Attribute::Integer(integer) => Self::Integer(integer),
             _ => Err(Error::InvalidAttributeConversion {
-                kind: type_name_of_val(&attribute).to_string()
+                kind: type_name_of_val(&attribute).to_string(),
             })?,
         };
 
@@ -103,8 +111,9 @@ impl PartialEq for Attribute {
             (Attribute::Null, Attribute::Null) => true,
             (Attribute::Text(a), Attribute::Text(b)) => a == b,
             (Attribute::Integer(a), Attribute::Integer(b)) => a == b,
-            (Attribute::Float(a), Attribute::Float(b)) =>
-                format!("{:.12}", a) == format!("{:.12}", b),
+            (Attribute::Float(a), Attribute::Float(b)) => {
+                format!("{:.12}", a) == format!("{:.12}", b)
+            }
             (Attribute::Boolean(a), Attribute::Boolean(b)) => a == b,
             (Attribute::DateTime(a), Attribute::DateTime(b)) => a == b,
             _ => false,
@@ -131,70 +140,90 @@ impl Attribute {
     pub fn as_string(&self) -> Result<&String, Error> {
         match self {
             Attribute::Text(s) => Ok(s),
-            _ => Err(Error::InvalidAttributeConversion { kind: "&String".to_string() }),
+            _ => Err(Error::InvalidAttributeConversion {
+                kind: "&String".to_string(),
+            }),
         }
     }
 
     pub fn to_string(self) -> Result<String, Error> {
         match self {
             Attribute::Text(s) => Ok(s),
-            _ => Err(Error::InvalidAttributeConversion { kind: "String".to_string() }),
+            _ => Err(Error::InvalidAttributeConversion {
+                kind: "String".to_string(),
+            }),
         }
     }
 
     pub fn as_i64(&self) -> Result<&i64, Error> {
         match self {
             Attribute::Integer(i) => Ok(i),
-            _ => Err(Error::InvalidAttributeConversion { kind: "&i64".to_string() }),
+            _ => Err(Error::InvalidAttributeConversion {
+                kind: "&i64".to_string(),
+            }),
         }
     }
 
     pub fn to_i64(self) -> Result<i64, Error> {
         match self {
             Attribute::Integer(i) => Ok(i),
-            _ => Err(Error::InvalidAttributeConversion { kind: "i64".to_string() }),
+            _ => Err(Error::InvalidAttributeConversion {
+                kind: "i64".to_string(),
+            }),
         }
     }
 
     pub fn as_f64(&self) -> Result<&f64, Error> {
         match self {
             Attribute::Float(f) => Ok(f),
-            _ => Err(Error::InvalidAttributeConversion { kind: "&f64".to_string() }),
+            _ => Err(Error::InvalidAttributeConversion {
+                kind: "&f64".to_string(),
+            }),
         }
     }
 
     pub fn to_f64(self) -> Result<f64, Error> {
         match self {
             Attribute::Float(f) => Ok(f),
-            _ => Err(Error::InvalidAttributeConversion { kind: "f64".to_string() }),
+            _ => Err(Error::InvalidAttributeConversion {
+                kind: "f64".to_string(),
+            }),
         }
     }
 
     pub fn as_bool(&self) -> Result<&bool, Error> {
         match self {
             Attribute::Boolean(b) => Ok(b),
-            _ => Err(Error::InvalidAttributeConversion { kind: "&bool".to_string() }),
+            _ => Err(Error::InvalidAttributeConversion {
+                kind: "&bool".to_string(),
+            }),
         }
     }
 
     pub fn to_bool(self) -> Result<bool, Error> {
         match self {
             Attribute::Boolean(b) => Ok(b),
-            _ => Err(Error::InvalidAttributeConversion { kind: "bool".to_string() }),
+            _ => Err(Error::InvalidAttributeConversion {
+                kind: "bool".to_string(),
+            }),
         }
     }
 
     pub fn as_datetime(&self) -> Result<&DateTime, Error> {
         match self {
             Attribute::DateTime(d) => Ok(d),
-            _ => Err(Error::InvalidAttributeConversion { kind: "&DateTime".to_string() }),
+            _ => Err(Error::InvalidAttributeConversion {
+                kind: "&DateTime".to_string(),
+            }),
         }
     }
 
     pub fn to_datetime(self) -> Result<DateTime, Error> {
         match self {
             Attribute::DateTime(d) => Ok(d),
-            _ => Err(Error::InvalidAttributeConversion { kind: "DateTime".to_string() }),
+            _ => Err(Error::InvalidAttributeConversion {
+                kind: "DateTime".to_string(),
+            }),
         }
     }
 
@@ -266,7 +295,7 @@ pub fn date_time_from_millis(millis: i64, attribute: &str) -> Result<DateTime, E
         Err(Error::InvalidAttribute {
             attribute: attribute.to_string(),
             kind: "DateTime".to_string(),
-            message: format!("Value {millis} is out of bounds")
+            message: format!("Value {millis} is out of bounds"),
         })
     }
 }
@@ -278,33 +307,38 @@ pub fn date_time_from_rfc3339(date_time: &str, attribute: &str) -> Result<DateTi
         Err(Error::InvalidAttribute {
             attribute: attribute.to_string(),
             kind: "DateTime".to_string(),
-            message: format!("DateTime string '{date_time}' is invalid")
+            message: format!("DateTime string '{date_time}' is invalid"),
         })
     }
 }
 
-fn attribute_from_value(value: Value, attribute: &str, attribute_type: AttributeType) -> Result<Attribute, Error> {
+fn attribute_from_value(
+    value: Value,
+    attribute: &str,
+    attribute_type: AttributeType,
+) -> Result<Attribute, Error> {
     match value {
         Value::Null => Ok(Attribute::Null),
         Value::String(value) => match attribute_type {
             AttributeType::Text => Ok(Attribute::Text(value)),
-            AttributeType::DateTime =>
-                Ok(Attribute::DateTime(date_time_from_rfc3339(value.as_str(), attribute)?)),
-            AttributeType::Boolean =>
-                match value.to_lowercase().as_str() {
-                    "true" => Ok(Attribute::Boolean(true)),
-                    "false" => Ok(Attribute::Boolean(false)),
-                    _ => Err(Error::InvalidAttribute {
-                        attribute: attribute.to_string(),
-                        kind: "bool".to_string(),
-                        message: "Provided value does not represent a valid boolean".to_string()
-                    }),
-                }
+            AttributeType::DateTime => Ok(Attribute::DateTime(date_time_from_rfc3339(
+                value.as_str(),
+                attribute,
+            )?)),
+            AttributeType::Boolean => match value.to_lowercase().as_str() {
+                "true" => Ok(Attribute::Boolean(true)),
+                "false" => Ok(Attribute::Boolean(false)),
+                _ => Err(Error::InvalidAttribute {
+                    attribute: attribute.to_string(),
+                    kind: "bool".to_string(),
+                    message: "Provided value does not represent a valid boolean".to_string(),
+                }),
+            },
             _ => Err(Error::InvalidAttribute {
                 attribute: attribute.to_string(),
                 kind: "DateTime".to_string(),
-                message: "Provided value does not represent a valid DateTime".to_string()
-            })
+                message: "Provided value does not represent a valid DateTime".to_string(),
+            }),
         },
         Value::Number(number) => match attribute_type {
             AttributeType::Integer => match number.as_i64() {
@@ -312,25 +346,26 @@ fn attribute_from_value(value: Value, attribute: &str, attribute_type: Attribute
                 None => Err(Error::InvalidAttribute {
                     attribute: attribute.to_string(),
                     kind: "i64".to_string(),
-                    message: "Provided value does not represent an integer".to_string()
-                })
+                    message: "Provided value does not represent an integer".to_string(),
+                }),
             },
             AttributeType::Float => match number.as_f64() {
                 Some(value) => Ok(Attribute::Float(value)),
                 None => Err(Error::InvalidAttribute {
                     attribute: attribute.to_string(),
                     kind: "f64".to_string(),
-                    message: "Provided value does not represent an float".to_string()
-                })
+                    message: "Provided value does not represent an float".to_string(),
+                }),
             },
             AttributeType::DateTime => match number.as_i64() {
-                Some(value) =>
-                    Ok(Attribute::DateTime(date_time_from_millis(value, attribute)?)),
+                Some(value) => Ok(Attribute::DateTime(date_time_from_millis(
+                    value, attribute,
+                )?)),
                 None => Err(Error::InvalidAttribute {
                     attribute: attribute.to_string(),
                     kind: "DateTime".to_string(),
-                    message: "Provided value does not represent a valid DateTime".to_string()
-                })
+                    message: "Provided value does not represent a valid DateTime".to_string(),
+                }),
             },
             AttributeType::Boolean => match number.as_i64() {
                 Some(value) => match value {
@@ -339,56 +374,65 @@ fn attribute_from_value(value: Value, attribute: &str, attribute_type: Attribute
                     _ => Err(Error::InvalidAttribute {
                         attribute: attribute.to_string(),
                         kind: "boolean".to_string(),
-                        message: "Provided value does not represent a valid boolean".to_string()
+                        message: "Provided value does not represent a valid boolean".to_string(),
                     }),
                 },
                 None => Err(Error::InvalidAttribute {
                     attribute: attribute.to_string(),
                     kind: "boolean".to_string(),
-                    message: "Provided value does not represent a valid boolean".to_string()
-                })
+                    message: "Provided value does not represent a valid boolean".to_string(),
+                }),
             },
             _ => Err(Error::InvalidAttribute {
                 attribute: attribute.to_string(),
                 kind: attribute_type.to_string(),
-                message: format!("Provided value does not represent a valid {}", attribute_type)
-            })
+                message: format!(
+                    "Provided value does not represent a valid {}",
+                    attribute_type
+                ),
+            }),
         },
         Value::Bool(value) => match attribute_type {
             AttributeType::Boolean => Ok(Attribute::Boolean(value)),
             _ => Err(Error::InvalidAttribute {
                 attribute: attribute.to_string(),
                 kind: attribute_type.to_string(),
-                message: format!("Provided value does not represent a valid {}", attribute_type)
-            })
+                message: format!(
+                    "Provided value does not represent a valid {}",
+                    attribute_type
+                ),
+            }),
         },
         _ => Err(Error::InvalidAttribute {
             attribute: attribute.to_string(),
             kind: attribute_type.to_string(),
-            message: format!("Provided value does not represent a valid {}", attribute_type)
-        })
+            message: format!(
+                "Provided value does not represent a valid {}",
+                attribute_type
+            ),
+        }),
     }
 }
 
 pub fn from_value(schema: &TableSchema, value: Value) -> Result<Attributes, Error> {
     let schema_name = schema.name;
     let entries = match value {
-        Value::Object(object) => object
-            .into_iter()
-            .map(|(attribute, value)|
-                match schema.attribute(attribute.as_str()) {
-                    Some(attribute_type) =>
-                        Ok((attribute, attribute_from_value(value, schema_name, attribute_type)?)),
-                    None =>
-                        Err(Error::SchemaValidationFailure {
-                            schema: schema_name.to_string(),
-                            attribute,
-                            message: "Unknown attribute".to_string()
-                        })
-                }
-            ),
-        _ => Err(Error::InvalidAttributeSet)?
-    }.collect::<Result<Vec<_>, Error>>()?;
+        Value::Object(object) => object.into_iter().map(|(attribute, value)| {
+            match schema.attribute(attribute.as_str()) {
+                Some(attribute_type) => Ok((
+                    attribute,
+                    attribute_from_value(value, schema_name, attribute_type)?,
+                )),
+                None => Err(Error::SchemaValidationFailure {
+                    schema: schema_name.to_string(),
+                    attribute,
+                    message: "Unknown attribute".to_string(),
+                }),
+            }
+        }),
+        _ => Err(Error::InvalidAttributeSet)?,
+    }
+    .collect::<Result<Vec<_>, Error>>()?;
 
     Ok(Attributes::from_iter(entries.into_iter()))
 }
@@ -396,9 +440,9 @@ pub fn from_value(schema: &TableSchema, value: Value) -> Result<Attributes, Erro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use crate::database::schema::{AttributeType, IdentifierType, PrimaryKey, TableSchema};
     use chrono::Utc;
+    use serde_json::json;
 
     #[test]
     fn test_attribute_conversions() {
@@ -439,7 +483,7 @@ mod tests {
             name: "test",
             primary_key: PrimaryKey {
                 name: "id",
-                kind: IdentifierType::Integer
+                kind: IdentifierType::Integer,
             },
             attributes: &[
                 ("name", AttributeType::Text),
@@ -483,11 +527,9 @@ mod tests {
             name: "test",
             primary_key: PrimaryKey {
                 name: "id",
-                kind: IdentifierType::Integer
+                kind: IdentifierType::Integer,
             },
-            attributes: &[
-                ("timestamp", AttributeType::DateTime),
-            ],
+            attributes: &[("timestamp", AttributeType::DateTime)],
             foreign_keys: &[],
             relationships: &[],
             text_index: false,
@@ -512,11 +554,9 @@ mod tests {
             name: "test",
             primary_key: PrimaryKey {
                 name: "id",
-                kind: IdentifierType::Integer
+                kind: IdentifierType::Integer,
             },
-            attributes: &[
-                ("flag", AttributeType::Boolean),
-            ],
+            attributes: &[("flag", AttributeType::Boolean)],
             foreign_keys: &[],
             relationships: &[],
             text_index: false,

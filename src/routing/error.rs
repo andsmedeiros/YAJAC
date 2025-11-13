@@ -1,12 +1,10 @@
 use crate::{
-    core::error::Error as CoreError,
-    database::error::Error as DatabaseError,
-    http_wrappers::StatusCode,
-    json_api::error::Source,
+    core::error::Error as CoreError, database::error::Error as DatabaseError,
+    http_wrappers::StatusCode, json_api::error::Source,
 };
 use http::Error as HttpError;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Error as JsonError, Value};
+use serde_json::{Error as JsonError, Value, json};
 use std::{
     error::Error as StdError,
     fmt::{Display, Formatter},
@@ -19,7 +17,11 @@ pub struct RequiredParameterMissingError {
 
 impl Display for RequiredParameterMissingError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Required parameter '{}' was not provided", self.parameter)
+        write!(
+            f,
+            "Required parameter '{}' was not provided",
+            self.parameter
+        )
     }
 }
 
@@ -28,12 +30,16 @@ impl StdError for RequiredParameterMissingError {}
 #[derive(Debug, Clone, Serialize)]
 pub struct FailtToParseParameterError {
     pub parameter: String,
-    pub message: String
+    pub message: String,
 }
 
 impl Display for FailtToParseParameterError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Failed to parse parameter '{}': {}", self.parameter, self.message)
+        write!(
+            f,
+            "Failed to parse parameter '{}': {}",
+            self.parameter, self.message
+        )
     }
 }
 
@@ -41,7 +47,7 @@ impl StdError for FailtToParseParameterError {}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ApiErrorKind {
-    ModelValidationFailed
+    ModelValidationFailed,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -58,7 +64,7 @@ impl Error {
     pub fn new<T, U>(status: StatusCode, code: T, title: U) -> Self
     where
         T: Into<String>,
-        U: Into<String>
+        U: Into<String>,
     {
         Self {
             status,
@@ -79,7 +85,7 @@ impl Error {
         self.detail = Some(detail.into());
         self
     }
-    
+
     pub fn with_meta(mut self, meta: Value) -> Self {
         self.meta = Some(meta);
         self
@@ -105,7 +111,7 @@ impl From<RequiredParameterMissingError> for Error {
         Error::new(
             StatusCode::BAD_REQUEST,
             "RequiredParameterMissing",
-            error.to_string()
+            error.to_string(),
         )
     }
 }
@@ -115,7 +121,7 @@ impl From<FailtToParseParameterError> for Error {
         Error::new(
             StatusCode::BAD_REQUEST,
             "FailedToParseParameterError",
-            error.to_string()
+            error.to_string(),
         )
     }
 }
@@ -125,7 +131,7 @@ impl From<HttpError> for Error {
         Error::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "UnexpectedError",
-            &error.to_string()
+            &error.to_string(),
         )
     }
 }
@@ -135,7 +141,7 @@ impl From<JsonError> for Error {
         Error::new(
             StatusCode::BAD_REQUEST,
             "JsonSerialisationError",
-            &error.to_string()
+            &error.to_string(),
         )
         .with_meta(json!({
             "kind": format!("{:?}", error.classify()),
@@ -157,28 +163,28 @@ impl From<DatabaseError> for Error {
             DatabaseError::RecordNotFound => Error::new(
                 StatusCode::NOT_FOUND,
                 "RecordNotFound",
-                "The requested record could not be found."
+                "The requested record could not be found.",
             ),
             error @ DatabaseError::SchemaValidationFailure { .. } => Error::new(
                 StatusCode::BAD_REQUEST,
                 "SchemaValidationFailure",
-                error.to_string()
+                error.to_string(),
             ),
             error @ DatabaseError::InvalidAttribute { .. } => Error::new(
                 StatusCode::BAD_REQUEST,
                 "InvalidAttribute",
-                error.to_string()
+                error.to_string(),
             ),
             error @ DatabaseError::DatabaseFailure { .. } => Error::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "DatabaseFailure",
-                error.to_string()
+                error.to_string(),
             ),
             error => Error::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "InternalServerError",
-                error.to_string()
-            )
+                error.to_string(),
+            ),
         }
     }
 }
@@ -186,12 +192,11 @@ impl From<DatabaseError> for Error {
 impl From<CoreError> for Error {
     fn from(error: CoreError) -> Self {
         match error {
-            CoreError::DocumentSerialisationError { ..} =>
-                Error::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "DocumentSerialisationError",
-                    error.to_string()
-                ),
+            CoreError::DocumentSerialisationError { .. } => Error::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DocumentSerialisationError",
+                error.to_string(),
+            ),
         }
     }
 }

@@ -1,10 +1,10 @@
-use crate::database::attributes::ForeignKeys;
 use super::{
     attributes::{Attributes, Identifier},
     error::Error,
     relationships::Relationships,
     schema::TableSchema,
 };
+use crate::database::attributes::ForeignKeys;
 use crate::json_api::identifier::Identifier as JsonApiIdentifier;
 
 #[derive(Debug, Clone)]
@@ -13,17 +13,22 @@ pub struct Record<'sch> {
     pub id: Identifier,
     pub attributes: Attributes,
     pub foreign_keys: ForeignKeys<'sch>,
-    pub relationships: Relationships<'sch>
+    pub relationships: Relationships<'sch>,
 }
 
 impl<'sch> Record<'sch> {
-    pub fn new(schema: &'sch TableSchema<'sch>, id: Identifier, attributes: Attributes, foreign_keys: ForeignKeys<'sch>) -> Self {
+    pub fn new(
+        schema: &'sch TableSchema<'sch>,
+        id: Identifier,
+        attributes: Attributes,
+        foreign_keys: ForeignKeys<'sch>,
+    ) -> Self {
         Record {
             schema,
             id,
             attributes,
             foreign_keys,
-            relationships: Relationships::new()
+            relationships: Relationships::new(),
         }
     }
 

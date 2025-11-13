@@ -1,11 +1,11 @@
+use serde::de::{Error, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
     convert::{AsMut, AsRef},
     fmt::{Display, Formatter},
     ops::{Deref, DerefMut},
     str::FromStr,
 };
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde::de::{Error, Visitor};
 
 #[derive(Debug, Clone)]
 pub struct StatusCode(http::StatusCode);
@@ -17,7 +17,8 @@ impl StatusCode {
     pub const OK: StatusCode = StatusCode(http::StatusCode::OK);
     pub const CREATED: StatusCode = StatusCode(http::StatusCode::CREATED);
     pub const ACCEPTED: StatusCode = StatusCode(http::StatusCode::ACCEPTED);
-    pub const NON_AUTHORITATIVE_INFORMATION: StatusCode = StatusCode(http::StatusCode::NON_AUTHORITATIVE_INFORMATION);
+    pub const NON_AUTHORITATIVE_INFORMATION: StatusCode =
+        StatusCode(http::StatusCode::NON_AUTHORITATIVE_INFORMATION);
     pub const NO_CONTENT: StatusCode = StatusCode(http::StatusCode::NO_CONTENT);
     pub const RESET_CONTENT: StatusCode = StatusCode(http::StatusCode::RESET_CONTENT);
     pub const PARTIAL_CONTENT: StatusCode = StatusCode(http::StatusCode::PARTIAL_CONTENT);
@@ -39,7 +40,8 @@ impl StatusCode {
     pub const NOT_FOUND: StatusCode = StatusCode(http::StatusCode::NOT_FOUND);
     pub const METHOD_NOT_ALLOWED: StatusCode = StatusCode(http::StatusCode::METHOD_NOT_ALLOWED);
     pub const NOT_ACCEPTABLE: StatusCode = StatusCode(http::StatusCode::NOT_ACCEPTABLE);
-    pub const PROXY_AUTHENTICATION_REQUIRED: StatusCode = StatusCode(http::StatusCode::PROXY_AUTHENTICATION_REQUIRED);
+    pub const PROXY_AUTHENTICATION_REQUIRED: StatusCode =
+        StatusCode(http::StatusCode::PROXY_AUTHENTICATION_REQUIRED);
     pub const REQUEST_TIMEOUT: StatusCode = StatusCode(http::StatusCode::REQUEST_TIMEOUT);
     pub const CONFLICT: StatusCode = StatusCode(http::StatusCode::CONFLICT);
     pub const GONE: StatusCode = StatusCode(http::StatusCode::GONE);
@@ -47,8 +49,10 @@ impl StatusCode {
     pub const PRECONDITION_FAILED: StatusCode = StatusCode(http::StatusCode::PRECONDITION_FAILED);
     pub const PAYLOAD_TOO_LARGE: StatusCode = StatusCode(http::StatusCode::PAYLOAD_TOO_LARGE);
     pub const URI_TOO_LONG: StatusCode = StatusCode(http::StatusCode::URI_TOO_LONG);
-    pub const UNSUPPORTED_MEDIA_TYPE: StatusCode = StatusCode(http::StatusCode::UNSUPPORTED_MEDIA_TYPE);
-    pub const RANGE_NOT_SATISFIABLE: StatusCode = StatusCode(http::StatusCode::RANGE_NOT_SATISFIABLE);
+    pub const UNSUPPORTED_MEDIA_TYPE: StatusCode =
+        StatusCode(http::StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    pub const RANGE_NOT_SATISFIABLE: StatusCode =
+        StatusCode(http::StatusCode::RANGE_NOT_SATISFIABLE);
     pub const EXPECTATION_FAILED: StatusCode = StatusCode(http::StatusCode::EXPECTATION_FAILED);
     pub const IM_A_TEAPOT: StatusCode = StatusCode(http::StatusCode::IM_A_TEAPOT);
     pub const MISDIRECTED_REQUEST: StatusCode = StatusCode(http::StatusCode::MISDIRECTED_REQUEST);
@@ -57,21 +61,28 @@ impl StatusCode {
     pub const FAILED_DEPENDENCY: StatusCode = StatusCode(http::StatusCode::FAILED_DEPENDENCY);
     pub const TOO_EARLY: StatusCode = StatusCode(http::StatusCode::TOO_EARLY);
     pub const UPGRADE_REQUIRED: StatusCode = StatusCode(http::StatusCode::UPGRADE_REQUIRED);
-    pub const PRECONDITION_REQUIRED: StatusCode = StatusCode(http::StatusCode::PRECONDITION_REQUIRED);
+    pub const PRECONDITION_REQUIRED: StatusCode =
+        StatusCode(http::StatusCode::PRECONDITION_REQUIRED);
     pub const TOO_MANY_REQUESTS: StatusCode = StatusCode(http::StatusCode::TOO_MANY_REQUESTS);
-    pub const REQUEST_HEADER_FIELDS_TOO_LARGE: StatusCode = StatusCode(http::StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE);
-    pub const UNAVAILABLE_FOR_LEGAL_REASONS: StatusCode = StatusCode(http::StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
-    pub const INTERNAL_SERVER_ERROR: StatusCode = StatusCode(http::StatusCode::INTERNAL_SERVER_ERROR);
+    pub const REQUEST_HEADER_FIELDS_TOO_LARGE: StatusCode =
+        StatusCode(http::StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE);
+    pub const UNAVAILABLE_FOR_LEGAL_REASONS: StatusCode =
+        StatusCode(http::StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
+    pub const INTERNAL_SERVER_ERROR: StatusCode =
+        StatusCode(http::StatusCode::INTERNAL_SERVER_ERROR);
     pub const NOT_IMPLEMENTED: StatusCode = StatusCode(http::StatusCode::NOT_IMPLEMENTED);
     pub const BAD_GATEWAY: StatusCode = StatusCode(http::StatusCode::BAD_GATEWAY);
     pub const SERVICE_UNAVAILABLE: StatusCode = StatusCode(http::StatusCode::SERVICE_UNAVAILABLE);
     pub const GATEWAY_TIMEOUT: StatusCode = StatusCode(http::StatusCode::GATEWAY_TIMEOUT);
-    pub const HTTP_VERSION_NOT_SUPPORTED: StatusCode = StatusCode(http::StatusCode::HTTP_VERSION_NOT_SUPPORTED);
-    pub const VARIANT_ALSO_NEGOTIATES: StatusCode = StatusCode(http::StatusCode::VARIANT_ALSO_NEGOTIATES);
+    pub const HTTP_VERSION_NOT_SUPPORTED: StatusCode =
+        StatusCode(http::StatusCode::HTTP_VERSION_NOT_SUPPORTED);
+    pub const VARIANT_ALSO_NEGOTIATES: StatusCode =
+        StatusCode(http::StatusCode::VARIANT_ALSO_NEGOTIATES);
     pub const INSUFFICIENT_STORAGE: StatusCode = StatusCode(http::StatusCode::INSUFFICIENT_STORAGE);
     pub const LOOP_DETECTED: StatusCode = StatusCode(http::StatusCode::LOOP_DETECTED);
     pub const NOT_EXTENDED: StatusCode = StatusCode(http::StatusCode::NOT_EXTENDED);
-    pub const NETWORK_AUTHENTICATION_REQUIRED: StatusCode = StatusCode(http::StatusCode::NETWORK_AUTHENTICATION_REQUIRED);
+    pub const NETWORK_AUTHENTICATION_REQUIRED: StatusCode =
+        StatusCode(http::StatusCode::NETWORK_AUTHENTICATION_REQUIRED);
 }
 
 impl Display for StatusCode {

@@ -1,8 +1,6 @@
 use super::{
     connection::Connection as ConnectionInterface,
-    migrator::Migrator as MigratorInterface,
-    query_builder::QueryBuilder as QueryBuilderInterface,
-    table::Table as TableInterface,
+    query_builder::QueryBuilder as QueryBuilderInterface, table::Table as TableInterface,
 };
 
 #[cfg(feature = "sqlite")]

@@ -1,8 +1,8 @@
+use std::string::FromUtf8Error;
 use std::{
     error::Error as StdError,
     fmt::{Display, Formatter},
 };
-use std::string::FromUtf8Error;
 
 #[derive(Debug, Clone)]
 pub enum Error {
@@ -14,7 +14,7 @@ pub enum Error {
     InconsistentSchema {
         schema: String,
         attribute: String,
-        message: String
+        message: String,
     },
     SchemaValidationFailure {
         schema: String,
@@ -23,13 +23,13 @@ pub enum Error {
     },
     UnknownSchema {
         schema: String,
-        message: String
+        message: String,
     },
     InvalidAttributeSet,
     InvalidAttribute {
         attribute: String,
         kind: String,
-        message: String
+        message: String,
     },
     InvalidAttributeConversion {
         kind: String,
@@ -40,18 +40,20 @@ pub enum Error {
         message: String,
     },
     DatabaseFailure {
-        message: String
+        message: String,
     },
     RecordNotFound,
     DataLoadingError {
-        message: String
-    }
+        message: String,
+    },
 }
 
 #[cfg(feature = "sqlite")]
 impl From<rusqlite::Error> for Error {
     fn from(error: rusqlite::Error) -> Self {
-        Error::DatabaseFailure { message: error.to_string() }
+        Error::DatabaseFailure {
+            message: error.to_string(),
+        }
     }
 }
 
@@ -66,30 +68,64 @@ impl Display for Error {
         use Error::*;
 
         match self {
-            ParseParameterFailure { parameter, message } =>
-                write!(f, "Failed to parse parameter '{}': {}", parameter, message),
-            InvalidEncodingFailure =>
-                write!(f, "A provided parameter has an invalid encoding"),
-            InconsistentSchema { schema, attribute, message } =>
-                write!(f, "Schema '{}' is inconsistent for attribute '{}': {}", schema, attribute, message),
-            SchemaValidationFailure { schema, attribute, message } =>
-                write!(f, "Invalid attribute '{}' for schema '{}': {}", attribute, schema, message),
-            UnknownSchema { schema, message } =>
-                write!(f, "Attempted to load an unknown schema '{}': {}", schema, message),
-            InvalidAttributeSet =>
-                write!(f, "The provided attributes are in an unexpected format."),
-            InvalidAttribute { attribute, kind, message } =>
-                write!(f, "Attribute '{}' is an invalid {}: {}", attribute, kind, message),
-            InvalidAttributeConversion { kind } =>
-                write!(f, "Cannot convert attribute to {}",  kind),
-            InvalidOperation { schema, operation, message } =>
-                write!(f, "Operation '{}' is invalid for schema '{}': {}", operation, schema, message),
-            DatabaseFailure { message } =>
-                write!(f, "Failed to execute query: {}", message),
-            RecordNotFound =>
-                write!(f, "Record not found"),
-            DataLoadingError { message } =>
-                write!(f, "Failed to load relationships for primary content: {}", message),
+            ParseParameterFailure { parameter, message } => {
+                write!(f, "Failed to parse parameter '{}': {}", parameter, message)
+            }
+            InvalidEncodingFailure => write!(f, "A provided parameter has an invalid encoding"),
+            InconsistentSchema {
+                schema,
+                attribute,
+                message,
+            } => write!(
+                f,
+                "Schema '{}' is inconsistent for attribute '{}': {}",
+                schema, attribute, message
+            ),
+            SchemaValidationFailure {
+                schema,
+                attribute,
+                message,
+            } => write!(
+                f,
+                "Invalid attribute '{}' for schema '{}': {}",
+                attribute, schema, message
+            ),
+            UnknownSchema { schema, message } => write!(
+                f,
+                "Attempted to load an unknown schema '{}': {}",
+                schema, message
+            ),
+            InvalidAttributeSet => {
+                write!(f, "The provided attributes are in an unexpected format.")
+            }
+            InvalidAttribute {
+                attribute,
+                kind,
+                message,
+            } => write!(
+                f,
+                "Attribute '{}' is an invalid {}: {}",
+                attribute, kind, message
+            ),
+            InvalidAttributeConversion { kind } => {
+                write!(f, "Cannot convert attribute to {}", kind)
+            }
+            InvalidOperation {
+                schema,
+                operation,
+                message,
+            } => write!(
+                f,
+                "Operation '{}' is invalid for schema '{}': {}",
+                operation, schema, message
+            ),
+            DatabaseFailure { message } => write!(f, "Failed to execute query: {}", message),
+            RecordNotFound => write!(f, "Record not found"),
+            DataLoadingError { message } => write!(
+                f,
+                "Failed to load relationships for primary content: {}",
+                message
+            ),
         }
     }
 }

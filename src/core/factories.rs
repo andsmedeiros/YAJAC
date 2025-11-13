@@ -1,24 +1,21 @@
 use crate::{
+    core::error::Error,
     database::{
-        query_parameters::QueryParameters,
-        record::Record,
+        query_parameters::QueryParameters, record::Record,
         relationships::Relationship as DatabaseRelationship,
         schema::Relationship as SchemaRelationship,
     },
-    core::{
-        error::Error,
-    },
     http_wrappers::Uri,
     json_api::{
-        document::{self, ImplementationInfo, Document},
+        document::{self, Document, ImplementationInfo},
         error::Error as JsonApiError,
         identifier::Identifier,
         links::Link,
         primary_content::PrimaryContent,
         relationship::{self, Linkage, Relationship},
-        resource::{self, Resource}
+        resource::{self, Resource},
     },
-    routing::UriGenerator
+    routing::UriGenerator,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -26,7 +23,7 @@ use std::collections::HashMap;
 pub enum Content<'a> {
     Resource(&'a Record<'a>),
     Collection(Vec<&'a Record<'a>>),
-    Errors(Vec<JsonApiError>)
+    Errors(Vec<JsonApiError>),
 }
 
 impl<'a> From<&'a Record<'a>> for Content<'a> {
@@ -47,8 +44,12 @@ impl<'a> From<Vec<JsonApiError>> for Content<'a> {
     }
 }
 
-fn extract_attributes(record: &Record, query_parameters: &QueryParameters) -> HashMap<String, Value> {
-    let attributes = record.attributes
+fn extract_attributes(
+    record: &Record,
+    query_parameters: &QueryParameters,
+) -> HashMap<String, Value> {
+    let attributes = record
+        .attributes
         .iter()
         .map(|(key, value)| (key.clone(), Value::from(value.clone())));
 
@@ -65,7 +66,11 @@ fn extract_attributes(record: &Record, query_parameters: &QueryParameters) -> Ha
     }
 }
 
-pub fn make_resource(record: &Record, query_parameters: &QueryParameters, uri_generator: &dyn UriGenerator) -> Result<Resource, Error> {
+pub fn make_resource(
+    record: &Record,
+    query_parameters: &QueryParameters,
+    uri_generator: &dyn UriGenerator,
+) -> Result<Resource, Error> {
     let identifier = record.identifier()?;
 
     let attributes = extract_attributes(record, query_parameters);
@@ -124,17 +129,16 @@ pub fn make_resource(record: &Record, query_parameters: &QueryParameters, uri_ge
         attributes: Some(attributes),
         relationships: Some(relationships),
         links: links.into(),
-        meta: None
+        meta: None,
     })
 }
-
 
 fn implementation_info() -> ImplementationInfo {
     ImplementationInfo {
         version: Some("1.1".to_string()),
         ext: None,
         profile: None,
-        meta: None
+        meta: None,
     }
 }
 
@@ -146,19 +150,21 @@ fn document_links(uri: &Uri) -> document::Links {
     }
 }
 
-pub fn to_document<'a>(content: impl Into<Content<'a>>, included: Vec<Record>, uri: Uri, query_parameters: &QueryParameters, uri_generator: &dyn UriGenerator)
-    -> Result<Document, Error>
-{
+pub fn to_document<'a>(
+    content: impl Into<Content<'a>>,
+    included: Vec<Record>,
+    uri: Uri,
+    query_parameters: &QueryParameters,
+    uri_generator: &dyn UriGenerator,
+) -> Result<Document, Error> {
     let content: PrimaryContent = match content.into() {
-        Content::Resource(record) =>
-             make_resource(record, query_parameters, uri_generator)?.into(),
+        Content::Resource(record) => make_resource(record, query_parameters, uri_generator)?.into(),
         Content::Collection(collection) => collection
             .into_iter()
             .map(|record| make_resource(record, query_parameters, uri_generator))
-            .collect::<Result<Vec<_>, _>>()?.into(),
-        Content::Errors(errors) =>
-            errors.into()
-        
+            .collect::<Result<Vec<_>, _>>()?
+            .into(),
+        Content::Errors(errors) => errors.into(),
     };
 
     let included = included

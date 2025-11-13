@@ -1,5 +1,5 @@
-use std::fmt::{Display, Formatter};
 use crate::database::error::Error as DatabaseError;
+use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone)]
 pub enum Error {
@@ -9,8 +9,9 @@ pub enum Error {
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::DocumentSerialisationError { message } =>
-                write!(f, "Failed to serialise document: {}", message),
+            Error::DocumentSerialisationError { message } => {
+                write!(f, "Failed to serialise document: {}", message)
+            }
         }
     }
 }

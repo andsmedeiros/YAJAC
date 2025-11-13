@@ -1,11 +1,11 @@
-use serde::{Serialize, Deserialize};
-use serde_json::Value;
 use crate::http_wrappers::Uri;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LinkLang {
     Single(Uri),
-    Multiple(Vec<Uri>)
+    Multiple(Vec<Uri>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,7 +30,7 @@ pub struct LinkObject {
     pub href_lang: Option<LinkLang>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Value>
+    pub meta: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

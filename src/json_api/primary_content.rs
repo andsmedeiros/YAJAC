@@ -1,8 +1,5 @@
+use crate::json_api::{error::Error, resource::Resource};
 use serde::{Deserialize, Serialize};
-use crate::json_api::{
-    error::Error,
-    resource::Resource
-};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -26,7 +23,9 @@ impl From<Vec<Resource>> for PrimaryContent {
 
 impl<const N: usize> From<[Resource; N]> for PrimaryContent {
     fn from(collection: [Resource; N]) -> Self {
-        PrimaryContent::Collection { data: collection.into() }
+        PrimaryContent::Collection {
+            data: collection.into(),
+        }
     }
 }
 
@@ -38,6 +37,8 @@ impl From<Vec<Error>> for PrimaryContent {
 
 impl<const N: usize> From<[Error; N]> for PrimaryContent {
     fn from(errors: [Error; N]) -> Self {
-        PrimaryContent::Errors { errors: errors.into() }
+        PrimaryContent::Errors {
+            errors: errors.into(),
+        }
     }
 }

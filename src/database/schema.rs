@@ -1,5 +1,5 @@
+use crate::database::error::Error;
 use std::fmt::Display;
-use crate::database::{attributes::Attribute, error::Error};
 
 pub type DateTime = chrono::DateTime<chrono::Utc>;
 
@@ -42,7 +42,7 @@ impl From<IdentifierType> for AttributeType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PrimaryKey<'sch> {
     pub name: &'sch str,
-    pub kind: IdentifierType
+    pub kind: IdentifierType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -77,12 +77,11 @@ pub enum Relationship<'sch> {
 }
 
 impl<'sch> Relationship<'sch> {
-    pub fn related_resource(&self) -> &RelatedResource {
+    pub fn related_resource(&self) -> &RelatedResource<'_> {
         match self {
-            Relationship::BelongsTo(related_resource) |
-            Relationship::HasMany(related_resource) |
-            Relationship::HasOne(related_resource)
-                => related_resource,
+            Relationship::BelongsTo(related_resource)
+            | Relationship::HasMany(related_resource)
+            | Relationship::HasOne(related_resource) => related_resource,
         }
     }
 }
@@ -99,31 +98,26 @@ pub struct TableSchema<'sch> {
     pub primary_key: PrimaryKey<'sch>,
     pub attributes: &'sch [(&'sch str, AttributeType)],
     pub foreign_keys: &'sch [(&'sch str, AttributeType)],
-    pub relationships: &'sch[(&'sch str, Relationship<'sch>)],
-    pub text_index: bool
+    pub relationships: &'sch [(&'sch str, Relationship<'sch>)],
+    pub text_index: bool,
 }
 
-fn find<'sch, 'req, T: 'sch>(collection: &'sch[(&'sch str, T)], name: &'req str) -> Option<&'sch T> {
+fn find<'sch, 'req, T: 'sch>(
+    collection: &'sch [(&'sch str, T)],
+    name: &'req str,
+) -> Option<&'sch T> {
     collection
         .into_iter()
-        .find_map(|(key, value)| {
-            if *key == name {
-                Some(value)
-            } else {
-                None
-            }
-        })
+        .find_map(|(key, value)| if *key == name { Some(value) } else { None })
 }
 
 impl<'sch> TableSchema<'sch> {
     pub fn attribute(&self, attribute_name: &str) -> Option<AttributeType> {
-        find(self.attributes, attribute_name)
-            .map(|kind| kind.clone())
+        find(self.attributes, attribute_name).map(|kind| kind.clone())
     }
 
     pub fn foreign_key(&self, foreign_key_name: &str) -> Option<AttributeType> {
-        find(self.foreign_keys, foreign_key_name)
-            .map(|kind| kind.clone())
+        find(self.foreign_keys, foreign_key_name).map(|kind| kind.clone())
     }
 
     pub fn relationship(&self, relationship_name: &str) -> Option<&Relationship<'sch>> {
@@ -133,11 +127,9 @@ impl<'sch> TableSchema<'sch> {
     pub fn is_primary_key(&self, attribute_name: &str) -> bool {
         self.primary_key.name == attribute_name
     }
-    
+
     pub fn has_attribute(&self, column_name: &str) -> bool {
-        self.attributes
-            .iter()
-            .any(|(name, _)| *name == column_name)
+        self.attributes.iter().any(|(name, _)| *name == column_name)
     }
 
     pub fn has_foreign_key(&self, foreign_key_name: &str) -> bool {
@@ -152,13 +144,9 @@ impl<'sch> TableSchema<'sch> {
             .any(|(name, _)| *name == relationship_name)
     }
 
-    pub fn fields(&self) -> impl Iterator<Item=&'sch str> {
-        let columns = self.attributes
-            .iter()
-            .map(|(name, _)| *name);
-        let relationships = self.relationships
-            .iter()
-            .map(|(name, _)| *name);
+    pub fn fields(&self) -> impl Iterator<Item = &'sch str> {
+        let columns = self.attributes.iter().map(|(name, _)| *name);
+        let relationships = self.relationships.iter().map(|(name, _)| *name);
 
         columns.chain(relationships)
     }
@@ -172,7 +160,7 @@ impl<'sch> TableSchema<'sch> {
                 .ok_or_else(|| Error::SchemaValidationFailure {
                     schema: self.name.to_string(),
                     attribute: name.to_string(),
-                    message: "Attribute not found in schema".to_string()
+                    message: "Attribute not found in schema".to_string(),
                 })
         }
     }
@@ -180,9 +168,9 @@ impl<'sch> TableSchema<'sch> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
     use super::*;
     use AttributeType::*;
+    use std::collections::HashSet;
 
     #[test]
     fn test_attribute_type_display() {
@@ -201,26 +189,39 @@ mod tests {
                 name: "id",
                 kind: IdentifierType::Integer,
             },
-            attributes: &[
-                ("name", Text),
-                ("price", Float),
-            ],
-            foreign_keys: &[
-                ("category_id", Integer),
-            ],
+            attributes: &[("name", Text), ("price", Float)],
+            foreign_keys: &[("category_id", Integer)],
             relationships: &[
-                ("category", Relationship::BelongsTo(RelatedResource {
-                    resource: "categories",
-                    keys: RelationshipKeys { own: "category_id", related: "id" }
-                })),
-                ("variants", Relationship::HasMany(RelatedResource {
-                    resource: "variants",
-                    keys: RelationshipKeys { own: "id", related: "product_id" }
-                })),
-                ("position", Relationship::HasOne(RelatedResource {
-                    resource: "display_positions",
-                    keys: RelationshipKeys { own: "id", related: "product_id" }
-                }))
+                (
+                    "category",
+                    Relationship::BelongsTo(RelatedResource {
+                        resource: "categories",
+                        keys: RelationshipKeys {
+                            own: "category_id",
+                            related: "id",
+                        },
+                    }),
+                ),
+                (
+                    "variants",
+                    Relationship::HasMany(RelatedResource {
+                        resource: "variants",
+                        keys: RelationshipKeys {
+                            own: "id",
+                            related: "product_id",
+                        },
+                    }),
+                ),
+                (
+                    "position",
+                    Relationship::HasOne(RelatedResource {
+                        resource: "display_positions",
+                        keys: RelationshipKeys {
+                            own: "id",
+                            related: "product_id",
+                        },
+                    }),
+                ),
             ],
             text_index: true,
         };
@@ -232,7 +233,10 @@ mod tests {
             schema.relationship("category"),
             Some(&Relationship::BelongsTo(RelatedResource {
                 resource: "categories",
-                keys: RelationshipKeys { own: "category_id", related: "id" }
+                keys: RelationshipKeys {
+                    own: "category_id",
+                    related: "id"
+                }
             }))
         );
 

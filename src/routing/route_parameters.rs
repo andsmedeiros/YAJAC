@@ -1,10 +1,5 @@
-use std::{
-    borrow::Borrow,
-    collections::HashMap,
-    fmt::Display,
-    str::FromStr
-};
 use super::error::{Error, FailtToParseParameterError, RequiredParameterMissingError};
+use std::{borrow::Borrow, collections::HashMap, fmt::Display, str::FromStr};
 
 #[derive(Debug, Clone)]
 pub struct RouteParameters(HashMap<String, String>);
@@ -40,10 +35,12 @@ impl RouteParameters {
     where
         K: Borrow<str> + Display,
     {
-        self.get(key.borrow())
-            .ok_or_else(|| RequiredParameterMissingError {
+        self.get(key.borrow()).ok_or_else(|| {
+            RequiredParameterMissingError {
                 parameter: key.borrow().into(),
-            }.into())
+            }
+            .into()
+        })
     }
 
     pub fn get_as<T, K>(&self, key: K) -> Result<Option<T>, Error>
@@ -52,14 +49,15 @@ impl RouteParameters {
         K: Borrow<str> + Display,
     {
         self.get(key.borrow())
-            .map(|value|
-                value
-                    .parse::<T>()
-                    .map_err(|_| FailtToParseParameterError {
+            .map(|value| {
+                value.parse::<T>().map_err(|_| {
+                    FailtToParseParameterError {
                         parameter: key.borrow().into(),
                         message: "Provided parameter contains an unexpected value".to_string(),
-                    }.into())
-            )
+                    }
+                    .into()
+                })
+            })
             .transpose()
     }
 
@@ -68,9 +66,11 @@ impl RouteParameters {
         T: FromStr,
         K: Borrow<str> + Display,
     {
-        self.get_as(key.borrow())?
-            .ok_or_else(|| RequiredParameterMissingError {
+        self.get_as(key.borrow())?.ok_or_else(|| {
+            RequiredParameterMissingError {
                 parameter: key.borrow().into(),
-            }.into())
+            }
+            .into()
+        })
     }
 }

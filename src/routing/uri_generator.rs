@@ -1,13 +1,12 @@
-use crate::{
-    http_wrappers::Uri,
-    json_api::identifier::Identifier
-};
+use crate::{http_wrappers::Uri, json_api::identifier::Identifier};
 
 const GENERATED_INVALID_MSG: &'static str =
     "Generated an invalid URI. This is a bug and should not happen!";
 
 pub trait UriGenerator {
-    fn base_url(&self) -> String { "".to_string() }
+    fn base_url(&self) -> String {
+        "".to_string()
+    }
 
     fn uri_for_collection(&self, kind: &str) -> Uri {
         let base = self.base_url();
@@ -19,7 +18,7 @@ pub trait UriGenerator {
     fn uri_for_resource(&self, identifier: &Identifier) -> Uri {
         let base = self.base_url();
 
-        if let Identifier::Existing { kind, id } = identifier  {
+        if let Identifier::Existing { kind, id } = identifier {
             format!("{base}/{kind}/{id}")
                 .parse::<Uri>()
                 .expect(GENERATED_INVALID_MSG)
@@ -46,17 +45,20 @@ pub trait UriGenerator {
 pub struct DefaultUriGenerator<'a> {
     protocol: &'a str,
     host: &'a str,
-    namespace: &'a str
+    namespace: &'a str,
 }
 
 impl<'a> DefaultUriGenerator<'a> {
     pub fn new(protocol: &'a str, host: &'a str, namespace: &'a str) -> Self {
         assert!(
-            !protocol.is_empty() && !host.is_empty() ||
-                protocol.is_empty() && host.is_empty(),
+            !protocol.is_empty() && !host.is_empty() || protocol.is_empty() && host.is_empty(),
             "URL protocol and host must either be both absent or both present."
         );
-        DefaultUriGenerator { protocol, host, namespace }
+        DefaultUriGenerator {
+            protocol,
+            host,
+            namespace,
+        }
     }
 }
 
@@ -73,6 +75,5 @@ impl<'a> UriGenerator for DefaultUriGenerator<'a> {
         } else {
             format!("{}://{}:{}", self.protocol, self.host, self.namespace)
         }
-
     }
 }

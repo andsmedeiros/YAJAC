@@ -1,18 +1,15 @@
-use serde::{Serialize, Deserialize};
-use serde_json::Value;
-use std::collections::HashMap;
 use crate::{
     http_wrappers::Uri,
-    json_api::{
-        identifier::Identifier,
-        relationship::Relationship
-    }
+    json_api::{identifier::Identifier, relationship::Relationship},
 };
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Links {
-    #[serde(rename="self")]
-    pub this: Uri
+    #[serde(rename = "self")]
+    pub this: Uri,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

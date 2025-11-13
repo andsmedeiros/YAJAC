@@ -1,45 +1,46 @@
+use super::{
+    adapters::Adapter as AdapterInterface,
+    error::Error,
+    schema::{RelatedResource, Relationship, TableSchema},
+    table::Table,
+};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
-use super::{
-    adapters::Adapter as AdapterInterface,
-    error::Error,
-    table::Table,
-    schema::{RelatedResource, Relationship, TableSchema},
-};
 
-pub struct Registry<'a, Adapter : AdapterInterface> {
+pub struct Registry<'a, Adapter: AdapterInterface> {
     connection: Arc<Mutex<Adapter::Connection>>,
-    contents: HashMap<&'a str, Adapter::Table<'a>>
+    contents: HashMap<&'a str, Adapter::Table<'a>>,
 }
 
-impl<'sch, Adapter : AdapterInterface> Registry<'sch, Adapter> {
-    pub fn try_new(connection: Adapter::Connection, schema: &'sch [&'sch TableSchema]) -> Result<Self, Error> {
-        let mut connection = Arc::new(Mutex::new(connection));
+impl<'sch, Adapter: AdapterInterface> Registry<'sch, Adapter> {
+    pub fn try_new(
+        connection: Adapter::Connection,
+        schema: &'sch [&'sch TableSchema],
+    ) -> Result<Self, Error> {
+        let connection = Arc::new(Mutex::new(connection));
         let registry = Self {
             connection: connection.clone(),
             contents: Self::validate_schema(schema)?
                 .into_iter()
-                .map(|(name, schema)| {
-                    (name, Table::new(schema, connection.clone()))
-                })
-                .collect()
+                .map(|(name, schema)| (name, Table::new(schema, connection.clone())))
+                .collect(),
         };
 
         Ok(registry)
     }
 
     pub fn table(&self, name: &str) -> Result<&Adapter::Table<'sch>, Error> {
-        self.contents
-            .get(name)
-            .ok_or_else(|| Error::UnknownSchema {
-                schema: name.to_string(),
-                message: "The requested table is not registered".to_string()
-            })
+        self.contents.get(name).ok_or_else(|| Error::UnknownSchema {
+            schema: name.to_string(),
+            message: "The requested table is not registered".to_string(),
+        })
     }
 
-    fn validate_schema(registry_schema: &'sch [&'sch TableSchema]) -> Result<HashMap<&'sch str, &'sch TableSchema<'sch>>, Error> {
+    fn validate_schema(
+        registry_schema: &'sch [&'sch TableSchema],
+    ) -> Result<HashMap<&'sch str, &'sch TableSchema<'sch>>, Error> {
         use Relationship::*;
 
         let schema_registry: HashMap<&'sch str, &'sch TableSchema> = registry_schema
@@ -58,7 +59,7 @@ impl<'sch, Adapter : AdapterInterface> Registry<'sch, Adapter> {
                                 message: format!(
                                     "Relationship refers to non-existent foreign key '{}'",
                                     keys.own
-                                )
+                                ),
                             })?
                         }
 
@@ -70,7 +71,7 @@ impl<'sch, Adapter : AdapterInterface> Registry<'sch, Adapter> {
                                     message: format!(
                                         "Relationship refers to non-existent related column '{}' at table '{}'",
                                         keys.own, resource
-                                    )
+                                    ),
                                 })?
                             }
                         } else {
@@ -80,12 +81,12 @@ impl<'sch, Adapter : AdapterInterface> Registry<'sch, Adapter> {
                                 message: format!(
                                     "Relationship refers to non-existent resource '{}'",
                                     resource
-                                )
+                                ),
                             })?
                         }
                     }
-                    HasOne(RelatedResource { resource, keys }) |
-                    HasMany(RelatedResource { resource, keys }) => {
+                    HasOne(RelatedResource { resource, keys })
+                    | HasMany(RelatedResource { resource, keys }) => {
                         if keys.own != "id" && !schema.has_attribute(keys.own) {
                             Err(Error::SchemaValidationFailure {
                                 schema: schema.name.to_string(),
@@ -93,7 +94,7 @@ impl<'sch, Adapter : AdapterInterface> Registry<'sch, Adapter> {
                                 message: format!(
                                     "Relationship refers to non-existent attribute '{}'",
                                     keys.own
-                                )
+                                ),
                             })?
                         }
 
@@ -105,7 +106,7 @@ impl<'sch, Adapter : AdapterInterface> Registry<'sch, Adapter> {
                                     message: format!(
                                         "Relationship refers to non-existent foreign key '{}' at table '{}'",
                                         keys.related, resource
-                                    )
+                                    ),
                                 })?
                             }
                         } else {
@@ -115,13 +116,11 @@ impl<'sch, Adapter : AdapterInterface> Registry<'sch, Adapter> {
                                 message: format!(
                                     "Relationship refers to non-existent resource '{}'",
                                     resource
-                                )
+                                ),
                             })?
                         }
-                    },
+                    }
                 }
-
-
             }
         }
 

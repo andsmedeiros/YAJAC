@@ -7,7 +7,7 @@ use super::{
 
 pub struct ExtractedAttributes {
     fields: Vec<String>,
-    values: Vec<Attribute>
+    values: Vec<Attribute>,
 }
 
 impl ExtractedAttributes {
@@ -25,8 +25,17 @@ pub trait QueryBuilder<'a> {
     fn new(schema: &'a TableSchema) -> Self;
     fn query(&self, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
     fn find(&self, id: i32, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
-    fn insert(&self, attributes: Attributes, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
-    fn update(&self, id: i32, attributes: Attributes, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
+    fn insert(
+        &self,
+        attributes: Attributes,
+        parameters: &QueryParameters,
+    ) -> Result<(String, Bindings), Error>;
+    fn update(
+        &self,
+        id: i32,
+        attributes: Attributes,
+        parameters: &QueryParameters,
+    ) -> Result<(String, Bindings), Error>;
     fn delete(&self, id: i32) -> (String, Bindings);
 }
 
@@ -37,7 +46,10 @@ mod tests {
     fn test_extracted_attributes_placeholders() {
         let extracted = ExtractedAttributes {
             fields: vec!["col1".to_string(), "col2".to_string()],
-            values: vec![Attribute::Text("value1".to_string()), Attribute::Integer(42)],
+            values: vec![
+                Attribute::Text("value1".to_string()),
+                Attribute::Integer(42),
+            ],
         };
 
         let placeholders = extracted.to_placeholders();

@@ -28,29 +28,34 @@ impl PartialEq for Migration {
 
 impl Eq for Migration {}
 
-
 #[cfg(feature = "builtin_migrations")]
 impl<'a> From<&include_dir::Dir<'a>> for Migration {
     fn from(dir: &Dir<'a>) -> Self {
         let path = dir.path().to_string_lossy();
         let (version, name) = path
             .split_once('-')
-            .map(|(number, name)| (
-                number.parse::<usize>().expect("Failed to parse migration number"),
-                name.trim().to_string()
-            ) )
+            .map(|(number, name)| {
+                (
+                    number
+                        .parse::<usize>()
+                        .expect("Failed to parse migration number"),
+                    name.trim().to_string(),
+                )
+            })
             .expect("Unable to extract migration number and name from directory");
 
-        let up = dir.get_file(dir.path().join("up.sql"))
+        let up = dir
+            .get_file(dir.path().join("up.sql"))
             .expect(format!("Failed to get file 'up.sql' for migration {path}").as_str());
-        let down = dir.get_file(dir.path().join("down.sql"))
+        let down = dir
+            .get_file(dir.path().join("down.sql"))
             .expect(format!("Failed to get file 'down.sql' for migration {path}").as_str());
 
         Migration {
             version,
             name,
             up: String::from_utf8_lossy(up.contents()).to_string(),
-            down: String::from_utf8_lossy(down.contents()).to_string()
+            down: String::from_utf8_lossy(down.contents()).to_string(),
         }
     }
 }

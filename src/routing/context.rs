@@ -1,13 +1,12 @@
+use super::error::Error;
 use crate::{
     database::{
-        adapters::Adapter as AdapterInterface,
-        query_parameters::QueryParameters,
+        adapters::Adapter as AdapterInterface, query_parameters::QueryParameters,
         registry::Registry,
     },
     http_wrappers::Uri,
     routing::RouteParameters,
 };
-use super::error::Error;
 
 #[derive(Debug, Clone)]
 pub struct Parameters {
@@ -26,13 +25,15 @@ impl<'a, Adapter: AdapterInterface> Context<'a, Adapter> {
         database: &'a Registry<'a, Adapter>,
         uri: Uri,
         route_parameters: RouteParameters,
-    )
-        -> Result<Self, Error>
-    {
+    ) -> Result<Self, Error> {
         let parameters = Parameters {
             query: QueryParameters::parse(&uri)?,
-            route: route_parameters
+            route: route_parameters,
         };
-        Ok(Context { database, uri, parameters })
+        Ok(Context {
+            database,
+            uri,
+            parameters,
+        })
     }
 }

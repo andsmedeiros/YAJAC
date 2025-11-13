@@ -14,7 +14,7 @@ pub enum Error {
     InconsistentSchema {
         schema: String,
         attribute: String,
-        message: String
+        message: String,
     },
     SchemaValidationFailure {
         schema: String,
@@ -25,7 +25,7 @@ pub enum Error {
     InvalidAttribute {
         attribute: String,
         kind: String,
-        message: String
+        message: String,
     },
     InvalidAttributeConversion {
         kind: String,
@@ -36,16 +36,16 @@ pub enum Error {
         message: String,
     },
     DatabaseFailure {
-        message: String
+        message: String,
     },
     RecordNotFound,
     RequiredParameterMissing {
-        parameter: String
+        parameter: String,
     },
     InvalidParameterValue {
         parameter: String,
-        message: String
-    }
+        message: String,
+    },
 }
 
 impl From<FromUtf8Error> for Error {
@@ -59,31 +59,64 @@ impl Display for Error {
         use Error::*;
 
         match self {
-            ParseFailure { parameter, message } =>
-                write!(fmt, "Failed to parse query parameter '{}': {}", parameter, message),
-            InvalidEncodingFailure =>
-                write!(fmt, "A parameter has an invalid encoding"),
-            InconsistentSchema { schema, attribute, message } =>
-                write!(fmt, "Schema '{}' is inconsistent for attribute '{}': {}", schema, attribute, message),
-            SchemaValidationFailure { schema, attribute, message } =>
-                write!(fmt, "Invalid attribute '{}' for schema '{}': {}", attribute, schema, message),
-            InvalidAttributeSet =>
-                write!(fmt, "The provided attributes are in an unexpected format."),
-            InvalidAttribute { attribute, kind, message } =>
-                write!(fmt, "Attribute '{}' is an invalid {}: {}", attribute, kind, message),
-            InvalidAttributeConversion { kind } =>
-                write!(fmt, "Cannot convert attribute to {}",  kind),
-            InvalidOperation { schema, operation, message } =>
-                write!(fmt, "Operation '{}' is invalid for schema '{}': {}", operation, schema, message),
-            DatabaseFailure { message } =>
-                write!(fmt, "Failed to execute query: {}", message),
-            RecordNotFound =>
-                write!(fmt, "Record not found"),
-            RequiredParameterMissing { parameter } =>
-                write!(fmt, "Required parameter '{}' was not provided", parameter),
-            InvalidParameterValue { parameter, message } =>
-                write!(fmt, "Failed to parse route parameter '{}': {}", parameter, message),
-
+            ParseFailure { parameter, message } => write!(
+                fmt,
+                "Failed to parse query parameter '{}': {}",
+                parameter, message
+            ),
+            InvalidEncodingFailure => write!(fmt, "A parameter has an invalid encoding"),
+            InconsistentSchema {
+                schema,
+                attribute,
+                message,
+            } => write!(
+                fmt,
+                "Schema '{}' is inconsistent for attribute '{}': {}",
+                schema, attribute, message
+            ),
+            SchemaValidationFailure {
+                schema,
+                attribute,
+                message,
+            } => write!(
+                fmt,
+                "Invalid attribute '{}' for schema '{}': {}",
+                attribute, schema, message
+            ),
+            InvalidAttributeSet => {
+                write!(fmt, "The provided attributes are in an unexpected format.")
+            }
+            InvalidAttribute {
+                attribute,
+                kind,
+                message,
+            } => write!(
+                fmt,
+                "Attribute '{}' is an invalid {}: {}",
+                attribute, kind, message
+            ),
+            InvalidAttributeConversion { kind } => {
+                write!(fmt, "Cannot convert attribute to {}", kind)
+            }
+            InvalidOperation {
+                schema,
+                operation,
+                message,
+            } => write!(
+                fmt,
+                "Operation '{}' is invalid for schema '{}': {}",
+                operation, schema, message
+            ),
+            DatabaseFailure { message } => write!(fmt, "Failed to execute query: {}", message),
+            RecordNotFound => write!(fmt, "Record not found"),
+            RequiredParameterMissing { parameter } => {
+                write!(fmt, "Required parameter '{}' was not provided", parameter)
+            }
+            InvalidParameterValue { parameter, message } => write!(
+                fmt,
+                "Failed to parse route parameter '{}': {}",
+                parameter, message
+            ),
         }
     }
 }

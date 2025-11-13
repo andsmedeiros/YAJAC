@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use super::attributes::Identifier;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Relationship {

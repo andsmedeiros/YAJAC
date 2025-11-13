@@ -7,16 +7,16 @@ use super::{
     record::Record,
     schema::TableSchema,
 };
-use std::sync::{Arc, Mutex, MutexGuard};
 use crate::database::attributes::{ForeignKeys, Identifier};
 use crate::database::schema::IdentifierType;
+use std::sync::{Arc, Mutex, MutexGuard};
 
-pub trait Table<'sch, Connection : ConnectionInterface, QueryBuilder : QueryBuilderInterface<'sch>> {
+pub trait Table<'sch, Connection: ConnectionInterface, QueryBuilder: QueryBuilderInterface<'sch>> {
     fn new(table_schema: &'sch TableSchema<'sch>, connection: Arc<Mutex<Connection>>) -> Self;
 
     fn schema(&self) -> &'sch TableSchema<'sch>;
 
-    fn connection(&self) -> Result<MutexGuard<Connection>, Error>;
+    fn connection(&self) -> Result<MutexGuard<'_, Connection>, Error>;
 
     fn is_attribute(&self, name: &str) -> bool {
         self.schema().attribute(name).is_some()
@@ -32,12 +32,7 @@ pub trait Table<'sch, Connection : ConnectionInterface, QueryBuilder : QueryBuil
     }
 
     fn first(&self, parameters: &QueryParameters) -> Result<Option<Record<'sch>>, Error> {
-        self.query(parameters)
-            .map(|rows|
-                rows
-                .into_iter()
-                .next()
-            )
+        self.query(parameters).map(|rows| rows.into_iter().next())
     }
 
     fn find(&self, id: i32, parameters: &QueryParameters) -> Result<Record<'sch>, Error> {
@@ -46,16 +41,24 @@ pub trait Table<'sch, Connection : ConnectionInterface, QueryBuilder : QueryBuil
         self.run_fetch_single(query, bindings)
     }
 
-    fn insert(&self, attributes: Attributes, parameters: &QueryParameters) -> Result<Record<'sch>, Error> {
-        let (query, bindings) = QueryBuilder::new(self.schema())
-            .insert(attributes, parameters)?;
+    fn insert(
+        &self,
+        attributes: Attributes,
+        parameters: &QueryParameters,
+    ) -> Result<Record<'sch>, Error> {
+        let (query, bindings) = QueryBuilder::new(self.schema()).insert(attributes, parameters)?;
 
         self.run_fetch_single(query, bindings)
     }
 
-    fn update(&self, id: i32, attributes: Attributes, parameters: &QueryParameters) -> Result<Record<'sch>, Error> {
-        let (query, bindings) = QueryBuilder::new(self.schema())
-            .update(id, attributes, parameters)?;
+    fn update(
+        &self,
+        id: i32,
+        attributes: Attributes,
+        parameters: &QueryParameters,
+    ) -> Result<Record<'sch>, Error> {
+        let (query, bindings) =
+            QueryBuilder::new(self.schema()).update(id, attributes, parameters)?;
 
         self.run_fetch_single(query, bindings)
     }
@@ -65,7 +68,11 @@ pub trait Table<'sch, Connection : ConnectionInterface, QueryBuilder : QueryBuil
         self.connection()?.execute(query, bindings)
     }
 
-    fn run_fetch(&self, query: String, bindings: Vec<Attribute>) -> Result<Vec<Record<'sch>>, Error> {
+    fn run_fetch(
+        &self,
+        query: String,
+        bindings: Vec<Attribute>,
+    ) -> Result<Vec<Record<'sch>>, Error> {
         self.connection()?
             .query(query, bindings, self.schema())?
             .into_iter()
@@ -76,22 +83,22 @@ pub trait Table<'sch, Connection : ConnectionInterface, QueryBuilder : QueryBuil
                     .ok_or_else(|| Error::SchemaValidationFailure {
                         schema: schema.name.to_string(),
                         attribute: schema.primary_key.name.to_string(),
-                        message: "Primary key was not loaded".to_string()
+                        message: "Primary key was not loaded".to_string(),
                     })?;
 
                 let id = match (schema.primary_key.kind, id) {
-                    (IdentifierType::Integer, Attribute::Integer(value)) =>
-                        Identifier::Integer(value),
-                    (IdentifierType::Text, Attribute::Text(value)) =>
-                        Identifier::Text(value),
+                    (IdentifierType::Integer, Attribute::Integer(value)) => {
+                        Identifier::Integer(value)
+                    }
+                    (IdentifierType::Text, Attribute::Text(value)) => Identifier::Text(value),
                     (_, id) => Err(Error::SchemaValidationFailure {
                         schema: schema.name.to_string(),
                         attribute: schema.primary_key.name.to_string(),
                         message: format!(
                             "Expected primary key '{:?}' to be of type '{}'",
-                             id, schema.primary_key.kind
-                        )
-                    })?
+                            id, schema.primary_key.kind
+                        ),
+                    })?,
                 };
 
                 let mut attributes = Attributes::new();
@@ -100,17 +107,16 @@ pub trait Table<'sch, Connection : ConnectionInterface, QueryBuilder : QueryBuil
                 for (name, attribute) in raw_attributes {
                     if self.is_attribute(&name) {
                         attributes.insert(name, attribute);
-                    } else if self.is_foreign_key(&name) &&
-                        let Some((name, _)) = schema.foreign_keys
-                            .iter()
-                            .find(|(fk, _)| fk == &name)
+                    } else if self.is_foreign_key(&name)
+                        && let Some((name, _)) =
+                            schema.foreign_keys.iter().find(|(fk, _)| fk == &name)
                     {
                         foreign_keys.insert(&name, attribute);
                     } else {
                         Err(Error::SchemaValidationFailure {
                             schema: schema.name.to_string(),
                             attribute: name,
-                            message: "Database returned an unknown attribute".to_string()
+                            message: "Database returned an unknown attribute".to_string(),
                         })?;
                     }
                 }
@@ -119,8 +125,12 @@ pub trait Table<'sch, Connection : ConnectionInterface, QueryBuilder : QueryBuil
             })
             .collect::<Result<Vec<_>, _>>()
     }
-    
-    fn run_fetch_single(&self, query: String, bindings: Vec<Attribute>) -> Result<Record<'sch>, Error> {
+
+    fn run_fetch_single(
+        &self,
+        query: String,
+        bindings: Vec<Attribute>,
+    ) -> Result<Record<'sch>, Error> {
         self.run_fetch(query, bindings)?
             .into_iter()
             .next()
