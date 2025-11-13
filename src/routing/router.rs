@@ -1,25 +1,23 @@
-use std::mem;
-use log::debug;
-use serde_json::{json, Value};
-use http::{Method, Response, StatusCode};
-use crate::database::{
-    adapters::{Adapter as AdapterInterface},
-    registry::Registry,
-};
 use super::{
-    default_response,
-    Context,
-    Request,
-    Result,
-    RouteParameters,
+    Context, Request, Result, RouteParameters,
     controller::{ReadOnlyResourceController, ResourceController},
+    default_response,
 };
+use crate::database::{adapters::Adapter as AdapterInterface, registry::Registry};
+use http::{Method, Response, StatusCode};
+use log::debug;
+use serde_json::{Value, json};
+use std::mem;
 
-pub trait Handler<'a, Adapter: AdapterInterface + 'a>: Fn(Request, Context<'a, Adapter>) -> Result + Sync + Send + 'a {  }
+pub trait Handler<'a, Adapter: AdapterInterface + 'a>:
+    Fn(Request, Context<'a, Adapter>) -> Result + Sync + Send + 'a
+{
+}
 
-impl<'a, T: 'a, Adapter: AdapterInterface + 'a> Handler<'a, Adapter> for T
-where
-    T: Fn(Request, Context<Adapter>) -> Result + Sync + Send { }
+impl<'a, T: 'a, Adapter: AdapterInterface + 'a> Handler<'a, Adapter> for T where
+    T: Fn(Request, Context<Adapter>) -> Result + Sync + Send
+{
+}
 
 struct Route<'a, Adapter: AdapterInterface + 'a> {
     method: Method,
@@ -36,9 +34,7 @@ impl<'a, Adapter: AdapterInterface + 'a> Route<'a, Adapter> {
         }
     }
 
-    fn matches(&self, method: &Method, path_segments: &[String])
-        -> Option<RouteParameters>
-    {
+    fn matches(&self, method: &Method, path_segments: &[String]) -> Option<RouteParameters> {
         if &self.method != method || self.path.len() != path_segments.len() {
             return None;
         }
@@ -76,21 +72,23 @@ impl<'a, Adapter: AdapterInterface + 'a> Router<'a, Adapter> {
                 debug!("Matched!");
 
                 return Context::try_new(database, uri.into(), parameters)
-                    .and_then(|context|
-                        (route.handler)(request, context)
-                    )
-                    .unwrap_or_else(|error|
+                    .and_then(|context| (route.handler)(request, context))
+                    .unwrap_or_else(|error| {
                         default_response()
                             .status(error.status_code())
                             .body(serde_json::to_value(&error).unwrap())
                             .expect("Failed to construct error response")
-                    );
+                    });
             }
         }
 
         default_response()
             .status(StatusCode::NOT_FOUND)
-            .body(json!(format!("{} {}: Resource not found", request.method(), request.uri().path())))
+            .body(json!(format!(
+                "{} {}: Resource not found",
+                request.method(),
+                request.uri().path()
+            )))
             .expect("Failed to construct not found response")
     }
 }
@@ -109,7 +107,9 @@ impl<'a, Adapter: AdapterInterface + 'a> RouterBuilder<'a, Adapter> {
     }
 
     pub fn build(&mut self) -> Router<'a, Adapter> {
-        Router { routes: mem::take(&mut self.routes) }
+        Router {
+            routes: mem::take(&mut self.routes),
+        }
     }
 
     pub fn scope<F>(&mut self, path_segment: &str, f: F) -> &mut Self
@@ -150,15 +150,21 @@ impl<'a, Adapter: AdapterInterface + 'a> RouterBuilder<'a, Adapter> {
         self.add_route(Method::DELETE, path_segment, handler)
     }
 
-    fn add_route(&mut self, method: Method, path_segments: &str, handler: impl Handler<'a, Adapter>) -> &mut Self {
+    fn add_route(
+        &mut self,
+        method: Method,
+        path_segments: &str,
+        handler: impl Handler<'a, Adapter>,
+    ) -> &mut Self {
         let route_path = [
             self.prefix.clone(),
             path_segments
                 .split("/")
                 .filter(|&s| !s.is_empty() && s != "/")
                 .map(String::from)
-                .collect()
-        ].concat();
+                .collect(),
+        ]
+        .concat();
 
         self.routes.push(Route::new(method, route_path, handler));
         self
@@ -166,18 +172,16 @@ impl<'a, Adapter: AdapterInterface + 'a> RouterBuilder<'a, Adapter> {
 
     pub fn read_only_resource<T>(&mut self, scope: &str) -> &mut Self
     where
-        T: ReadOnlyResourceController<Adapter> + 'a
+        T: ReadOnlyResourceController<'a, Adapter> + 'a,
     {
         self.scope(scope, |route| {
-            route
-                .get("/", T::index)
-                .get("/:id", T::show);
+            route.get("/", T::index).get("/:id", T::show);
         })
     }
 
     pub fn resource<T>(&mut self, scope: &str) -> &mut Self
     where
-        T: ResourceController<Adapter> + 'a
+        T: ResourceController<'a, Adapter> + 'a,
     {
         self.scope(scope, |route| {
             route
