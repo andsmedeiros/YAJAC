@@ -6,9 +6,10 @@ use crate::database::schema::IdentifierType;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::any::type_name_of_val;
+use std::any::{type_name, type_name_of_val};
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
+use std::str::FromStr;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 #[serde(untagged)]
@@ -137,6 +138,30 @@ impl Hash for Attribute {
 }
 
 impl Attribute {
+    fn parse_value_as<T: FromStr>(value: &str) -> Result<T, Error> {
+        value.parse::<T>().map_err(|_| Error::InvalidAttributeConversion {
+            kind: type_name::<T>().to_string(),
+        })
+    }
+
+    pub fn parse(value: &str, kind: AttributeType) -> Result<Self, Error> {
+        let attribute = match kind {
+            AttributeType::Text => Attribute::Text(value.to_string()),
+            AttributeType::Integer => Attribute::Integer(Self::parse_value_as(value)?),
+            AttributeType::Float => Attribute::Float(Self::parse_value_as(value)?),
+            AttributeType::Boolean => Attribute::Boolean(Self::parse_value_as(value)?),
+            AttributeType::DateTime => Attribute::DateTime(
+                chrono::DateTime::parse_from_rfc3339(value)
+                    .map_err(|_| Error::InvalidAttributeConversion {
+                        kind: "DateTime".to_string(),
+                    })?
+                    .to_utc(),
+            ),
+        };
+
+        Ok(attribute)
+    }
+
     pub fn as_string(&self) -> Result<&String, Error> {
         match self {
             Attribute::Text(s) => Ok(s),
