@@ -3,7 +3,7 @@ use std::fmt::Display;
 
 pub type DateTime = chrono::DateTime<chrono::Utc>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum IdentifierType {
     Text,
     Integer,
@@ -15,7 +15,7 @@ impl Display for IdentifierType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AttributeType {
     Text,
     Integer,
@@ -39,13 +39,13 @@ impl From<IdentifierType> for AttributeType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PrimaryKey<'sch> {
     pub name: &'sch str,
     pub kind: IdentifierType,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RelationshipKeys<'sch> {
     pub own: &'sch str,
     pub related: &'sch str,
@@ -57,7 +57,7 @@ impl Display for RelationshipKeys<'_> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RelatedResource<'sch> {
     pub resource: &'sch str,
     pub keys: RelationshipKeys<'sch>,
@@ -69,7 +69,7 @@ impl Display for RelatedResource<'_> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Relationship<'sch> {
     BelongsTo(RelatedResource<'sch>),
     HasMany(RelatedResource<'sch>),
@@ -167,7 +167,7 @@ impl<'sch> TableSchema<'sch> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use AttributeType::*;
     use std::collections::HashSet;
