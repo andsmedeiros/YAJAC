@@ -1,3 +1,4 @@
+use crate::database::attributes::Identifier;
 use super::{
     QueryParameters,
     attributes::{Attribute, Attributes},
@@ -24,7 +25,7 @@ pub type Bindings = Vec<Attribute>;
 pub trait QueryBuilder<'a> {
     fn new(schema: &'a TableSchema) -> Self;
     fn query(&self, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
-    fn find(&self, id: i32, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
+    fn find(&self, id: Identifier, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
     fn insert(
         &self,
         attributes: Attributes,
@@ -32,11 +33,11 @@ pub trait QueryBuilder<'a> {
     ) -> Result<(String, Bindings), Error>;
     fn update(
         &self,
-        id: i32,
+        id: Identifier,
         attributes: Attributes,
         parameters: &QueryParameters,
     ) -> Result<(String, Bindings), Error>;
-    fn delete(&self, id: i32) -> (String, Bindings);
+    fn delete(&self, id: Identifier) -> (String, Bindings);
 }
 
 #[cfg(test)]
