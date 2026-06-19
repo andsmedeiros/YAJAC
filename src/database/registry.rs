@@ -10,7 +10,6 @@ use std::{
 };
 
 pub struct Registry<'a, Adapter: AdapterInterface> {
-    connection: Arc<Mutex<Adapter::Connection>>,
     contents: HashMap<&'a str, Adapter::Table<'a>>,
 }
 
@@ -21,7 +20,6 @@ impl<'sch, Adapter: AdapterInterface> Registry<'sch, Adapter> {
     ) -> Result<Self, Error> {
         let connection = Arc::new(Mutex::new(connection));
         let registry = Self {
-            connection: connection.clone(),
             contents: Self::validate_schema(schema)?
                 .into_iter()
                 .map(|(name, schema)| (name, Table::new(schema, connection.clone())))

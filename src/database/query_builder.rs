@@ -6,20 +6,6 @@ use super::{
     schema::TableSchema,
 };
 
-pub struct ExtractedAttributes {
-    fields: Vec<String>,
-    values: Vec<Attribute>,
-}
-
-impl ExtractedAttributes {
-    pub(in crate::database) fn to_placeholders(&self) -> Vec<String> {
-        (1..=self.fields.len())
-            .into_iter()
-            .map(|i| format!("?{i}"))
-            .collect()
-    }
-}
-
 pub type Bindings = Vec<Attribute>;
 
 pub trait QueryBuilder<'a> {
@@ -38,33 +24,4 @@ pub trait QueryBuilder<'a> {
         parameters: &QueryParameters,
     ) -> Result<(String, Bindings), Error>;
     fn delete(&self, id: Identifier) -> (String, Bindings);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn test_extracted_attributes_placeholders() {
-        let extracted = ExtractedAttributes {
-            fields: vec!["col1".to_string(), "col2".to_string()],
-            values: vec![
-                Attribute::Text("value1".to_string()),
-                Attribute::Integer(42),
-            ],
-        };
-
-        let placeholders = extracted.to_placeholders();
-        assert_eq!(placeholders, vec!["?1", "?2"]);
-    }
-
-    #[test]
-    fn test_placeholders_with_empty_fields() {
-        let extracted = ExtractedAttributes {
-            fields: vec![],
-            values: vec![],
-        };
-
-        let placeholders = extracted.to_placeholders();
-        assert!(placeholders.is_empty());
-    }
 }
