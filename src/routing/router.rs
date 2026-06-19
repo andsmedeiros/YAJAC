@@ -34,7 +34,7 @@ impl<'a, Adapter: AdapterInterface + 'a> Route<'a, Adapter> {
         }
     }
 
-    fn matches(&self, method: &Method, path_segments: &[String]) -> Option<RouteParameters> {
+    fn matches(&self, method: &Method, path_segments: &[&str]) -> Option<RouteParameters> {
         if &self.method != method || self.path.len() != path_segments.len() {
             return None;
         }
@@ -59,11 +59,10 @@ pub struct Router<'a, Adapter: AdapterInterface> {
 impl<'a, Adapter: AdapterInterface + 'a> Router<'a, Adapter> {
     pub fn handle(&self, database: &'a Registry<'a, Adapter>, request: Request) -> Response<Value> {
         let uri = request.uri().clone();
-        let path_segments: Vec<String> = uri
+        let path_segments: Vec<&str> = uri
             .path()
             .split('/')
             .filter(|s| !s.is_empty())
-            .map(String::from)
             .collect();
 
         for route in &self.routes {

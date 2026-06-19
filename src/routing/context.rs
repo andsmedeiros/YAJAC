@@ -7,31 +7,35 @@ use crate::{
     http_wrappers::Uri,
     routing::RouteParameters,
 };
+use crate::database::schema::TableSchema;
 
 #[derive(Debug, Clone)]
-pub struct Parameters {
+pub struct Parameters<'sch, 'req> {
     pub route: RouteParameters,
-    pub query: QueryParameters,
+    pub query: QueryParameters<'sch, 'req>,
 }
 
-pub struct Context<'a, Adapter: AdapterInterface> {
-    pub database: &'a Registry<'a, Adapter>,
-    pub uri: Uri,
-    pub parameters: Parameters,
+pub struct Context<'sch, 'reg, 'req, Adapter: AdapterInterface> {
+    pub schema: &'sch TableSchema<'sch>,
+    pub registry: &'reg Registry<'sch, Adapter>,
+    pub uri: & 'req Uri,
+    pub parameters: Parameters<'sch, 'req>,
 }
 
-impl<'a, Adapter: AdapterInterface> Context<'a, Adapter> {
+impl<'sch, 'reg, 'req, Adapter: AdapterInterface> Context<'sch, 'reg, 'req, Adapter> {
     pub fn try_new(
-        database: &'a Registry<'a, Adapter>,
-        uri: Uri,
+        schema: &'sch TableSchema<'sch>,
+        registry: &'reg Registry<'sch, Adapter>,
+        uri: &'req Uri,
         route_parameters: RouteParameters,
     ) -> Result<Self, Error> {
         let parameters = Parameters {
-            query: QueryParameters::parse(&uri)?,
+            query: QueryParameters::parse(uri, schema, registry)?,
             route: route_parameters,
         };
         Ok(Context {
-            database,
+            schema,
+            registry,
             uri,
             parameters,
         })

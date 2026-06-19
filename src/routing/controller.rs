@@ -20,15 +20,14 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface> {
     fn resource_schema() -> &'sch TableSchema<'sch>;
 
     fn index(request: Request, context: Context<Adapter>) -> Result {
-        let table = context.database.table(Self::resource_schema().name)?;
+        let table = context.registry.table(Self::resource_schema().name)?;
         let mut collection = table.query(&context.parameters.query)?;
-        let included = DataLoader::new(context.database)
+        let included = DataLoader::new(context.registry)
             .load_for_collection(&mut collection, &context.parameters.query)?;
         let document = to_document(
             &collection,
             included,
-            context.uri,
-            &context.parameters.query,
+            &context.uri,
             &DefaultUriGenerator::default(),
         )?;
 
