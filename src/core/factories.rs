@@ -1,8 +1,7 @@
 use crate::{
     core::error::Error,
     database::{
-        record::Record,
-        relationships::Relationship as DatabaseRelationship,
+        record::Record, relationships::Relationship as DatabaseRelationship,
         schema::Relationship as SchemaRelationship,
     },
     http_wrappers::Uri,
@@ -44,12 +43,10 @@ impl<'a> From<Vec<JsonApiError>> for Content<'a> {
     }
 }
 
-pub fn make_resource(
-    record: &Record,
-    uri_generator: &dyn UriGenerator,
-) -> Result<Resource, Error> {
+pub fn make_resource(record: &Record, uri_generator: &dyn UriGenerator) -> Result<Resource, Error> {
     let identifier = record.identifier()?;
-    let attributes = record.attributes
+    let attributes = record
+        .attributes
         .iter()
         .map(|(name, value)| (name.clone(), Value::from(value.clone())))
         .collect();

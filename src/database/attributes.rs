@@ -139,9 +139,11 @@ impl Hash for Attribute {
 
 impl Attribute {
     fn parse_value_as<T: FromStr>(value: &str) -> Result<T, Error> {
-        value.parse::<T>().map_err(|_| Error::InvalidAttributeConversion {
-            kind: type_name::<T>().to_string(),
-        })
+        value
+            .parse::<T>()
+            .map_err(|_| Error::InvalidAttributeConversion {
+                kind: type_name::<T>().to_string(),
+            })
     }
 
     pub fn parse(value: &str, kind: AttributeType) -> Result<Self, Error> {

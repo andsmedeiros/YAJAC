@@ -1,17 +1,21 @@
-use crate::database::attributes::Identifier;
 use super::{
     QueryParameters,
     attributes::{Attribute, Attributes},
     error::Error,
     schema::TableSchema,
 };
+use crate::database::attributes::Identifier;
 
 pub type Bindings = Vec<Attribute>;
 
 pub trait QueryBuilder<'a> {
     fn new(schema: &'a TableSchema) -> Self;
     fn query(&self, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
-    fn find(&self, id: Identifier, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
+    fn find(
+        &self,
+        id: Identifier,
+        parameters: &QueryParameters,
+    ) -> Result<(String, Bindings), Error>;
     fn insert(
         &self,
         attributes: Attributes,

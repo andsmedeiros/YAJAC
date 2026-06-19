@@ -413,12 +413,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut collection = registry.table("users")?.query(&query_params)?;
         let included =
             DataLoader::new(&registry).load_for_collection(&mut collection, &query_params)?;
-        let document = to_document(
-            &collection,
-            included,
-            &uri,
-            &DefaultUriGenerator::default(),
-        )?;
+        let document = to_document(&collection, included, &uri, &DefaultUriGenerator::default())?;
         println!("{}", serde_json::to_string_pretty(&document)?);
 
         Ok(())

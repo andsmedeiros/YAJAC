@@ -13,12 +13,12 @@ use super::{
     table::Table,
 };
 use crate::database::attributes::Identifier;
+use crate::database::query_parameters::FieldsParameters;
 use crate::database::relationships::Relationships;
 use std::{
     collections::{HashMap, HashSet, hash_map::Entry},
     slice,
 };
-use crate::database::query_parameters::FieldsParameters;
 
 type GlobalIdentifier<'sch> = (&'sch str, Identifier);
 
@@ -204,7 +204,7 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
         relationship: &'sch str,
         descriptor: &'sch RelatedResource,
         collection: &'req mut [Record<'sch>],
-        query_parameters: &'req QueryParameters
+        query_parameters: &'req QueryParameters,
     ) -> Result<Vec<Record<'sch>>, Error> {
         let table = self.registry.table(descriptor.resource)?;
         let own_attributes = Self::collection_attribute(collection, descriptor.keys.own);
@@ -240,7 +240,7 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
         relationship: &'sch str,
         descriptor: &'sch RelatedResource,
         collection: &'req mut [Record<'sch>],
-        query_parameters: &'req QueryParameters
+        query_parameters: &'req QueryParameters,
     ) -> Result<Vec<Record<'sch>>, Error> {
         let table = self.registry.table(descriptor.resource)?;
         let own_attributes = Self::collection_attribute(collection, descriptor.keys.own);
@@ -288,14 +288,9 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
         let query_parameters = QueryParameters {
             filter: Some([(column, vec![In(attributes)])].into()),
             fields: fields
-                    .iter()
-                    .map(|(key, value)| {
-                        (
-                            *key,
-                            value.iter().map(|s| *s).collect(),
-                        )
-                    })
-                    .collect(),
+                .iter()
+                .map(|(key, value)| (*key, value.iter().map(|s| *s).collect()))
+                .collect(),
             ..QueryParameters::new(table.schema())
         };
 

@@ -1,3 +1,4 @@
+use crate::database::attributes::Identifier;
 use crate::database::schema::{IdentifierType, PrimaryKey};
 use crate::database::{
     adapters::SqliteAdapter,
@@ -12,7 +13,6 @@ use crate::{core::to_document, http_wrappers::Uri, routing::DefaultUriGenerator}
 use rusqlite::Connection;
 use serde_json::{Value, json};
 use std::error::Error;
-use crate::database::attributes::Identifier;
 
 static USERS_SCHEMA: TableSchema = TableSchema {
     name: "users",
@@ -415,12 +415,7 @@ fn record_document<'a: 'b, 'b>(
     let mut record = table.find(id, &query_parameters)?;
     let loader = DataLoader::new(registry);
     let included = loader.load_for_record(&mut record, &query_parameters)?;
-    let document = to_document(
-        &record,
-        included,
-        &uri,
-        &DefaultUriGenerator::default(),
-    )?;
+    let document = to_document(&record, included, &uri, &DefaultUriGenerator::default())?;
 
     Ok(serde_json::to_value(&document)?)
 }
@@ -436,12 +431,7 @@ fn collection_document<'a: 'b, 'b>(
     let mut collection = table.query(&query_parameters)?;
     let loader = DataLoader::new(registry);
     let included = loader.load_for_collection(&mut collection, &query_parameters)?;
-    let document = to_document(
-        &collection,
-        included,
-        &uri,
-        &DefaultUriGenerator::default(),
-    )?;
+    let document = to_document(&collection, included, &uri, &DefaultUriGenerator::default())?;
 
     Ok(serde_json::to_value(&document)?)
 }
@@ -451,7 +441,12 @@ fn test_sparse_fieldset_only_username() -> Result<(), Box<dyn Error>> {
     with_database(|registry| {
         seed_database(&registry)?;
 
-        let doc = record_document(registry, "users", Identifier::Integer(1), "/users/1?fields[users]=username")?;
+        let doc = record_document(
+            registry,
+            "users",
+            Identifier::Integer(1),
+            "/users/1?fields[users]=username",
+        )?;
 
         let data = &doc["data"];
         assert_eq!(data["type"], "users");
@@ -476,7 +471,12 @@ fn test_single_level_include_posts() -> Result<(), Box<dyn Error>> {
     with_database(|registry| {
         seed_database(&registry)?;
 
-        let doc = record_document(&registry, "users", Identifier::Integer(1), "/users/1?include=posts")?;
+        let doc = record_document(
+            &registry,
+            "users",
+            Identifier::Integer(1),
+            "/users/1?include=posts",
+        )?;
 
         let data = &doc["data"];
         assert!(
@@ -786,7 +786,12 @@ fn test_belongs_to_relationship_in_included() -> Result<(), Box<dyn Error>> {
     with_database(|registry| {
         seed_database(&registry)?;
 
-        let doc = record_document(&registry, "users", Identifier::Integer(1), "/users/1?include=posts.author")?;
+        let doc = record_document(
+            &registry,
+            "users",
+            Identifier::Integer(1),
+            "/users/1?include=posts.author",
+        )?;
 
         let included = doc["included"]
             .as_array()
@@ -814,7 +819,12 @@ fn test_nested_belongs_to_chain() -> Result<(), Box<dyn Error>> {
     with_database(|registry| {
         seed_database(&registry)?;
 
-        let doc = record_document(&registry, "comments", Identifier::Integer(9), "/comments/9?include=post.author")?;
+        let doc = record_document(
+            &registry,
+            "comments",
+            Identifier::Integer(9),
+            "/comments/9?include=post.author",
+        )?;
 
         let data = &doc["data"];
         assert_eq!(data["id"], "9");
