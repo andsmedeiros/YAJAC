@@ -475,7 +475,7 @@ mod tests {
     fn test_attribute_conversions() {
         let text = Attribute::Text("hello".to_string());
         let integer = Attribute::Integer(42);
-        let float = Attribute::Float(3.14);
+        let float = Attribute::Float(3.5);
         let boolean = Attribute::Boolean(true);
         let datetime = Attribute::DateTime(Utc::now());
         let null = Attribute::Null;
@@ -483,14 +483,14 @@ mod tests {
         // Test successful as_* conversions
         assert_eq!(text.as_string().unwrap(), "hello");
         assert_eq!(*integer.as_i64().unwrap(), 42);
-        assert_eq!(*float.as_f64().unwrap(), 3.14);
+        assert_eq!(*float.as_f64().unwrap(), 3.5);
         assert!(*boolean.as_bool().unwrap());
         assert!(datetime.as_datetime().is_ok());
 
         // Test successful to_* conversions
         assert_eq!(text.clone().to_string().unwrap(), "hello");
         assert_eq!(integer.clone().to_i64().unwrap(), 42);
-        assert_eq!(float.clone().to_f64().unwrap(), 3.14);
+        assert_eq!(float.clone().to_f64().unwrap(), 3.5);
         assert!(boolean.clone().to_bool().unwrap());
         assert!(datetime.clone().to_datetime().is_ok());
 
