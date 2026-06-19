@@ -3,29 +3,25 @@
 //! supported construction method.
 
 use super::error::Error;
-use crate::database::error::Error::{InvalidEncodingFailure, ParseParameterFailure, SchemaValidationFailure};
-use crate::http_wrappers::Uri;
-use regex::Regex;
-use std::{num::NonZeroU32, sync::LazyLock};
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::borrow::Cow;
-use urlencoding::decode;
 use crate::database::adapters::Adapter as AdapterInterface;
 use crate::database::attributes::Attribute;
+use crate::database::error::Error::{
+    InvalidEncodingFailure, ParseParameterFailure, SchemaValidationFailure,
+};
 use crate::database::registry::Registry;
 use crate::database::schema::{AttributeType, Relationship, TableSchema};
 use crate::database::table::Table;
+use crate::http_wrappers::Uri;
+use regex::Regex;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
+use std::{num::NonZeroU32, sync::LazyLock};
+use urlencoding::decode;
 
 mod regex_builder {
     /// Generic pattern for identifiers -- model names, field names and relationship names
     pub(crate) static ID: &'static str = r"[a-zA-Z](?:[-_]*[a-zA-Z0-9]+)*";
 }
-
-/// Matches exactly a single identifier
-static ID_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    use regex_builder::ID;
-    Regex::new(format!(r"\A{ID}\z").as_str()).unwrap()
-});
 
 /// Matches exactly a sort directive: a single identifier with an optional plus or minus sign,
 /// indicating sort direction
@@ -51,12 +47,6 @@ static FILTER_REGEX: LazyLock<Regex> =
 static FAMILY_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     use regex_builder::ID;
     Regex::new(format!(r"\A(filter|page|fields)\[({ID})]\z").as_str()).unwrap()
-});
-
-/// Matches a possibly nested include parameter in the form `relationship.another.nested`
-static INCLUDE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    use regex_builder::ID;
-    Regex::new(format!(r"\A(?:{ID}\.)*{ID}\z").as_str()).unwrap()
 });
 
 /// Enumerates possible sort directions: ascending and descending
@@ -129,7 +119,7 @@ impl Default for PageParameters {
 
 /// Auxiliary struct to collect model schemas that should be loaded for all the requested
 /// information to be served
-pub type ModelsToLoad<'sch> = HashMap<&'sch str, &'sch TableSchema<'sch>>;
+pub type ModelsToSerialise<'sch> = HashMap<&'sch str, &'sch TableSchema<'sch>>;
 
 /// Stores all possible query parameters received.
 /// Those parameters will be used later to determine which and how data should be loaded.
@@ -144,11 +134,11 @@ pub struct QueryParameters<'sch, 'req> {
     pub page: Option<PageParameters>,
 }
 
-impl<'sch, 'req> QueryParameters<'sch, 'req>  {
+impl<'sch, 'req> QueryParameters<'sch, 'req> {
     pub fn new(schema: &'sch TableSchema<'sch>) -> Self {
         Self {
             schema,
-            fields: FieldsParameters::new(),
+            fields: FieldsParameters::from_iter([(schema.name, schema.fields().collect())]),
             include: IncludeParameters::new(),
             filter: None,
             search: None,
@@ -164,21 +154,31 @@ impl<'sch, 'req> QueryParameters<'sch, 'req>  {
     pub fn parse<'reg, Adapter: AdapterInterface>(
         uri: &'req Uri,
         schema: &'sch TableSchema<'sch>,
-        registry: &'reg Registry<'sch, Adapter>
+        registry: &'reg Registry<'sch, Adapter>,
     ) -> Result<QueryParameters<'sch, 'req>, Error> {
-        let mut query_parameters = QueryParameters::new(schema);
-
         if let Some(query) = uri.query() {
+            let mut query_parameters = Self {
+                schema,
+                fields: FieldsParameters::new(),
+                include: IncludeParameters::new(),
+                filter: None,
+                search: None,
+                sort: None,
+                page: None,
+            };
             query_parameters.parse_query(query, schema, registry)?;
-        } else {
-            query_parameters.fields.insert(schema.name, HashSet::from_iter(schema.fields()));
-        }
 
-        Ok(query_parameters)
+            Ok(query_parameters)
+        } else {
+            Ok(QueryParameters::new(schema))
+        }
     }
 
-
-    pub fn derive<'reg, Adapter: AdapterInterface>(&self, relationship: &str, registry: &'reg Registry<'sch, Adapter>) -> Result<Self, Error> {
+    pub fn derive<'reg, Adapter: AdapterInterface>(
+        &self,
+        relationship: &str,
+        registry: &'reg Registry<'sch, Adapter>,
+    ) -> Result<Self, Error> {
         let include =
             self.include
                 .get(relationship)
@@ -214,16 +214,61 @@ impl<'sch, 'req> QueryParameters<'sch, 'req>  {
         self.is_requested(relationship) || self.is_included(relationship)
     }
 
-    pub fn relationships_to_load(&self)
-        -> impl Iterator<Item = &'sch (&'sch str, Relationship<'sch>)>
-    {
+    pub fn relationships_to_load(
+        &self,
+    ) -> impl Iterator<Item = &'sch (&'sch str, Relationship<'sch>)> {
         self.schema
             .relationships
             .iter()
             .filter(|(relationship, _)| self.should_load(*relationship))
     }
 
-    fn parse_fields<'reg, Adapter: AdapterInterface>(&mut self, model: &'req str, fields: &'req str, registry: &'reg Registry<'sch, Adapter>) -> Result<(), Error> {
+    /// Completes `self.fields` so that every model the request will touch can be queried.
+    ///
+    /// Runs in two phases over the *serialised* models -- the primary resource plus everything
+    /// reachable through `include`, which are exactly the contexts the data loader recurses into:
+    ///
+    /// 1. each serialised model that the request did not pin explicitly receives its full default
+    ///    fieldset, so included resources are presented in full;
+    /// 2. for every `HasOne`/`HasMany` out of a serialised model, the join key (`keys.related`) is
+    ///    forced into the *related* model's fieldset -- creating a minimal, join-key-only entry for
+    ///    link-only targets. This key lives on a table the query builder never sees on its own (it
+    ///    is scoped to a single schema), so it has to be planted here. `BelongsTo` needs nothing:
+    ///    its key (`keys.own`) sits on the owning table and the builder already emits it when it
+    ///    expands the relationship name, and the related side is that table's primary key, which is
+    ///    always selected.
+    ///
+    /// Because the keys are forced for every relationship regardless of whether it ends up loaded,
+    /// no `should_load`/include-context bookkeeping is needed here.
+    fn discover_fields_for_remaining_models(
+        &mut self,
+        models_to_serialise: ModelsToSerialise<'sch>,
+    ) {
+        for (&model, &schema) in &models_to_serialise {
+            self.fields
+                .entry(model)
+                .or_insert_with(|| schema.fields().collect());
+        }
+
+        for (_, schema) in models_to_serialise {
+            for (_, relationship) in schema.relationships {
+                use Relationship::*;
+                if let HasOne(related) | HasMany(related) = relationship {
+                    self.fields
+                        .entry(related.resource)
+                        .or_default()
+                        .insert(related.keys.related);
+                }
+            }
+        }
+    }
+
+    fn parse_fields<'reg, Adapter: AdapterInterface>(
+        &mut self,
+        model: &'req str,
+        fields: &'req str,
+        registry: &'reg Registry<'sch, Adapter>,
+    ) -> Result<(), Error> {
         if fields.is_empty() {
             return Ok(());
         }
@@ -247,10 +292,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req>  {
             .collect::<Result<Vec<_>, Error>>()?;
 
         for field in model_fields {
-            self.fields
-                .entry(schema.name)
-                .or_insert(HashSet::new())
-                .insert(field);
+            self.fields.entry(schema.name).or_default().insert(field);
         }
 
         Ok(())
@@ -264,17 +306,24 @@ impl<'sch, 'req> QueryParameters<'sch, 'req>  {
         Attribute::parse(&value, *kind)
     }
 
-    fn parse_attribute_set(value: &'req str, kind: &'sch AttributeType) -> Result<HashSet<Attribute>, Error> {
+    fn parse_attribute_set(
+        value: &'req str,
+        kind: &'sch AttributeType,
+    ) -> Result<HashSet<Attribute>, Error> {
         value
             .split(",")
             .map(|value| Self::parse_attribute(value, kind))
             .collect()
     }
 
-    fn parse_filter(&mut self, attribute: &'req str, entries: &'req str, schema: &'sch TableSchema)
-        -> Result<(), Error>
-    {
-        let (attribute, kind) = schema.attributes
+    fn parse_filter(
+        &mut self,
+        attribute: &'req str,
+        entries: &'req str,
+        schema: &'sch TableSchema,
+    ) -> Result<(), Error> {
+        let (attribute, kind) = schema
+            .attributes
             .iter()
             .find(|(name, _)| *name == attribute)
             .ok_or_else(|| SchemaValidationFailure {
@@ -342,52 +391,59 @@ impl<'sch, 'req> QueryParameters<'sch, 'req>  {
         include: &str,
         models: &mut HashMap<&'sch str, &'sch TableSchema<'sch>>,
         schema: &'sch TableSchema<'sch>,
-        registry: &'reg Registry<'sch, Adapter>
+        registry: &'reg Registry<'sch, Adapter>,
     ) -> Result<(), Error> {
         if !include.is_empty() {
-            let mut relationship;
-            let mut rest = Some(include);
-            let mut scope = &mut self.include;
-            let mut schema = schema;
+            for include in include.split(",") {
+                let mut relationship;
+                let mut rest = Some(include);
+                let mut scope = &mut self.include;
+                let mut schema = schema;
 
-            while let Some(path) = rest {
-                (relationship, rest) = match path.split_once(".") {
-                    Some((relationship, rest)) => (relationship, Some(rest)),
-                    None => (path, None),
-                };
+                while let Some(path) = rest {
+                    (relationship, rest) = match path.split_once(".") {
+                        Some((relationship, rest)) => (relationship, Some(rest)),
+                        None => (path, None),
+                    };
 
-                let (relationship, descriptor) = schema
-                    .relationships
-                    .iter()
-                    .find(|(r, _)| relationship == *r)
-                    .ok_or_else(|| Error::SchemaValidationFailure {
-                        schema: schema.name.to_string(),
-                        attribute: relationship.to_string(),
-                        message: "Invalid relationship requested".to_string(),
-                    })?;
+                    let (relationship, descriptor) = schema
+                        .relationships
+                        .iter()
+                        .find(|(r, _)| relationship == *r)
+                        .ok_or_else(|| Error::SchemaValidationFailure {
+                            schema: schema.name.to_string(),
+                            attribute: relationship.to_string(),
+                            message: "Invalid relationship requested".to_string(),
+                        })?;
 
-                schema = registry
-                    .table(descriptor.related_resource().resource)?
-                    .schema();
+                    schema = registry
+                        .table(descriptor.related_resource().resource)?
+                        .schema();
 
-                models.insert(schema.name, schema);
+                    models.insert(schema.name, schema);
 
-                scope = &mut scope
-                    .entry(relationship)
-                    .or_insert(IncludeNode {
-                        relationship,
-                        descriptor,
-                        children: HashMap::new(),
-                    })
-                    .children;
+                    scope = &mut scope
+                        .entry(relationship)
+                        .or_insert(IncludeNode {
+                            relationship,
+                            descriptor,
+                            children: HashMap::new(),
+                        })
+                        .children;
+                }
             }
         }
 
         Ok(())
     }
 
-    fn parse_sort(&mut self, entries: &'req str,schema: &'sch TableSchema<'sch>) -> Result<(), Error> {
-        let attributes = schema.attributes
+    fn parse_sort(
+        &mut self,
+        entries: &'req str,
+        schema: &'sch TableSchema<'sch>,
+    ) -> Result<(), Error> {
+        let attributes = schema
+            .attributes
             .iter()
             .map(|(name, _)| *name)
             .collect::<HashSet<_>>();
@@ -398,13 +454,14 @@ impl<'sch, 'req> QueryParameters<'sch, 'req>  {
                 .map(|entry| {
                     let result = SORT_REGEX.captures(entry).map(|c| c.extract());
                     if let Some((_, [sign, attribute])) = result {
-                        let attribute = attributes.get(attribute)
-                            .ok_or_else(|| SchemaValidationFailure {
-                                schema: schema.name.to_string(),
-                                attribute: attribute.to_string(),
-                                message: "Invalid attribute to sort".to_string(),
-
-                            })?;
+                        let attribute =
+                            attributes
+                                .get(attribute)
+                                .ok_or_else(|| SchemaValidationFailure {
+                                    schema: schema.name.to_string(),
+                                    attribute: attribute.to_string(),
+                                    message: "Invalid attribute to sort".to_string(),
+                                })?;
 
                         Ok(SortingAttribute {
                             attribute,
@@ -453,9 +510,9 @@ impl<'sch, 'req> QueryParameters<'sch, 'req>  {
         &mut self,
         query: &'req str,
         schema: &'sch TableSchema<'sch>,
-        registry: &'reg Registry<'sch, Adapter>
+        registry: &'reg Registry<'sch, Adapter>,
     ) -> Result<(), Error> {
-        let mut models_to_load = HashMap::new();
+        let mut models_to_serialise = HashMap::from_iter([(schema.name, schema)]);
 
         for (entry, split) in query
             .split('&')
@@ -467,7 +524,9 @@ impl<'sch, 'req> QueryParameters<'sch, 'req>  {
                 message: format!("Invalid query entry: '{entry}'"),
             })? {
                 ("search", value) => self.parse_search(value)?,
-                ("include", include) => self.parse_include(include, &mut models_to_load, schema, registry)?,
+                ("include", include) => {
+                    self.parse_include(include, &mut models_to_serialise, schema, registry)?
+                }
                 ("sort", sort) => self.parse_sort(sort, schema)?,
                 (key, value) => match FAMILY_REGEX.captures(key).map(|c| c.extract()) {
                     Some((_, ["fields", model])) => self.parse_fields(model, value, registry)?,
@@ -484,6 +543,8 @@ impl<'sch, 'req> QueryParameters<'sch, 'req>  {
                 },
             }
         }
+
+        self.discover_fields_for_remaining_models(models_to_serialise);
 
         Ok(())
     }
