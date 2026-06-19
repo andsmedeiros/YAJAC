@@ -1,4 +1,5 @@
 use super::error::Error;
+use crate::database::schema::TableSchema;
 use crate::{
     database::{
         adapters::Adapter as AdapterInterface, query_parameters::QueryParameters,
@@ -7,37 +8,48 @@ use crate::{
     http_wrappers::Uri,
     routing::RouteParameters,
 };
-use crate::database::schema::TableSchema;
 
-#[derive(Debug, Clone)]
 pub struct Parameters<'sch, 'req> {
-    pub route: RouteParameters,
-    pub query: QueryParameters<'sch, 'req>,
+    route: RouteParameters,
+    query: std::cell::OnceCell<QueryParameters<'sch, 'req>>,
 }
 
-pub struct Context<'sch, 'reg, 'req, Adapter: AdapterInterface> {
-    pub schema: &'sch TableSchema<'sch>,
-    pub registry: &'reg Registry<'sch, Adapter>,
-    pub uri: & 'req Uri,
+pub struct Context<'sch, 'req, Adapter: AdapterInterface> {
+    pub registry: &'sch Registry<'sch, Adapter>,
+    pub uri: &'req Uri,
     pub parameters: Parameters<'sch, 'req>,
 }
 
-impl<'sch, 'reg, 'req, Adapter: AdapterInterface> Context<'sch, 'reg, 'req, Adapter> {
-    pub fn try_new(
-        schema: &'sch TableSchema<'sch>,
-        registry: &'reg Registry<'sch, Adapter>,
+impl<'sch, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
+    pub fn new(
+        registry: &'sch Registry<'sch, Adapter>,
         uri: &'req Uri,
         route_parameters: RouteParameters,
-    ) -> Result<Self, Error> {
-        let parameters = Parameters {
-            query: QueryParameters::parse(uri, schema, registry)?,
-            route: route_parameters,
-        };
-        Ok(Context {
-            schema,
+    ) -> Self {
+        Self {
             registry,
             uri,
-            parameters,
-        })
+            parameters: Parameters {
+                route: route_parameters,
+                query: Default::default(),
+            },
+        }
+    }
+
+    pub fn route_parameters(&self) -> &RouteParameters {
+        &self.parameters.route
+    }
+
+    pub fn query_parameters(
+        &self,
+        schema: &'sch TableSchema<'sch>,
+    ) -> Result<&QueryParameters<'sch, 'req>, Error> {
+        match self.parameters.query.get() {
+            Some(parameters) => Ok(parameters),
+            None => {
+                let parameters = QueryParameters::parse(self.uri, schema, self.registry)?;
+                Ok(self.parameters.query.get_or_init(|| parameters))
+            }
+        }
     }
 }

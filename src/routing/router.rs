@@ -3,30 +3,33 @@ use super::{
     controller::{ReadOnlyResourceController, ResourceController},
     default_response,
 };
-use crate::database::{adapters::Adapter as AdapterInterface, registry::Registry};
-use http::{Method, Response, StatusCode};
-use log::debug;
+use crate::{
+    database::{adapters::Adapter as AdapterInterface, registry::Registry},
+    http_wrappers::{StatusCode, Uri},
+};
+use http::{Method, Response};
+use log::{debug, error};
 use serde_json::{Value, json};
 use std::mem;
 
-pub trait Handler<'a, Adapter: AdapterInterface + 'a>:
-    Fn(Request, Context<'a, Adapter>) -> Result + Sync + Send + 'a
+pub trait Handler<'sch, Adapter: AdapterInterface>:
+    for<'req> Fn(Request, Context<'sch, 'req, Adapter>) -> Result + Sync + Send + 'sch
 {
 }
 
-impl<'a, T: 'a, Adapter: AdapterInterface + 'a> Handler<'a, Adapter> for T where
-    T: Fn(Request, Context<Adapter>) -> Result + Sync + Send
+impl<'sch, T, Adapter: AdapterInterface> Handler<'sch, Adapter> for T where
+    T: for<'req> Fn(Request, Context<'sch, 'req, Adapter>) -> Result + Sync + Send + 'sch
 {
 }
 
-struct Route<'a, Adapter: AdapterInterface + 'a> {
+struct Route<'sch, Adapter: AdapterInterface> {
     method: Method,
     path: Vec<String>,
-    handler: Box<dyn Handler<'a, Adapter>>,
+    handler: Box<dyn Handler<'sch, Adapter>>,
 }
 
-impl<'a, Adapter: AdapterInterface + 'a> Route<'a, Adapter> {
-    fn new(method: Method, path: Vec<String>, handler: impl Handler<'a, Adapter>) -> Self {
+impl<'sch, Adapter: AdapterInterface + 'sch> Route<'sch, Adapter> {
+    fn new(method: Method, path: Vec<String>, handler: impl Handler<'sch, Adapter>) -> Self {
         Route {
             method,
             path,
@@ -35,15 +38,14 @@ impl<'a, Adapter: AdapterInterface + 'a> Route<'a, Adapter> {
     }
 
     fn matches(&self, method: &Method, path_segments: &[&str]) -> Option<RouteParameters> {
-        if &self.method != method || self.path.len() != path_segments.len() {
+        if self.method != method || self.path.len() != path_segments.len() {
             return None;
         }
 
         let mut params = RouteParameters::new();
-        for (segment, path_segment) in self.path.iter().zip(path_segments) {
-            if segment.starts_with(':') {
-                let param_name = &segment[1..];
-                params.insert(param_name.to_string(), path_segment.clone());
+        for (segment, &path_segment) in self.path.iter().zip(path_segments) {
+            if let Some(param_name) = segment.strip_prefix(':') {
+                params.insert(param_name, path_segment);
             } else if segment != path_segment {
                 return None;
             }
@@ -52,60 +54,88 @@ impl<'a, Adapter: AdapterInterface + 'a> Route<'a, Adapter> {
     }
 }
 
-pub struct Router<'a, Adapter: AdapterInterface> {
-    routes: Vec<Route<'a, Adapter>>,
+pub struct Router<'sch, Adapter: AdapterInterface> {
+    routes: Vec<Route<'sch, Adapter>>,
 }
 
-impl<'a, Adapter: AdapterInterface + 'a> Router<'a, Adapter> {
-    pub fn handle(&self, database: &'a Registry<'a, Adapter>, request: Request) -> Response<Value> {
-        let uri = request.uri().clone();
-        let path_segments: Vec<&str> = uri
-            .path()
-            .split('/')
-            .filter(|s| !s.is_empty())
-            .collect();
+impl<'sch, Adapter: AdapterInterface> Router<'sch, Adapter> {
+    pub fn handle(
+        &self,
+        database: &'sch Registry<'sch, Adapter>,
+        request: Request,
+    ) -> Response<Value> {
+        let uri: Uri = request.uri().clone().into();
+        let method = request.method().clone();
+        let path_segments: Vec<&str> = uri.path().split('/').filter(|s| !s.is_empty()).collect();
 
-        for route in &self.routes {
-            debug!("Matching against {} {}", route.method, route.path.join(""));
-            if let Some(parameters) = route.matches(request.method(), &path_segments) {
+        self.routes
+            .iter()
+            .find_map(|route| {
+                debug!("Matching against {} {}", route.method, route.path.join(""));
+                route
+                    .matches(&method, &path_segments)
+                    .map(|parameters| (route, parameters))
+            })
+            .and_then(|(route, parameters)| {
                 debug!("Matched!");
-
-                return Context::try_new(database, uri.into(), parameters)
-                    .and_then(|context| (route.handler)(request, context))
-                    .unwrap_or_else(|error| {
+                let context = Context::new(database, &uri, parameters);
+                (route.handler)(request, context).into()
+            })
+            .unwrap_or_else(|| {
+                default_response()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(json!({
+                        "status": StatusCode::NOT_FOUND,
+                        "code": "ResourceNotFound",
+                        "title": format!(
+                            "{} {}: Resource not found",
+                            method,
+                            uri
+                        )
+                    }))
+                    .map_err(Into::into)
+            })
+            .or_else(|error| {
+                serde_json::to_value(&error)
+                    .map_err(|error| {
+                        error!("Failed to serialise error to json: {:?}", error);
+                    })
+                    .and_then(|value| {
                         default_response()
                             .status(error.status_code())
-                            .body(serde_json::to_value(&error).unwrap())
-                            .expect("Failed to construct error response")
-                    });
-            }
-        }
-
-        default_response()
-            .status(StatusCode::NOT_FOUND)
-            .body(json!(format!(
-                "{} {}: Resource not found",
-                request.method(),
-                request.uri().path()
-            )))
-            .expect("Failed to construct not found response")
+                            .body(value)
+                            .map_err(|error| {
+                                error!("Failed to construct error response: {:?}", error);
+                            })
+                    })
+            })
+            .or_else(|_| {
+                default_response()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(json!({
+                        "status": StatusCode::INTERNAL_SERVER_ERROR,
+                        "code": "ResponseConstructionError",
+                        "title": "The server failed to construct an error response"
+                    }))
+            })
+            .map_err(|error| {
+                error!("Failed to construct fallback error response: {:?}", error);
+            })
+            .expect("Failed to construct response")
     }
 }
 
-pub struct RouterBuilder<'a, Adapter: AdapterInterface> {
+pub struct RouterBuilder<'sch, Adapter: AdapterInterface> {
     prefix: Vec<String>,
-    routes: Vec<Route<'a, Adapter>>,
+    routes: Vec<Route<'sch, Adapter>>,
 }
 
-impl<'a, Adapter: AdapterInterface + 'a> RouterBuilder<'a, Adapter> {
+impl<'sch, Adapter: AdapterInterface> RouterBuilder<'sch, Adapter> {
     pub fn new() -> Self {
-        RouterBuilder {
-            prefix: Vec::new(),
-            routes: Vec::new(),
-        }
+        Self::default()
     }
 
-    pub fn build(&mut self) -> Router<'a, Adapter> {
+    pub fn build(&mut self) -> Router<'sch, Adapter> {
         Router {
             routes: mem::take(&mut self.routes),
         }
@@ -129,23 +159,27 @@ impl<'a, Adapter: AdapterInterface + 'a> RouterBuilder<'a, Adapter> {
         self
     }
 
-    pub fn get(&mut self, path_segment: &str, handler: impl Handler<'a, Adapter>) -> &mut Self {
+    pub fn get(&mut self, path_segment: &str, handler: impl Handler<'sch, Adapter>) -> &mut Self {
         self.add_route(Method::GET, path_segment, handler)
     }
 
-    pub fn post(&mut self, path_segment: &str, handler: impl Handler<'a, Adapter>) -> &mut Self {
+    pub fn post(&mut self, path_segment: &str, handler: impl Handler<'sch, Adapter>) -> &mut Self {
         self.add_route(Method::POST, path_segment, handler)
     }
 
-    pub fn put(&mut self, path_segment: &str, handler: impl Handler<'a, Adapter>) -> &mut Self {
+    pub fn put(&mut self, path_segment: &str, handler: impl Handler<'sch, Adapter>) -> &mut Self {
         self.add_route(Method::PUT, path_segment, handler)
     }
 
-    pub fn patch(&mut self, path_segment: &str, handler: impl Handler<'a, Adapter>) -> &mut Self {
+    pub fn patch(&mut self, path_segment: &str, handler: impl Handler<'sch, Adapter>) -> &mut Self {
         self.add_route(Method::PATCH, path_segment, handler)
     }
 
-    pub fn delete(&mut self, path_segment: &str, handler: impl Handler<'a, Adapter>) -> &mut Self {
+    pub fn delete(
+        &mut self,
+        path_segment: &str,
+        handler: impl Handler<'sch, Adapter>,
+    ) -> &mut Self {
         self.add_route(Method::DELETE, path_segment, handler)
     }
 
@@ -153,7 +187,7 @@ impl<'a, Adapter: AdapterInterface + 'a> RouterBuilder<'a, Adapter> {
         &mut self,
         method: Method,
         path_segments: &str,
-        handler: impl Handler<'a, Adapter>,
+        handler: impl Handler<'sch, Adapter>,
     ) -> &mut Self {
         let route_path = [
             self.prefix.clone(),
@@ -171,7 +205,7 @@ impl<'a, Adapter: AdapterInterface + 'a> RouterBuilder<'a, Adapter> {
 
     pub fn read_only_resource<T>(&mut self, scope: &str) -> &mut Self
     where
-        T: ReadOnlyResourceController<'a, Adapter> + 'a,
+        T: ReadOnlyResourceController<'sch, Adapter> + 'sch,
     {
         self.scope(scope, |route| {
             route.get("/", T::index).get("/:id", T::show);
@@ -180,7 +214,7 @@ impl<'a, Adapter: AdapterInterface + 'a> RouterBuilder<'a, Adapter> {
 
     pub fn resource<T>(&mut self, scope: &str) -> &mut Self
     where
-        T: ResourceController<'a, Adapter> + 'a,
+        T: ResourceController<'sch, Adapter> + 'sch,
     {
         self.scope(scope, |route| {
             route
@@ -191,5 +225,14 @@ impl<'a, Adapter: AdapterInterface + 'a> RouterBuilder<'a, Adapter> {
                 .patch("/:id", T::update)
                 .delete("/:id", T::delete);
         })
+    }
+}
+
+impl<'sch, Adapter: AdapterInterface> Default for RouterBuilder<'sch, Adapter> {
+    fn default() -> Self {
+        Self {
+            prefix: Vec::new(),
+            routes: Vec::new(),
+        }
     }
 }

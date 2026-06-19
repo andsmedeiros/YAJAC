@@ -16,18 +16,19 @@ pub trait ReadOnlyResourceController<'sch, Adapter: AdapterInterface> {
     fn show(request: Request, context: Context<Adapter>) -> Result;
 }
 
-pub trait ResourceController<'sch, Adapter: AdapterInterface> {
+pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
     fn resource_schema() -> &'sch TableSchema<'sch>;
 
-    fn index(request: Request, context: Context<Adapter>) -> Result {
+    fn index<'req>(_: Request, context: Context<'sch, 'req, Adapter>) -> Result {
         let table = context.registry.table(Self::resource_schema().name)?;
-        let mut collection = table.query(&context.parameters.query)?;
+        let query_parameters = context.query_parameters(Self::resource_schema())?;
+        let mut collection = table.query(query_parameters)?;
         let included = DataLoader::new(context.registry)
-            .load_for_collection(&mut collection, &context.parameters.query)?;
+            .load_for_collection(&mut collection, query_parameters)?;
         let document = to_document(
             &collection,
             included,
-            &context.uri,
+            context.uri,
             &DefaultUriGenerator::default(),
         )?;
 
