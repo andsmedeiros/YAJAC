@@ -18,10 +18,7 @@ struct ExtractedAttributes {
 
 impl ExtractedAttributes {
     pub(super) fn to_placeholders(&self) -> Vec<String> {
-        (1..=self.fields.len())
-            .into_iter()
-            .map(|i| format!("?{i}"))
-            .collect()
+        (1..=self.fields.len()).map(|i| format!("?{i}")).collect()
     }
 }
 
@@ -33,7 +30,7 @@ pub struct QueryBuilder<'sch> {
 
 impl<'sch> QueryBuilder<'sch> {
     fn build_select_clause(&self, fields: &FieldsParameters, query: &mut Vec<String>) {
-        query.extend(["SELECT".to_string(), self.fields_for_model(fields)]);
+        query.extend(["SELECT".to_string(), self.fields_for_model(fields, true)]);
     }
 
     fn build_insert_clause(&self, attributes: Attributes, query: &mut Vec<String>) -> Bindings {
@@ -130,7 +127,8 @@ impl<'sch> QueryBuilder<'sch> {
 
         if let Some(filter) = filter {
             for (field, filters) in filter {
-                let kind = self.schema.attribute_type(&field)?;
+                let table = self.schema.name;
+                let kind = self.schema.attribute_type(field)?;
 
                 for filter in filters {
                     match filter {
@@ -146,7 +144,8 @@ impl<'sch> QueryBuilder<'sch> {
                                 .enumerate()
                                 .map(|(pos, _)| format!("?{}", i + pos))
                                 .join(",");
-                            filter_query.push(format!("{field} {operator} ({placeholders})"));
+                            filter_query
+                                .push(format!("{table}.{field} {operator} ({placeholders})",));
 
                             bindings.extend(values.clone());
                             i += values.len();
@@ -162,11 +161,11 @@ impl<'sch> QueryBuilder<'sch> {
                                         .to_string(),
                                 });
                             };
-                            filter_query.push(format!("{field} LIKE ?{i}"));
+                            filter_query.push(format!("{table}.{field} LIKE ?{i}"));
                             bindings.push(binding);
                             i += 1;
                         }
-                        filter @ _ => {
+                        filter => {
                             let (operator, binding) = match filter {
                                 Equal(value) => ("=", value),
                                 NotEqual(value) => ("!=", value),
@@ -177,7 +176,7 @@ impl<'sch> QueryBuilder<'sch> {
                                 _ => unreachable!(),
                             };
 
-                            filter_query.push(format!("{field} {operator} ?{i}"));
+                            filter_query.push(format!("{table}.{field} {operator} ?{i}"));
                             bindings.push(binding.clone());
                             i += 1;
                         }
@@ -204,7 +203,7 @@ impl<'sch> QueryBuilder<'sch> {
                     SortDirection::Ascending => "ASC",
                     SortDirection::Descending => "DESC",
                 };
-                sort_query.push(format!("{} {}", field, direction));
+                sort_query.push(format!("{}.{} {}", self.schema.name, field, direction));
             }
 
             query.push(sort_query.join(", ").to_string());
@@ -221,10 +220,15 @@ impl<'sch> QueryBuilder<'sch> {
     }
 
     fn build_returning_clause(&self, fields: &FieldsParameters, query: &mut Vec<String>) {
-        query.extend(["RETURNING".to_string(), self.fields_for_model(fields)]);
+        query.extend([
+            "RETURNING".to_string(),
+            self.fields_for_model(fields, false),
+        ]);
     }
 
-    fn fields_for_model(&self, fields: &FieldsParameters) -> String {
+    /// Renders the comma-separated column list for the given model, primary key first. When
+    /// `qualified` is set, each column is prefixed with the table name.
+    fn fields_for_model(&self, fields: &FieldsParameters, qualified: bool) -> String {
         let fields = fields
             .get(self.schema.name)
             .expect("Columns for all requested models should have been pre-loaded by the query parameters parser")
@@ -244,10 +248,15 @@ impl<'sch> QueryBuilder<'sch> {
                     .keys.own
             });
 
-        [self.schema.primary_key.name]
-            .into_iter()
-            .chain(fields)
-            .join(", ")
+        let columns = || [self.schema.primary_key.name].into_iter().chain(fields);
+
+        if qualified {
+            columns()
+                .map(|column| format!("{}.{}", self.schema.name, column))
+                .join(", ")
+        } else {
+            columns().join(", ")
+        }
     }
 
     fn extract_attributes(&self, attributes: Attributes) -> ExtractedAttributes {
@@ -331,518 +340,507 @@ impl<'sch> QueryBuilderInterface<'sch> for QueryBuilder<'sch> {
         )
     }
 }
-//
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use crate::database::schema::{IdentifierType, PrimaryKey};
-//     use crate::http_wrappers::Uri;
-//     use std::sync::LazyLock;
-//     use crate::database::adapters::SqliteAdapter;
-//     use crate::database::registry::Registry as DatabaseRegistry;
-//
-//     type Registry<'sch> = DatabaseRegistry<'sch, SqliteAdapter>;
-//
-//     fn mock_schema(text_index: bool) -> TableSchema<'static> {
-//         TableSchema {
-//             name: "my_table",
-//             primary_key: PrimaryKey {
-//                 name: "id",
-//                 kind: IdentifierType::Integer,
-//             },
-//             attributes: &[
-//                 ("id", AttributeType::Integer),
-//                 ("col1", AttributeType::Text),
-//                 ("col2", AttributeType::Text),
-//                 ("col3", AttributeType::DateTime),
-//             ],
-//             foreign_keys: &[],
-//             relationships: &[],
-//             text_index,
-//         }
-//     }
-//
-//     static MY_SCHEMA: LazyLock<TableSchema> = LazyLock::new(|| mock_schema(true));
-//     static MY_SCHEMA_NO_FTS: LazyLock<TableSchema> = LazyLock::new(|| mock_schema(false));
-//
-//     fn mock_uri(query: &str) -> Uri {
-//         format!("http://localhost:8000/resource?{}", query)
-//             .parse::<Uri>()
-//             .unwrap()
-//     }
-//
-//     fn parse_parameters<'sch, 'reg, 'req>(uri: &'req Uri, registry: &'reg Registry<'sch>) -> QueryParameters<'sch, 'req> {
-//         QueryParameters::parse(uri, &MY_SCHEMA, &registry).unwrap()
-//     }
-//
-//     #[test]
-//     fn test_select_all_fields() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let parameters = parse_parameters("");
-//         let (query, bindings) = builder.query(&parameters).unwrap();
-//
-//         assert_eq!(query, "SELECT * FROM my_table");
-//         assert!(bindings.is_empty());
-//     }
-//
-//     #[test]
-//     fn test_select_specific_fields() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let parameters = parse_parameters("fields[my_table]=col1,col2");
-//         let (query, bindings) = builder.query(&parameters).unwrap();
-//
-//         assert_eq!(query, "SELECT col1, col2 FROM my_table");
-//         assert!(bindings.is_empty());
-//     }
-//
-//     #[test]
-//     fn test_filter_single_condition() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let parameters = parse_parameters("filter[col1]=eq:value1");
-//         let (query, bindings) = builder.query(&parameters).unwrap();
-//
-//         assert_eq!(query, "SELECT * FROM my_table WHERE col1 = ?1");
-//         assert_eq!(bindings, vec![Attribute::Text("value1".to_string())]);
-//     }
-//
-//     #[test]
-//     fn test_filter_multiple_conditions() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let parameters = parse_parameters("filter[col1]=eq:value1&filter[col2]=neq:value2");
-//         let (query, bindings) = builder.query(&parameters).unwrap();
-//
-//         assert_eq!(
-//             query,
-//             "SELECT * FROM my_table WHERE col1 = ?1 AND col2 != ?2"
-//         );
-//         assert_eq!(
-//             bindings,
-//             vec![
-//                 Attribute::Text("value1".to_string()),
-//                 Attribute::Text("value2".to_string())
-//             ]
-//         );
-//     }
-//
-//     #[test]
-//     fn test_filter_with_like_operator() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let parameters = parse_parameters("filter[col1]=like:keyword");
-//         let (query, bindings) = builder.query(&parameters).unwrap();
-//
-//         assert_eq!(query, "SELECT * FROM my_table WHERE col1 LIKE ?1");
-//         assert_eq!(bindings, vec![Attribute::Text("%keyword%".to_string())]);
-//     }
-//
-//     #[test]
-//     fn test_sort_single_field() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let parameters = parse_parameters("sort=-col1");
-//         let (query, bindings) = builder.query(&parameters).unwrap();
-//
-//         assert_eq!(query, "SELECT * FROM my_table ORDER BY col1 DESC");
-//         assert!(bindings.is_empty());
-//     }
-//
-//     #[test]
-//     fn test_sort_multiple_fields() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let parameters = parse_parameters("sort=-col1,col2");
-//         let (query, bindings) = builder.query(&parameters).unwrap();
-//
-//         assert_eq!(query, "SELECT * FROM my_table ORDER BY col1 DESC, col2 ASC");
-//         assert!(bindings.is_empty());
-//     }
-//
-//     #[test]
-//     fn test_pagination() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let parameters = parse_parameters("page[number]=2&page[size]=10");
-//         let (query, bindings) = builder.query(&parameters).unwrap();
-//
-//         assert_eq!(query, "SELECT * FROM my_table LIMIT 10 OFFSET 10");
-//         assert!(bindings.is_empty());
-//     }
-//
-//     #[test]
-//     fn test_complex_query_with_all_features() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let parameters = parse_parameters(
-//             "\
-//             fields[my_table]=col1,col2&\
-//             filter[col1]=eq:value1&\
-//             sort=-col1&\
-//             page[number]=1&\
-//             page[size]=5&\
-//             search=find-me\
-//             ",
-//         );
-//         let (query, bindings) = builder.query(&parameters).unwrap();
-//
-//         assert_eq!(
-//             query,
-//             "\
-//             SELECT col1, col2 FROM my_table \
-//             JOIN my_table_fts fts ON my_table.id = fts.rowid \
-//             WHERE my_table_fts MATCH ?1 AND col1 = ?2 \
-//             ORDER BY col1 DESC \
-//             LIMIT 5 OFFSET 0\
-//             "
-//         );
-//         assert_eq!(
-//             bindings,
-//             vec![
-//                 Attribute::Text("find-me".to_string()),
-//                 Attribute::Text("value1".to_string())
-//             ]
-//         );
-//     }
-//
-//     // Find Tests
-//     #[test]
-//     fn test_find_with_all_fields() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let parameters = parse_parameters("");
-//         let (query, bindings) = builder.find(1, &parameters).unwrap();
-//
-//         assert_eq!(query, "SELECT * FROM my_table WHERE id = ?1");
-//         assert_eq!(bindings, vec![Attribute::Integer(1)]);
-//     }
-//
-//     #[test]
-//     fn test_find_with_specific_fields() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let parameters = parse_parameters("fields[my_table]=col1,col2");
-//         let (query, bindings) = builder.find(1, &parameters).unwrap();
-//
-//         assert_eq!(query, "SELECT col1, col2 FROM my_table WHERE id = ?1");
-//         assert_eq!(bindings, vec![Attribute::Integer(1)]);
-//     }
-//
-//     // Insert Tests
-//     #[test]
-//     fn test_insert_single_field() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let attributes =
-//             Attributes::from([("col1".to_string(), Attribute::Text("value1".to_string()))]);
-//         let parameters = parse_parameters("");
-//         let (query, bindings) = builder.insert(attributes, &parameters).unwrap();
-//
-//         assert_eq!(query, "INSERT INTO my_table(col1) VALUES (?1) RETURNING *");
-//         assert_eq!(bindings, vec![Attribute::Text("value1".to_string())]);
-//     }
-//
-//     #[test]
-//     fn test_insert_multiple_fields() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let attributes = Attributes::from([
-//             ("col1".to_string(), Attribute::Text("value1".to_string())),
-//             ("col2".to_string(), Attribute::Integer(42)),
-//         ]);
-//         let parameters = parse_parameters("");
-//         let (query, bindings) = builder.insert(attributes, &parameters).unwrap();
-//
-//         assert_eq!(
-//             query,
-//             "INSERT INTO my_table(col1, col2) VALUES (?1, ?2) RETURNING *"
-//         );
-//         assert_eq!(
-//             bindings,
-//             vec![
-//                 Attribute::Text("value1".to_string()),
-//                 Attribute::Integer(42)
-//             ]
-//         );
-//     }
-//
-//     #[test]
-//     fn test_insert_with_returning_fields() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let attributes =
-//             Attributes::from([("col1".to_string(), Attribute::Text("value1".to_string()))]);
-//         let parameters = parse_parameters("fields[my_table]=id,col1");
-//         let (query, bindings) = builder.insert(attributes, &parameters).unwrap();
-//
-//         assert_eq!(
-//             query,
-//             "INSERT INTO my_table(col1) VALUES (?1) RETURNING id, col1"
-//         );
-//         assert_eq!(bindings, vec![Attribute::Text("value1".to_string())]);
-//     }
-//
-//     #[test]
-//     fn test_insert_with_empty_attributes() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let attributes = Attributes::new();
-//         let parameters = parse_parameters("");
-//         let (query, bindings) = builder.insert(attributes, &parameters).unwrap();
-//
-//         assert_eq!(query, "INSERT INTO my_table() VALUES () RETURNING *");
-//         assert!(bindings.is_empty());
-//     }
-//
-//     // Update Tests
-//     #[test]
-//     fn test_update_single_field() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let attributes =
-//             Attributes::from([("col1".to_string(), Attribute::Text("new_value".to_string()))]);
-//         let parameters = parse_parameters("");
-//         let (query, bindings) = builder.update(1, attributes, &parameters).unwrap();
-//
-//         assert_eq!(
-//             query,
-//             "UPDATE my_table SET col1 = ?1 WHERE id = ?2 RETURNING *"
-//         );
-//         assert_eq!(
-//             bindings,
-//             vec![
-//                 Attribute::Text("new_value".to_string()),
-//                 Attribute::Integer(1)
-//             ]
-//         );
-//     }
-//
-//     #[test]
-//     fn test_update_multiple_fields() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let attributes = Attributes::from([
-//             ("col1".to_string(), Attribute::Text("new_value".to_string())),
-//             ("col2".to_string(), Attribute::Integer(42)),
-//         ]);
-//         let parameters = parse_parameters("");
-//         let (query, bindings) = builder.update(1, attributes, &parameters).unwrap();
-//
-//         assert_eq!(
-//             query,
-//             "UPDATE my_table SET col1 = ?1, col2 = ?2 WHERE id = ?3 RETURNING *"
-//         );
-//         assert_eq!(
-//             bindings,
-//             vec![
-//                 Attribute::Text("new_value".to_string()),
-//                 Attribute::Integer(42),
-//                 Attribute::Integer(1)
-//             ]
-//         );
-//     }
-//
-//     #[test]
-//     fn test_update_with_returning_fields() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let attributes =
-//             Attributes::from([("col1".to_string(), Attribute::Text("new_value".to_string()))]);
-//         let parameters = parse_parameters("fields[my_table]=id,col1");
-//         let (query, bindings) = builder.update(1, attributes, &parameters).unwrap();
-//
-//         assert_eq!(
-//             query,
-//             "UPDATE my_table SET col1 = ?1 WHERE id = ?2 RETURNING id, col1"
-//         );
-//         assert_eq!(
-//             bindings,
-//             vec![
-//                 Attribute::Text("new_value".to_string()),
-//                 Attribute::Integer(1)
-//             ]
-//         );
-//     }
-//
-//     #[test]
-//     fn test_update_with_empty_attributes() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let attributes = Attributes::new();
-//         let parameters = parse_parameters("");
-//         let (query, bindings) = builder.update(1, attributes, &parameters).unwrap();
-//
-//         assert_eq!(query, "UPDATE my_table WHERE id = ?1 RETURNING *");
-//         assert_eq!(bindings, vec![Attribute::Integer(1)]);
-//     }
-//
-//     // Delete Tests
-//     #[test]
-//     fn test_delete() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let (query, bindings) = builder.delete(1);
-//
-//         assert_eq!(query, "DELETE FROM my_table WHERE id = ?1");
-//         assert_eq!(bindings, vec![Attribute::Integer(1)]);
-//     }
-//
-//     // ExtractedAttributes Tests
-//     #[test]
-//     fn test_extracted_attributes_placeholders() {
-//         let extracted = ExtractedAttributes {
-//             fields: vec!["col1".to_string(), "col2".to_string()],
-//             values: vec![
-//                 Attribute::Text("value1".to_string()),
-//                 Attribute::Integer(42),
-//             ],
-//         };
-//
-//         let placeholders = extracted.to_placeholders();
-//         assert_eq!(placeholders, vec!["?1", "?2"]);
-//     }
-//
-//     #[test]
-//     fn test_placeholders_with_empty_fields() {
-//         let extracted = ExtractedAttributes {
-//             fields: vec![],
-//             values: vec![],
-//         };
-//
-//         let placeholders = extracted.to_placeholders();
-//         assert!(placeholders.is_empty());
-//     }
-//
-//     // Additional Tests for Untested Functionality
-//     #[test]
-//     fn test_filter_with_invalid_attribute() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let parameters = parse_parameters("filter[invalid_col]=eq:value1");
-//         let result = builder.query(&parameters);
-//
-//         assert!(result.is_err());
-//     }
-//
-//     #[test]
-//     fn test_insert_with_invalid_attribute() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let attributes = Attributes::from([(
-//             "invalid_col".to_string(),
-//             Attribute::Text("value1".to_string()),
-//         )]);
-//         let parameters = parse_parameters("");
-//         let result = builder.insert(attributes, &parameters);
-//
-//         assert!(result.is_err());
-//     }
-//
-//     #[test]
-//     fn test_update_with_invalid_attribute() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let attributes = Attributes::from([(
-//             "invalid_col".to_string(),
-//             Attribute::Text("new_value".to_string()),
-//         )]);
-//         let parameters = parse_parameters("");
-//         let result = builder.update(1, attributes, &parameters);
-//
-//         assert!(result.is_err());
-//     }
-//
-//     #[test]
-//     fn test_filter_with_like_operator_on_non_text_attribute() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let parameters = parse_parameters("filter[id]=like:1");
-//         let result = builder.query(&parameters);
-//
-//         assert!(result.is_err());
-//     }
-//
-//     #[test]
-//     fn test_filter_with_invalid_value_for_attribute_type() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let parameters = parse_parameters("filter[id]=eq:not_a_number");
-//         let result = builder.query(&parameters);
-//
-//         assert!(result.is_err());
-//     }
-//
-//     #[test]
-//     fn test_filter_with_invalid_date_time_value() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let parameters = parse_parameters("filter[col3]=eq:invalid_date");
-//         let result = builder.query(&parameters);
-//
-//         assert!(result.is_err());
-//     }
-//
-//     #[test]
-//     fn test_sort_with_invalid_attribute() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let parameters = parse_parameters("sort=-invalid_col");
-//         let result = builder.query(&parameters);
-//
-//         assert!(result.is_err());
-//     }
-//
-//     #[test]
-//     fn test_insert_with_invalid_returning_fields() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let attributes =
-//             Attributes::from([("col1".to_string(), Attribute::Text("value1".to_string()))]);
-//         let parameters = parse_parameters("fields[my_table]=invalid_col");
-//         let result = builder.insert(attributes, &parameters);
-//
-//         assert!(result.is_err());
-//     }
-//
-//     #[test]
-//     fn test_update_with_invalid_returning_fields() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let attributes =
-//             Attributes::from([("col1".to_string(), Attribute::Text("new_value".to_string()))]);
-//         let parameters = parse_parameters("fields[my_table]=invalid_col");
-//         let result = builder.update(1, attributes, &parameters);
-//
-//         assert!(result.is_err());
-//     }
-//
-//     #[test]
-//     fn test_search_with_single_term() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let parameters = parse_parameters("search=a-value-to-search");
-//
-//         let (query, bindings) = builder.query(&parameters).unwrap();
-//
-//         assert_eq!(
-//             query,
-//             "\
-//             SELECT * FROM my_table \
-//             JOIN my_table_fts fts ON my_table.id = fts.rowid \
-//             WHERE my_table_fts MATCH ?1\
-//             "
-//             .to_string()
-//         );
-//         assert_eq!(
-//             bindings,
-//             vec![Attribute::Text("a-value-to-search".to_string())]
-//         );
-//     }
-//
-//     #[test]
-//     fn test_search_with_multiple_terms() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA);
-//         let parameters = parse_parameters("search=a-value,another-value");
-//
-//         let (query, bindings) = builder.query(&parameters).unwrap();
-//
-//         assert_eq!(
-//             query,
-//             "\
-//             SELECT * FROM my_table \
-//             JOIN my_table_fts fts ON my_table.id = fts.rowid \
-//             WHERE my_table_fts MATCH ?1 AND my_table_fts MATCH ?2\
-//             "
-//             .to_string()
-//         );
-//         assert_eq!(
-//             bindings,
-//             vec![
-//                 Attribute::Text("a-value".to_string()),
-//                 Attribute::Text("another-value".to_string())
-//             ]
-//         );
-//     }
-//
-//     #[test]
-//     fn test_search_on_table_without_text_index() {
-//         let builder = QueryBuilder::new(&MY_SCHEMA_NO_FTS);
-//         let parameters = parse_parameters("search=a-value-to-search");
-//
-//         let result = builder.query(&parameters);
-//
-//         assert!(result.is_err());
-//     }
-// }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database::adapters::SqliteAdapter;
+    use crate::database::registry::Registry as DatabaseRegistry;
+    use crate::database::schema::{IdentifierType, PrimaryKey};
+    use crate::http_wrappers::Uri;
+    use rusqlite::Connection;
+
+    type Registry = DatabaseRegistry<'static, SqliteAdapter>;
+
+    static MY_SCHEMA: TableSchema = my_schema(true);
+    static MY_SCHEMA_NO_FTS: TableSchema = my_schema(false);
+
+    const fn my_schema(text_index: bool) -> TableSchema<'static> {
+        TableSchema {
+            name: "my_table",
+            primary_key: PrimaryKey {
+                name: "id",
+                kind: IdentifierType::Integer,
+            },
+            attributes: &[
+                ("col1", AttributeType::Text),
+                ("col2", AttributeType::Text),
+                ("col3", AttributeType::Integer),
+            ],
+            foreign_keys: &[],
+            relationships: &[],
+            text_index,
+        }
+    }
+
+    static FTS_SCHEMAS: [&TableSchema; 1] = [&MY_SCHEMA];
+    static PLAIN_SCHEMAS: [&TableSchema; 1] = [&MY_SCHEMA_NO_FTS];
+
+    fn registry(schemas: &'static [&'static TableSchema]) -> Registry {
+        DatabaseRegistry::try_new(Connection::open_in_memory().unwrap(), schemas).unwrap()
+    }
+
+    fn mock_uri(query: &str) -> Uri {
+        format!("http://localhost:8000/my_table?{}", query)
+            .parse::<Uri>()
+            .unwrap()
+    }
+
+    fn parse<'req>(registry: &Registry, uri: &'req Uri) -> QueryParameters<'static, 'req> {
+        QueryParameters::parse(uri, &MY_SCHEMA, registry).unwrap()
+    }
+
+    #[test]
+    fn test_select_all_fields() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("");
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .query(&parse(&registry, &uri))
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "SELECT my_table.id, my_table.col1, my_table.col2, my_table.col3 FROM my_table"
+        );
+        assert!(bindings.is_empty());
+    }
+
+    #[test]
+    fn test_select_specific_fields() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("fields[my_table]=col1,col2");
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .query(&parse(&registry, &uri))
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "SELECT my_table.id, my_table.col1, my_table.col2 FROM my_table"
+        );
+        assert!(bindings.is_empty());
+    }
+
+    #[test]
+    fn test_filter_single_condition() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("filter[col1]=eq:value1");
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .query(&parse(&registry, &uri))
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "SELECT my_table.id, my_table.col1, my_table.col2, my_table.col3 FROM my_table WHERE my_table.col1 = ?1"
+        );
+        assert_eq!(bindings, vec![Attribute::Text("value1".to_string())]);
+    }
+
+    #[test]
+    fn test_filter_multiple_conditions() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("filter[col1]=eq:value1&filter[col2]=neq:value2");
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .query(&parse(&registry, &uri))
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "SELECT my_table.id, my_table.col1, my_table.col2, my_table.col3 FROM my_table WHERE my_table.col1 = ?1 AND my_table.col2 != ?2"
+        );
+        assert_eq!(
+            bindings,
+            vec![
+                Attribute::Text("value1".to_string()),
+                Attribute::Text("value2".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn test_filter_with_like_operator() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("filter[col1]=like:keyword");
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .query(&parse(&registry, &uri))
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "SELECT my_table.id, my_table.col1, my_table.col2, my_table.col3 FROM my_table WHERE my_table.col1 LIKE ?1"
+        );
+        assert_eq!(bindings, vec![Attribute::Text("%keyword%".to_string())]);
+    }
+
+    #[test]
+    fn test_sort_single_field() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("sort=-col1");
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .query(&parse(&registry, &uri))
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "SELECT my_table.id, my_table.col1, my_table.col2, my_table.col3 FROM my_table ORDER BY my_table.col1 DESC"
+        );
+        assert!(bindings.is_empty());
+    }
+
+    #[test]
+    fn test_sort_multiple_fields() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("sort=-col1,col2");
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .query(&parse(&registry, &uri))
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "SELECT my_table.id, my_table.col1, my_table.col2, my_table.col3 FROM my_table ORDER BY my_table.col1 DESC, my_table.col2 ASC"
+        );
+        assert!(bindings.is_empty());
+    }
+
+    #[test]
+    fn test_pagination() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("page[number]=2&page[size]=10");
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .query(&parse(&registry, &uri))
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "SELECT my_table.id, my_table.col1, my_table.col2, my_table.col3 FROM my_table LIMIT 10 OFFSET 10"
+        );
+        assert!(bindings.is_empty());
+    }
+
+    #[test]
+    fn test_complex_query_with_all_features() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri(
+            "\
+            fields[my_table]=col1,col2&\
+            filter[col1]=eq:value1&\
+            sort=-col1&\
+            page[number]=1&\
+            page[size]=5&\
+            search=find-me\
+            ",
+        );
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .query(&parse(&registry, &uri))
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "\
+            SELECT my_table.id, my_table.col1, my_table.col2 FROM my_table \
+            JOIN my_table_fts fts ON my_table.id = fts.rowid \
+            WHERE my_table_fts MATCH ?1 AND my_table.col1 = ?2 \
+            ORDER BY my_table.col1 DESC \
+            LIMIT 5 OFFSET 0\
+            "
+        );
+        assert_eq!(
+            bindings,
+            vec![
+                Attribute::Text("find-me".to_string()),
+                Attribute::Text("value1".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn test_find_with_all_fields() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("");
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .find(Identifier::Integer(1), &parse(&registry, &uri))
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "SELECT my_table.id, my_table.col1, my_table.col2, my_table.col3 FROM my_table WHERE id = ?1"
+        );
+        assert_eq!(bindings, vec![Attribute::Integer(1)]);
+    }
+
+    #[test]
+    fn test_find_with_specific_fields() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("fields[my_table]=col1,col2");
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .find(Identifier::Integer(1), &parse(&registry, &uri))
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "SELECT my_table.id, my_table.col1, my_table.col2 FROM my_table WHERE id = ?1"
+        );
+        assert_eq!(bindings, vec![Attribute::Integer(1)]);
+    }
+
+    #[test]
+    fn test_insert_single_field() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("");
+        let attributes =
+            Attributes::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]);
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .insert(attributes, &parse(&registry, &uri))
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "INSERT INTO my_table(col1) VALUES (?1) RETURNING id, col1, col2, col3"
+        );
+        assert_eq!(bindings, vec![Attribute::Text("value1".to_string())]);
+    }
+
+    #[test]
+    fn test_insert_multiple_fields() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("");
+        let attributes = Attributes::from_iter([
+            ("col1".to_string(), Attribute::Text("value1".to_string())),
+            ("col2".to_string(), Attribute::Integer(42)),
+        ]);
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .insert(attributes, &parse(&registry, &uri))
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "INSERT INTO my_table(col1, col2) VALUES (?1, ?2) RETURNING id, col1, col2, col3"
+        );
+        assert_eq!(
+            bindings,
+            vec![
+                Attribute::Text("value1".to_string()),
+                Attribute::Integer(42)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_insert_with_returning_fields() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("fields[my_table]=col1");
+        let attributes =
+            Attributes::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]);
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .insert(attributes, &parse(&registry, &uri))
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "INSERT INTO my_table(col1) VALUES (?1) RETURNING id, col1"
+        );
+        assert_eq!(bindings, vec![Attribute::Text("value1".to_string())]);
+    }
+
+    #[test]
+    fn test_insert_with_empty_attributes() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("");
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .insert(Attributes::new(), &parse(&registry, &uri))
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "INSERT INTO my_table() VALUES () RETURNING id, col1, col2, col3"
+        );
+        assert!(bindings.is_empty());
+    }
+
+    #[test]
+    fn test_update_single_field() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("");
+        let attributes =
+            Attributes::from_iter([("col1".to_string(), Attribute::Text("new_value".to_string()))]);
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .update(Identifier::Integer(1), attributes, &parse(&registry, &uri))
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "UPDATE my_table SET col1 = ?1 WHERE id = ?2 RETURNING id, col1, col2, col3"
+        );
+        assert_eq!(
+            bindings,
+            vec![
+                Attribute::Text("new_value".to_string()),
+                Attribute::Integer(1)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_update_multiple_fields() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("");
+        let attributes = Attributes::from_iter([
+            ("col1".to_string(), Attribute::Text("new_value".to_string())),
+            ("col2".to_string(), Attribute::Integer(42)),
+        ]);
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .update(Identifier::Integer(1), attributes, &parse(&registry, &uri))
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "UPDATE my_table SET col1 = ?1, col2 = ?2 WHERE id = ?3 RETURNING id, col1, col2, col3"
+        );
+        assert_eq!(
+            bindings,
+            vec![
+                Attribute::Text("new_value".to_string()),
+                Attribute::Integer(42),
+                Attribute::Integer(1)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_update_with_returning_fields() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("fields[my_table]=col1");
+        let attributes =
+            Attributes::from_iter([("col1".to_string(), Attribute::Text("new_value".to_string()))]);
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .update(Identifier::Integer(1), attributes, &parse(&registry, &uri))
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "UPDATE my_table SET col1 = ?1 WHERE id = ?2 RETURNING id, col1"
+        );
+        assert_eq!(
+            bindings,
+            vec![
+                Attribute::Text("new_value".to_string()),
+                Attribute::Integer(1)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_update_with_empty_attributes() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("");
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .update(
+                Identifier::Integer(1),
+                Attributes::new(),
+                &parse(&registry, &uri),
+            )
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "UPDATE my_table WHERE id = ?1 RETURNING id, col1, col2, col3"
+        );
+        assert_eq!(bindings, vec![Attribute::Integer(1)]);
+    }
+
+    #[test]
+    fn test_delete() {
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA).delete(Identifier::Integer(1));
+
+        assert_eq!(query, "DELETE FROM my_table WHERE id = ?1");
+        assert_eq!(bindings, vec![Attribute::Integer(1)]);
+    }
+
+    #[test]
+    fn test_extracted_attributes_placeholders() {
+        let extracted = ExtractedAttributes {
+            fields: vec!["col1".to_string(), "col2".to_string()],
+            values: vec![
+                Attribute::Text("value1".to_string()),
+                Attribute::Integer(42),
+            ],
+        };
+
+        assert_eq!(extracted.to_placeholders(), vec!["?1", "?2"]);
+    }
+
+    #[test]
+    fn test_placeholders_with_empty_fields() {
+        let extracted = ExtractedAttributes {
+            fields: vec![],
+            values: vec![],
+        };
+
+        assert!(extracted.to_placeholders().is_empty());
+    }
+
+    #[test]
+    fn test_filter_with_like_operator_on_non_text_attribute() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("filter[col3]=like:1");
+        let result = QueryBuilder::new(&MY_SCHEMA).query(&parse(&registry, &uri));
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_search_with_single_term() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("search=a-value-to-search");
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .query(&parse(&registry, &uri))
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "\
+            SELECT my_table.id, my_table.col1, my_table.col2, my_table.col3 FROM my_table \
+            JOIN my_table_fts fts ON my_table.id = fts.rowid \
+            WHERE my_table_fts MATCH ?1\
+            "
+        );
+        assert_eq!(
+            bindings,
+            vec![Attribute::Text("a-value-to-search".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_search_with_multiple_terms() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("search=a-value,another-value");
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .query(&parse(&registry, &uri))
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "\
+            SELECT my_table.id, my_table.col1, my_table.col2, my_table.col3 FROM my_table \
+            JOIN my_table_fts fts ON my_table.id = fts.rowid \
+            WHERE my_table_fts MATCH ?1 AND my_table_fts MATCH ?2\
+            "
+        );
+        assert_eq!(
+            bindings,
+            vec![
+                Attribute::Text("a-value".to_string()),
+                Attribute::Text("another-value".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn test_search_on_table_without_text_index() {
+        let registry = registry(&PLAIN_SCHEMAS);
+        let uri = mock_uri("search=a-value-to-search");
+        let parameters = QueryParameters::parse(&uri, &MY_SCHEMA_NO_FTS, &registry).unwrap();
+        let result = QueryBuilder::new(&MY_SCHEMA_NO_FTS).query(&parameters);
+
+        assert!(result.is_err());
+    }
+}
