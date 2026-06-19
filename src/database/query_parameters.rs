@@ -12,6 +12,7 @@ use crate::database::registry::Registry;
 use crate::database::schema::{AttributeType, Relationship, TableSchema};
 use crate::database::table::Table;
 use crate::http_wrappers::Uri;
+use indexmap::{IndexMap, IndexSet};
 use regex::Regex;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -73,15 +74,15 @@ pub enum FilterValue {
     LessThan(Attribute),
     LessThanOrEqual(Attribute),
     Like(Attribute),
-    In(HashSet<Attribute>),
-    NotIn(HashSet<Attribute>),
+    In(IndexSet<Attribute>),
+    NotIn(IndexSet<Attribute>),
 }
 
 /// Stores which fields should be returned for a given model type
-pub type FieldsParameters<'sch> = HashMap<&'sch str, HashSet<&'sch str>>;
+pub type FieldsParameters<'sch> = IndexMap<&'sch str, IndexSet<&'sch str>>;
 
 /// Stores which filters should be applied for each field from the primary data
-pub type FilterParameters<'sch> = HashMap<&'sch str, Vec<FilterValue>>;
+pub type FilterParameters<'sch> = IndexMap<&'sch str, Vec<FilterValue>>;
 
 /// Stores a series of terms to be searched
 pub type SearchParameters<'req> = Vec<Cow<'req, str>>;
@@ -151,10 +152,10 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
     /// Attempts to extract supported parameters from the provided URI.
     /// Any parsing errors (encoding errors, failed validations etc.) will cause the function to
     /// return an `Err`.
-    pub fn parse<'reg, Adapter: AdapterInterface>(
+    pub fn parse<Adapter: AdapterInterface>(
         uri: &'req Uri,
         schema: &'sch TableSchema<'sch>,
-        registry: &'reg Registry<'sch, Adapter>,
+        registry: &Registry<'sch, Adapter>,
     ) -> Result<QueryParameters<'sch, 'req>, Error> {
         if let Some(query) = uri.query() {
             let mut query_parameters = Self {
@@ -174,10 +175,10 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
         }
     }
 
-    pub fn derive<'reg, Adapter: AdapterInterface>(
+    pub fn derive<Adapter: AdapterInterface>(
         &self,
         relationship: &str,
-        registry: &'reg Registry<'sch, Adapter>,
+        registry: &Registry<'sch, Adapter>,
     ) -> Result<Self, Error> {
         let include =
             self.include
@@ -263,11 +264,11 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
         }
     }
 
-    fn parse_fields<'reg, Adapter: AdapterInterface>(
+    fn parse_fields<Adapter: AdapterInterface>(
         &mut self,
         model: &'req str,
         fields: &'req str,
-        registry: &'reg Registry<'sch, Adapter>,
+        registry: &Registry<'sch, Adapter>,
     ) -> Result<(), Error> {
         if fields.is_empty() {
             return Ok(());
@@ -309,7 +310,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
     fn parse_attribute_set(
         value: &'req str,
         kind: &'sch AttributeType,
-    ) -> Result<HashSet<Attribute>, Error> {
+    ) -> Result<IndexSet<Attribute>, Error> {
         value
             .split(",")
             .map(|value| Self::parse_attribute(value, kind))
@@ -386,12 +387,12 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
         Ok(())
     }
 
-    fn parse_include<'reg, Adapter: AdapterInterface>(
+    fn parse_include<Adapter: AdapterInterface>(
         &mut self,
         include: &str,
         models: &mut HashMap<&'sch str, &'sch TableSchema<'sch>>,
         schema: &'sch TableSchema<'sch>,
-        registry: &'reg Registry<'sch, Adapter>,
+        registry: &Registry<'sch, Adapter>,
     ) -> Result<(), Error> {
         if !include.is_empty() {
             for include in include.split(",") {
@@ -506,11 +507,11 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
         Ok(())
     }
 
-    fn parse_query<'reg, Adapter: AdapterInterface>(
+    fn parse_query<Adapter: AdapterInterface>(
         &mut self,
         query: &'req str,
         schema: &'sch TableSchema<'sch>,
-        registry: &'reg Registry<'sch, Adapter>,
+        registry: &Registry<'sch, Adapter>,
     ) -> Result<(), Error> {
         let mut models_to_serialise = HashMap::from_iter([(schema.name, schema)]);
 
@@ -549,499 +550,765 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
         Ok(())
     }
 }
-//
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use crate::database::schema::tests::PRODUCTS_SCHEMA;
-//
-//     fn mock_uri(query: &str) -> Uri {
-//         format!("http://localhost:8000/resource?{}", query)
-//             .parse::<Uri>()
-//             .unwrap()
-//     }
-//
-//     #[test]
-//     fn test_new() {
-//         let params = QueryParameters::new(&PRODUCTS_SCHEMA);
-//         assert_eq!(params.schema, &PRODUCTS_SCHEMA);
-//         assert!(params.fields.is_empty());
-//         assert!(params.include.is_empty());
-//         assert!(params.filter.is_none());
-//         assert!(params.sort.is_none());
-//         assert!(params.page.is_none());
-//         assert!(params.search.is_none());
-//     }
-//
-//     #[test]
-//     fn test_parse_fields() {
-//         let uri = mock_uri("fields[model1]=col1,col2,col3&fields[model2]=col4");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//         let fields = params.fields.unwrap();
-//         assert_eq!(
-//             fields,
-//             IndexMap::from([
-//                 ("model1".to_string(), vec!["col1", "col2", "col3"]),
-//                 ("model2".to_string(), vec!["col4"]),
-//             ])
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_sort() {
-//         let uri = mock_uri("sort=-col1,col2");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//         let sort = params.sort.unwrap();
-//         assert_eq!(sort.len(), 2);
-//         assert_eq!(sort[0].attribute, "col1");
-//         assert_eq!(sort[0].direction, SortDirection::Descending);
-//         assert_eq!(sort[1].attribute, "col2");
-//         assert_eq!(sort[1].direction, SortDirection::Ascending);
-//     }
-//
-//     #[test]
-//     fn test_parse_pagination() {
-//         let uri = mock_uri("page[number]=2&page[size]=20");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//         assert_eq!(
-//             params.page,
-//             Some(PageParameters {
-//                 number: 2,
-//                 size: 20
-//             })
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_filter_eq() {
-//         let uri = mock_uri("filter[col1]=eq:value1&filter[col2]=neq:value2");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//
-//         assert!(params.filter.is_some());
-//
-//         let filters = params.filter.unwrap();
-//         assert_eq!(filters["col1"][0], FilterValue::Equal("value1".to_string()));
-//         assert_eq!(
-//             filters["col2"][0],
-//             FilterValue::NotEqual("value2".to_string())
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_mixed_uri() {
-//         let uri = mock_uri(
-//             "fields[my_model]=col1,col2&sort=-col1&filter[col1]=gt:10&page[number]=3&page[size]=15",
-//         );
-//         let params = QueryParameters::parse(&uri).unwrap();
-//
-//         // Fields check
-//         let fields = params.fields.unwrap();
-//         assert_eq!(
-//             fields,
-//             IndexMap::from([("my_model".to_string(), vec!["col1", "col2"]),])
-//         );
-//
-//         // Sort check
-//         let sort = params.sort.unwrap();
-//         assert_eq!(sort[0].attribute, "col1");
-//         assert_eq!(sort[0].direction, SortDirection::Descending);
-//
-//         // Filter check
-//         let filters = params.filter.unwrap();
-//         assert_eq!(
-//             filters["col1"][0],
-//             FilterValue::GreaterThan("10".to_string())
-//         );
-//
-//         // Pagination check
-//         assert_eq!(
-//             params.page,
-//             Some(PageParameters {
-//                 number: 3,
-//                 size: 15
-//             })
-//         );
-//     }
-//
-//     #[test]
-//     fn test_invalid_sort_format() {
-//         let uri = mock_uri("sort=--col1");
-//         let params = QueryParameters::parse(&uri);
-//         assert!(
-//             params.is_err(),
-//             "Expected parsing to fail when invalid sort field is provided"
-//         );
-//     }
-//
-//     #[test]
-//     fn test_invalid_filter_format() {
-//         let uri = mock_uri("filter[col1]=value1"); // Missing operator:value format
-//         let params = QueryParameters::parse(&uri);
-//         assert!(
-//             params.is_err(),
-//             "Expected parsing to fail when invalid filter is provided"
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_invalid_page_size() {
-//         let uri = mock_uri("page[number]=2&page[size]=abc");
-//         let params = QueryParameters::parse(&uri);
-//         assert!(
-//             params.is_err(),
-//             "Expected parsing to fail for invalid page size"
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_empty_sort() {
-//         let uri = mock_uri("sort=");
-//         let params = QueryParameters::parse(&uri);
-//         assert!(
-//             params.is_err(),
-//             "Expected parsing to fail for empty sort parameter"
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_multiple_filters_for_same_field() {
-//         let uri = mock_uri("filter[col1]=eq:value1,gt:-20");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//
-//         assert!(params.filter.is_some());
-//         let filters = params.filter.unwrap();
-//
-//         assert_eq!(filters["col1"].len(), 2);
-//         assert_eq!(filters["col1"][0], FilterValue::Equal("value1".to_string()));
-//         assert_eq!(
-//             filters["col1"][1],
-//             FilterValue::GreaterThan("-20".to_string())
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_no_filter_value() {
-//         let uri = mock_uri("filter[col1]=");
-//         let params = QueryParameters::parse(&uri);
-//         assert!(
-//             params.is_err(),
-//             "Expected parsing to fail for missing filter value"
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_empty_fields() {
-//         let uri = mock_uri("fields=");
-//         let params = QueryParameters::parse(&uri);
-//         assert!(params.is_err(), "Expected parsing to fail for empty fields");
-//     }
-//
-//     #[test]
-//     fn test_parse_invalid_field_name() {
-//         let uri = mock_uri("fields=col1,invalid!field");
-//         let params = QueryParameters::parse(&uri);
-//         assert!(
-//             params.is_err(),
-//             "Expected parsing to fail for invalid field name"
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_page_only_number() {
-//         let uri = mock_uri("page[number]=2");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//         assert_eq!(
-//             params.page,
-//             Some(PageParameters {
-//                 number: 2,
-//                 size: 20
-//             })
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_sort_with_invalid_characters() {
-//         let uri = mock_uri("sort=col@1");
-//         let params = QueryParameters::parse(&uri);
-//         assert!(
-//             params.is_err(),
-//             "Expected parsing to fail for invalid sort field"
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_filter_with_special_characters() {
-//         // 'value1&' should be URL-encoded as 'value1%26'
-//         let uri = mock_uri("filter[col1]=eq:value1%26&filter[col2]=like:special%3Avalue");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//
-//         let filters = params.filter.unwrap();
-//
-//         assert_eq!(
-//             filters["col1"][0],
-//             FilterValue::Equal("value1&".to_string())
-//         );
-//         assert_eq!(
-//             filters["col2"][0],
-//             FilterValue::Like("special:value".to_string())
-//         );
-//     }
-//
-//     #[test]
-//     fn test_search_without_value() {
-//         let uri = mock_uri("search=");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//
-//         assert!(params.search.is_none());
-//     }
-//
-//     #[test]
-//     fn test_search_with_single_value() {
-//         let uri = mock_uri("search=some-value");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//
-//         assert_eq!(params.search, Some(vec!["some-value".to_string()]));
-//     }
-//
-//     #[test]
-//     fn test_search_with_multiple_values() {
-//         let uri = mock_uri("search=some-value,another-value");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//
-//         assert_eq!(
-//             params.search,
-//             Some(vec!["some-value".to_string(), "another-value".to_string()])
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_include_single_value() {
-//         let uri = mock_uri("include=author");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//         assert_eq!(params.include, Some(vec!["author".to_string()]));
-//     }
-//
-//     #[test]
-//     fn test_parse_include_multiple_values() {
-//         let uri = mock_uri("include=author,comments,tags");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//         assert_eq!(
-//             params.include,
-//             Some(vec![
-//                 "author".to_string(),
-//                 "comments".to_string(),
-//                 "tags".to_string()
-//             ])
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_include_empty() {
-//         let uri = mock_uri("include=");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//         assert!(params.include.is_none());
-//     }
-//
-//     #[test]
-//     fn test_parse_page_only_size() {
-//         let uri = mock_uri("page[size]=50");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//         assert_eq!(
-//             params.page,
-//             Some(PageParameters {
-//                 number: 1,
-//                 size: 50
-//             })
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_page_invalid_property() {
-//         let uri = mock_uri("page[limit]=10");
-//         let params = QueryParameters::parse(&uri);
-//         assert!(
-//             params.is_err(),
-//             "Expected parsing to fail for invalid page property"
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_page_zero_value() {
-//         let uri = mock_uri("page[number]=0");
-//         let params = QueryParameters::parse(&uri);
-//         assert!(
-//             params.is_err(),
-//             "Expected parsing to fail for zero page number"
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_page_negative_value() {
-//         let uri = mock_uri("page[size]=-5");
-//         let params = QueryParameters::parse(&uri);
-//         assert!(
-//             params.is_err(),
-//             "Expected parsing to fail for negative page size"
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_fields_with_hyphens() {
-//         let uri = mock_uri("fields[model]=field-name,another-field");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//         let fields = params.fields.unwrap();
-//         assert_eq!(fields["model"], vec!["field-name", "another-field"]);
-//     }
-//
-//     #[test]
-//     fn test_parse_fields_with_underscores() {
-//         let uri = mock_uri("fields[model]=field_name,another_field");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//         let fields = params.fields.unwrap();
-//         assert_eq!(fields["model"], vec!["field_name", "another_field"]);
-//     }
-//
-//     #[test]
-//     fn test_parse_fields_with_numbers() {
-//         let uri = mock_uri("fields[model]=field1,field2name,name3");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//         let fields = params.fields.unwrap();
-//         assert_eq!(fields["model"], vec!["field1", "field2name", "name3"]);
-//     }
-//
-//     #[test]
-//     fn test_parse_fields_starting_with_hyphen() {
-//         let uri = mock_uri("fields[model]=-invalidfield");
-//         let params = QueryParameters::parse(&uri);
-//         assert!(
-//             params.is_err(),
-//             "Expected parsing to fail for field starting with hyphen"
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_fields_empty_value_for_model() {
-//         let uri = mock_uri("fields[model]=");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//         assert!(params.fields.is_none());
-//     }
-//
-//     #[test]
-//     fn test_parse_search_with_encoded_spaces() {
-//         let uri = mock_uri("search=hello%20world,foo%20bar");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//         assert_eq!(
-//             params.search,
-//             Some(vec!["hello world".to_string(), "foo bar".to_string()])
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_include_with_encoded_values() {
-//         let uri = mock_uri("include=author%2Dprofile,user%2Dposts");
-//         let result = QueryParameters::parse(&uri);
-//         assert!(
-//             result.is_err(),
-//             "Expected parsing to fail for includes with percent-encoded values"
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_filter_all_operators() {
-//         let uri = mock_uri("filter[age]=gte:18,lte:65&filter[status]=neq:deleted");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//         let filters = params.filter.unwrap();
-//
-//         assert_eq!(
-//             filters["age"][0],
-//             FilterValue::GreaterThanOrEqual("18".to_string())
-//         );
-//         assert_eq!(
-//             filters["age"][1],
-//             FilterValue::LessThanOrEqual("65".to_string())
-//         );
-//         assert_eq!(
-//             filters["status"][0],
-//             FilterValue::NotEqual("deleted".to_string())
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_filter_like_operator() {
-//         let uri = mock_uri("filter[name]=like:%25john%25");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//         let filters = params.filter.unwrap();
-//
-//         assert_eq!(filters["name"][0], FilterValue::Like("%john%".to_string()));
-//     }
-//
-//     #[test]
-//     fn test_parse_sort_with_explicit_plus() {
-//         let uri = mock_uri("sort=+col1,col2");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//         let sort = params.sort.unwrap();
-//
-//         assert_eq!(sort[0].attribute, "col1");
-//         assert_eq!(sort[0].direction, SortDirection::Ascending);
-//         assert_eq!(sort[1].attribute, "col2");
-//         assert_eq!(sort[1].direction, SortDirection::Ascending);
-//     }
-//
-//     #[test]
-//     fn test_parse_sort_mixed_directions() {
-//         let uri = mock_uri("sort=-field1,+field2,field3,-field4");
-//         let params = QueryParameters::parse(&uri).unwrap();
-//         let sort = params.sort.unwrap();
-//
-//         assert_eq!(sort.len(), 4);
-//         assert_eq!(sort[0].direction, SortDirection::Descending);
-//         assert_eq!(sort[1].direction, SortDirection::Ascending);
-//         assert_eq!(sort[2].direction, SortDirection::Ascending);
-//         assert_eq!(sort[3].direction, SortDirection::Descending);
-//     }
-//
-//     #[test]
-//     fn test_parse_all_parameters_combined() {
-//         let uri = mock_uri(
-//             "fields[users]=id,name&filter[status]=eq:active&sort=-created_at&page[number]=2&page[size]=25&include=profile&search=query",
-//         );
-//         let params = QueryParameters::parse(&uri).unwrap();
-//
-//         assert!(params.fields.is_some());
-//         assert!(params.filter.is_some());
-//         assert!(params.sort.is_some());
-//         assert!(params.page.is_some());
-//         assert!(params.include.is_some());
-//         assert!(params.search.is_some());
-//     }
-//
-//     #[test]
-//     fn test_parse_missing_equals_sign() {
-//         let uri = mock_uri("sortcol1");
-//         let params = QueryParameters::parse(&uri);
-//         assert!(
-//             params.is_err(),
-//             "Expected parsing to fail for malformed query"
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_unknown_parameter() {
-//         let uri = mock_uri("unknown_param=value");
-//         let params = QueryParameters::parse(&uri);
-//         assert!(
-//             params.is_err(),
-//             "Expected parsing to fail for unknown parameter"
-//         );
-//     }
-//
-//     #[test]
-//     fn test_parse_filter_missing_colon() {
-//         let uri = mock_uri("filter[col1]=eqvalue");
-//         let params = QueryParameters::parse(&uri);
-//         assert!(
-//             params.is_err(),
-//             "Expected parsing to fail for filter without colon separator"
-//         );
-//     }
-// }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database::adapters::SqliteAdapter;
+    use crate::database::registry::Registry as DatabaseRegistry;
+    use crate::database::schema::{IdentifierType, PrimaryKey, RelatedResource, RelationshipKeys};
+    use rusqlite::Connection;
+
+    type Registry = DatabaseRegistry<'static, SqliteAdapter>;
+
+    static ARTICLES: TableSchema = TableSchema {
+        name: "articles",
+        primary_key: PrimaryKey {
+            name: "id",
+            kind: IdentifierType::Integer,
+        },
+        attributes: &[
+            ("title", AttributeType::Text),
+            ("views", AttributeType::Integer),
+            ("published", AttributeType::Boolean),
+            ("rating", AttributeType::Float),
+            ("created_at", AttributeType::DateTime),
+        ],
+        foreign_keys: &[("author_id", AttributeType::Integer)],
+        relationships: &[
+            (
+                "author",
+                Relationship::BelongsTo(RelatedResource {
+                    resource: "users",
+                    keys: RelationshipKeys {
+                        own: "author_id",
+                        related: "id",
+                    },
+                }),
+            ),
+            (
+                "comments",
+                Relationship::HasMany(RelatedResource {
+                    resource: "comments",
+                    keys: RelationshipKeys {
+                        own: "id",
+                        related: "article_id",
+                    },
+                }),
+            ),
+        ],
+        text_index: false,
+    };
+
+    static USERS: TableSchema = TableSchema {
+        name: "users",
+        primary_key: PrimaryKey {
+            name: "id",
+            kind: IdentifierType::Integer,
+        },
+        attributes: &[("name", AttributeType::Text)],
+        foreign_keys: &[],
+        relationships: &[(
+            "articles",
+            Relationship::HasMany(RelatedResource {
+                resource: "articles",
+                keys: RelationshipKeys {
+                    own: "id",
+                    related: "author_id",
+                },
+            }),
+        )],
+        text_index: false,
+    };
+
+    static COMMENTS: TableSchema = TableSchema {
+        name: "comments",
+        primary_key: PrimaryKey {
+            name: "id",
+            kind: IdentifierType::Integer,
+        },
+        attributes: &[("body", AttributeType::Text)],
+        foreign_keys: &[("article_id", AttributeType::Integer)],
+        relationships: &[(
+            "article",
+            Relationship::BelongsTo(RelatedResource {
+                resource: "articles",
+                keys: RelationshipKeys {
+                    own: "article_id",
+                    related: "id",
+                },
+            }),
+        )],
+        text_index: false,
+    };
+
+    static SCHEMAS: [&TableSchema; 3] = [&ARTICLES, &USERS, &COMMENTS];
+
+    fn registry() -> Registry {
+        DatabaseRegistry::try_new(Connection::open_in_memory().unwrap(), &SCHEMAS).unwrap()
+    }
+
+    fn mock_uri(query: &str) -> Uri {
+        format!("http://localhost:8000/articles?{}", query)
+            .parse::<Uri>()
+            .unwrap()
+    }
+
+    fn parse<'req>(registry: &Registry, uri: &'req Uri) -> QueryParameters<'static, 'req> {
+        QueryParameters::parse(uri, &ARTICLES, registry).unwrap()
+    }
+
+    fn parse_err(query: &str) -> Error {
+        let registry = registry();
+        let uri = mock_uri(query);
+        QueryParameters::parse(&uri, &ARTICLES, &registry).expect_err("expected parsing to fail")
+    }
+
+    // --- Construction ---
+
+    #[test]
+    fn test_new() {
+        let params = QueryParameters::new(&ARTICLES);
+
+        assert_eq!(params.schema, &ARTICLES);
+        assert_eq!(
+            params.fields["articles"],
+            ARTICLES.fields().collect::<IndexSet<_>>()
+        );
+        assert!(params.include.is_empty());
+        assert!(params.filter.is_none());
+        assert!(params.sort.is_none());
+        assert!(params.page.is_none());
+        assert!(params.search.is_none());
+    }
+
+    #[test]
+    fn test_parse_empty_query() {
+        let registry = registry();
+        let uri = "http://localhost:8000/articles".parse::<Uri>().unwrap();
+        let params = QueryParameters::parse(&uri, &ARTICLES, &registry).unwrap();
+
+        assert_eq!(params, QueryParameters::new(&ARTICLES));
+    }
+
+    // --- Fields ---
+
+    #[test]
+    fn test_parse_fields_single_model() {
+        let registry = registry();
+        let uri = mock_uri("fields[articles]=title,views");
+        let params = parse(&registry, &uri);
+
+        assert_eq!(
+            params.fields["articles"],
+            IndexSet::from(["title", "views"])
+        );
+    }
+
+    #[test]
+    fn test_parse_fields_preserves_request_order() {
+        let registry = registry();
+        let uri = mock_uri("fields[articles]=views,title");
+        let params = parse(&registry, &uri);
+
+        assert_eq!(
+            params.fields["articles"]
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec!["views", "title"]
+        );
+    }
+
+    #[test]
+    fn test_parse_fields_multiple_models() {
+        let registry = registry();
+        let uri = mock_uri("fields[articles]=title&fields[users]=name");
+        let params = parse(&registry, &uri);
+
+        assert_eq!(params.fields["articles"], IndexSet::from(["title"]));
+        assert_eq!(params.fields["users"], IndexSet::from(["name"]));
+    }
+
+    #[test]
+    fn test_parse_fields_accepts_relationship_names() {
+        let registry = registry();
+        let uri = mock_uri("fields[articles]=title,author");
+        let params = parse(&registry, &uri);
+
+        assert_eq!(
+            params.fields["articles"],
+            IndexSet::from(["title", "author"])
+        );
+    }
+
+    #[test]
+    fn test_parse_fields_empty_value_defaults_to_all() {
+        let registry = registry();
+        let uri = mock_uri("fields[articles]=");
+        let params = parse(&registry, &uri);
+
+        assert_eq!(
+            params.fields["articles"],
+            ARTICLES.fields().collect::<IndexSet<_>>()
+        );
+    }
+
+    #[test]
+    fn test_parse_fields_invalid_field() {
+        assert!(matches!(
+            parse_err("fields[articles]=nonexistent"),
+            Error::SchemaValidationFailure { .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_fields_unknown_model() {
+        assert!(matches!(
+            parse_err("fields[ghosts]=title"),
+            Error::UnknownSchema { .. }
+        ));
+    }
+
+    // --- Filters ---
+
+    #[test]
+    fn test_parse_filter_eq() {
+        let registry = registry();
+        let uri = mock_uri("filter[title]=eq:hello");
+        let params = parse(&registry, &uri);
+
+        assert_eq!(
+            params.filter.unwrap()["title"],
+            vec![FilterValue::Equal(Attribute::Text("hello".to_string()))]
+        );
+    }
+
+    #[test]
+    fn test_parse_filter_all_operators() {
+        let registry = registry();
+        let uri = mock_uri("filter[views]=eq:1,neq:2,gt:3,gte:4,lt:5,lte:6");
+        let params = parse(&registry, &uri);
+
+        use FilterValue::*;
+        assert_eq!(
+            params.filter.unwrap()["views"],
+            vec![
+                Equal(Attribute::Integer(1)),
+                NotEqual(Attribute::Integer(2)),
+                GreaterThan(Attribute::Integer(3)),
+                GreaterThanOrEqual(Attribute::Integer(4)),
+                LessThan(Attribute::Integer(5)),
+                LessThanOrEqual(Attribute::Integer(6)),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_filter_multiple_fields_preserve_order() {
+        let registry = registry();
+        let uri = mock_uri("filter[title]=eq:x&filter[views]=gt:5");
+        let params = parse(&registry, &uri);
+
+        let filter = params.filter.unwrap();
+        assert_eq!(
+            filter.keys().copied().collect::<Vec<_>>(),
+            vec!["title", "views"]
+        );
+    }
+
+    #[test]
+    fn test_parse_filter_typed_values() {
+        let registry = registry();
+        let uri = mock_uri("filter[published]=eq:true&filter[rating]=gt:4.5");
+        let params = parse(&registry, &uri);
+
+        let filter = params.filter.unwrap();
+        assert_eq!(
+            filter["published"],
+            vec![FilterValue::Equal(Attribute::Boolean(true))]
+        );
+        assert_eq!(
+            filter["rating"],
+            vec![FilterValue::GreaterThan(Attribute::Float(4.5))]
+        );
+    }
+
+    #[test]
+    fn test_parse_filter_datetime_value() {
+        let registry = registry();
+        let uri = mock_uri("filter[created_at]=gte:2020-01-01T00:00:00Z");
+        let params = parse(&registry, &uri);
+
+        assert!(matches!(
+            params.filter.unwrap()["created_at"][0],
+            FilterValue::GreaterThanOrEqual(Attribute::DateTime(_))
+        ));
+    }
+
+    #[test]
+    fn test_parse_filter_in() {
+        let registry = registry();
+        let uri = mock_uri("filter[views]=in:42");
+        let params = parse(&registry, &uri);
+
+        assert_eq!(
+            params.filter.unwrap()["views"],
+            vec![FilterValue::In(IndexSet::from([Attribute::Integer(42)]))]
+        );
+    }
+
+    #[test]
+    fn test_parse_filter_like_decodes_value() {
+        let registry = registry();
+        let uri = mock_uri("filter[title]=like:%25john%25");
+        let params = parse(&registry, &uri);
+
+        assert_eq!(
+            params.filter.unwrap()["title"],
+            vec![FilterValue::Like(Attribute::Text("%john%".to_string()))]
+        );
+    }
+
+    #[test]
+    fn test_parse_filter_decodes_special_characters() {
+        let registry = registry();
+        let uri = mock_uri("filter[title]=eq:value%26");
+        let params = parse(&registry, &uri);
+
+        assert_eq!(
+            params.filter.unwrap()["title"],
+            vec![FilterValue::Equal(Attribute::Text("value&".to_string()))]
+        );
+    }
+
+    #[test]
+    fn test_parse_filter_unknown_attribute() {
+        assert!(matches!(
+            parse_err("filter[ghost]=eq:1"),
+            Error::SchemaValidationFailure { .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_filter_on_relationship_is_rejected() {
+        assert!(matches!(
+            parse_err("filter[author]=eq:1"),
+            Error::SchemaValidationFailure { .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_filter_on_foreign_key_is_rejected() {
+        assert!(matches!(
+            parse_err("filter[author_id]=eq:1"),
+            Error::SchemaValidationFailure { .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_filter_invalid_value_for_type() {
+        assert!(matches!(
+            parse_err("filter[views]=eq:not_a_number"),
+            Error::InvalidAttributeConversion { .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_filter_invalid_datetime_value() {
+        assert!(matches!(
+            parse_err("filter[created_at]=eq:not_a_date"),
+            Error::InvalidAttributeConversion { .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_filter_missing_colon() {
+        assert!(matches!(
+            parse_err("filter[title]=eqhello"),
+            Error::ParseParameterFailure { .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_filter_invalid_operator() {
+        assert!(matches!(
+            parse_err("filter[title]=foo:bar"),
+            Error::ParseParameterFailure { .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_filter_empty_value() {
+        assert!(matches!(
+            parse_err("filter[title]="),
+            Error::ParseParameterFailure { .. }
+        ));
+    }
+
+    // --- Sort ---
+
+    #[test]
+    fn test_parse_sort_single_descending() {
+        let registry = registry();
+        let uri = mock_uri("sort=-title");
+        let params = parse(&registry, &uri);
+
+        let sort = params.sort.unwrap();
+        assert_eq!(sort.len(), 1);
+        assert_eq!(sort[0].attribute, "title");
+        assert_eq!(sort[0].direction, SortDirection::Descending);
+    }
+
+    #[test]
+    fn test_parse_sort_multiple_mixed() {
+        let registry = registry();
+        let uri = mock_uri("sort=-title,views");
+        let params = parse(&registry, &uri);
+
+        let sort = params.sort.unwrap();
+        assert_eq!(sort[0].direction, SortDirection::Descending);
+        assert_eq!(sort[0].attribute, "title");
+        assert_eq!(sort[1].direction, SortDirection::Ascending);
+        assert_eq!(sort[1].attribute, "views");
+    }
+
+    #[test]
+    fn test_parse_sort_explicit_plus() {
+        let registry = registry();
+        let uri = mock_uri("sort=+title");
+        let params = parse(&registry, &uri);
+
+        assert_eq!(params.sort.unwrap()[0].direction, SortDirection::Ascending);
+    }
+
+    #[test]
+    fn test_parse_sort_invalid_attribute() {
+        assert!(matches!(
+            parse_err("sort=ghost"),
+            Error::SchemaValidationFailure { .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_sort_invalid_format() {
+        assert!(matches!(
+            parse_err("sort=--title"),
+            Error::ParseParameterFailure { .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_sort_invalid_characters() {
+        assert!(matches!(
+            parse_err("sort=col@1"),
+            Error::ParseParameterFailure { .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_sort_empty() {
+        assert!(matches!(
+            parse_err("sort="),
+            Error::ParseParameterFailure { .. }
+        ));
+    }
+
+    // --- Pagination ---
+
+    #[test]
+    fn test_parse_page_number_and_size() {
+        let registry = registry();
+        let uri = mock_uri("page[number]=2&page[size]=25");
+        let params = parse(&registry, &uri);
+
+        assert_eq!(
+            params.page,
+            Some(PageParameters {
+                number: 2,
+                size: 25
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_page_only_number() {
+        let registry = registry();
+        let uri = mock_uri("page[number]=2");
+        let params = parse(&registry, &uri);
+
+        assert_eq!(
+            params.page,
+            Some(PageParameters {
+                number: 2,
+                size: 20
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_page_only_size() {
+        let registry = registry();
+        let uri = mock_uri("page[size]=50");
+        let params = parse(&registry, &uri);
+
+        assert_eq!(
+            params.page,
+            Some(PageParameters {
+                number: 1,
+                size: 50
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_page_invalid_property() {
+        assert!(matches!(
+            parse_err("page[limit]=10"),
+            Error::ParseParameterFailure { .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_page_zero_value() {
+        assert!(matches!(
+            parse_err("page[number]=0"),
+            Error::ParseParameterFailure { .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_page_negative_value() {
+        assert!(matches!(
+            parse_err("page[size]=-5"),
+            Error::ParseParameterFailure { .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_page_non_numeric() {
+        assert!(matches!(
+            parse_err("page[size]=abc"),
+            Error::ParseParameterFailure { .. }
+        ));
+    }
+
+    // --- Search ---
+
+    #[test]
+    fn test_parse_search_single_value() {
+        let registry = registry();
+        let uri = mock_uri("search=some-value");
+        let params = parse(&registry, &uri);
+
+        assert_eq!(params.search, Some(vec![Cow::Borrowed("some-value")]));
+    }
+
+    #[test]
+    fn test_parse_search_multiple_values() {
+        let registry = registry();
+        let uri = mock_uri("search=some-value,another-value");
+        let params = parse(&registry, &uri);
+
+        assert_eq!(
+            params.search,
+            Some(vec![
+                Cow::Borrowed("some-value"),
+                Cow::Borrowed("another-value")
+            ])
+        );
+    }
+
+    #[test]
+    fn test_parse_search_decodes_spaces() {
+        let registry = registry();
+        let uri = mock_uri("search=hello%20world,foo%20bar");
+        let params = parse(&registry, &uri);
+
+        assert_eq!(
+            params.search,
+            Some(vec![Cow::Borrowed("hello world"), Cow::Borrowed("foo bar")])
+        );
+    }
+
+    #[test]
+    fn test_parse_search_empty_is_none() {
+        let registry = registry();
+        let uri = mock_uri("search=");
+        let params = parse(&registry, &uri);
+
+        assert!(params.search.is_none());
+    }
+
+    // --- Include ---
+
+    #[test]
+    fn test_parse_include_single() {
+        let registry = registry();
+        let uri = mock_uri("include=author");
+        let params = parse(&registry, &uri);
+
+        assert!(params.is_included("author"));
+        assert!(!params.is_included("comments"));
+    }
+
+    #[test]
+    fn test_parse_include_multiple() {
+        let registry = registry();
+        let uri = mock_uri("include=author,comments");
+        let params = parse(&registry, &uri);
+
+        assert!(params.is_included("author"));
+        assert!(params.is_included("comments"));
+    }
+
+    #[test]
+    fn test_parse_include_nested() {
+        let registry = registry();
+        let uri = mock_uri("include=comments.article");
+        let params = parse(&registry, &uri);
+
+        assert!(params.is_included("comments"));
+        assert!(params.include["comments"].children.contains_key("article"));
+    }
+
+    #[test]
+    fn test_parse_include_empty_is_noop() {
+        let registry = registry();
+        let uri = mock_uri("include=");
+        let params = parse(&registry, &uri);
+
+        assert!(params.include.is_empty());
+    }
+
+    #[test]
+    fn test_parse_include_invalid_relationship() {
+        assert!(matches!(
+            parse_err("include=ghost"),
+            Error::SchemaValidationFailure { .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_include_invalid_nested_relationship() {
+        assert!(matches!(
+            parse_err("include=comments.ghost"),
+            Error::SchemaValidationFailure { .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_include_encoded_value_is_rejected() {
+        assert!(matches!(
+            parse_err("include=author%2Dprofile"),
+            Error::SchemaValidationFailure { .. }
+        ));
+    }
+
+    #[test]
+    fn test_include_discovers_join_keys() {
+        let registry = registry();
+        let uri = mock_uri("include=comments");
+        let params = parse(&registry, &uri);
+
+        assert_eq!(
+            params.fields["comments"],
+            IndexSet::from(["body", "article", "article_id"])
+        );
+    }
+
+    // --- Predicates and derivation ---
+
+    #[test]
+    fn test_is_requested() {
+        let registry = registry();
+        let uri = mock_uri("fields[articles]=title");
+        let params = parse(&registry, &uri);
+
+        assert!(params.is_requested("title"));
+        assert!(!params.is_requested("views"));
+    }
+
+    #[test]
+    fn test_relationships_to_load_respects_sparse_fieldset() {
+        let registry = registry();
+        let uri = mock_uri("fields[articles]=title&include=comments");
+        let params = parse(&registry, &uri);
+
+        let loaded = params
+            .relationships_to_load()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>();
+
+        assert_eq!(loaded, vec!["comments"]);
+    }
+
+    #[test]
+    fn test_derive_descends_into_relationship() {
+        let registry = registry();
+        let uri = mock_uri("include=comments.article");
+        let params = parse(&registry, &uri);
+
+        let derived = params.derive("comments", &registry).unwrap();
+
+        assert_eq!(derived.schema.name, "comments");
+        assert!(derived.is_included("article"));
+    }
+
+    #[test]
+    fn test_derive_unknown_relationship_fails() {
+        let registry = registry();
+        let uri = mock_uri("include=author");
+        let params = parse(&registry, &uri);
+
+        assert!(params.derive("comments", &registry).is_err());
+    }
+
+    // --- Malformed queries ---
+
+    #[test]
+    fn test_parse_missing_equals_sign() {
+        assert!(matches!(
+            parse_err("noequals"),
+            Error::ParseParameterFailure { .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_unknown_parameter() {
+        assert!(matches!(
+            parse_err("bogus=value"),
+            Error::ParseParameterFailure { .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_all_parameters_combined() {
+        let registry = registry();
+        let uri = mock_uri(
+            "fields[articles]=title,views&\
+             filter[published]=eq:true&\
+             sort=-created_at&\
+             page[number]=2&page[size]=25&\
+             include=author&\
+             search=query",
+        );
+        let params = parse(&registry, &uri);
+
+        assert_eq!(
+            params.fields["articles"],
+            IndexSet::from(["title", "views", "author_id"])
+        );
+        assert!(params.filter.is_some());
+        assert!(params.sort.is_some());
+        assert_eq!(
+            params.page,
+            Some(PageParameters {
+                number: 2,
+                size: 25
+            })
+        );
+        assert!(params.is_included("author"));
+        assert_eq!(params.search, Some(vec![Cow::Borrowed("query")]));
+    }
+}
