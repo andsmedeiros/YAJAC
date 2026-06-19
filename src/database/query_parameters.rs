@@ -21,7 +21,7 @@ use urlencoding::decode;
 
 mod regex_builder {
     /// Generic pattern for identifiers -- model names, field names and relationship names
-    pub(crate) static ID: &'static str = r"[a-zA-Z](?:[-_]*[a-zA-Z0-9]+)*";
+    pub(crate) static ID: &str = r"[a-zA-Z](?:[-_]*[a-zA-Z0-9]+)*";
 }
 
 /// Matches exactly a sort directive: a single identifier with an optional plus or minus sign,
@@ -221,7 +221,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
         self.schema
             .relationships
             .iter()
-            .filter(|(relationship, _)| self.should_load(*relationship))
+            .filter(|(relationship, _)| self.should_load(relationship))
     }
 
     /// Completes `self.fields` so that every model the request will touch can be queried.

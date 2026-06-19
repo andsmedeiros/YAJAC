@@ -4,6 +4,12 @@ use std::{borrow::Borrow, collections::HashMap, fmt::Display, str::FromStr};
 #[derive(Debug, Clone)]
 pub struct RouteParameters(HashMap<String, String>);
 
+impl Default for RouteParameters {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RouteParameters {
     pub fn new() -> RouteParameters {
         RouteParameters(HashMap::new())

@@ -439,7 +439,7 @@ fn collection_document<'a: 'b, 'b>(
 #[test]
 fn test_sparse_fieldset_only_username() -> Result<(), Box<dyn Error>> {
     with_database(|registry| {
-        seed_database(&registry)?;
+        seed_database(registry)?;
 
         let doc = record_document(
             registry,
@@ -469,10 +469,10 @@ fn test_sparse_fieldset_only_username() -> Result<(), Box<dyn Error>> {
 #[test]
 fn test_single_level_include_posts() -> Result<(), Box<dyn Error>> {
     with_database(|registry| {
-        seed_database(&registry)?;
+        seed_database(registry)?;
 
         let doc = record_document(
-            &registry,
+            registry,
             "users",
             Identifier::Integer(1),
             "/users/1?include=posts",
@@ -506,10 +506,10 @@ fn test_single_level_include_posts() -> Result<(), Box<dyn Error>> {
 #[test]
 fn test_multi_level_include_with_sparse_fieldsets() -> Result<(), Box<dyn Error>> {
     with_database(|registry| {
-        seed_database(&registry)?;
+        seed_database(registry)?;
 
         let doc = record_document(
-            &registry,
+            registry,
             "users",
             Identifier::Integer(1),
             "/users/1?include=posts.comments&fields[users]=username&fields[posts]=title,comments",
@@ -554,10 +554,10 @@ fn test_multi_level_include_with_sparse_fieldsets() -> Result<(), Box<dyn Error>
 #[test]
 fn test_deep_four_level_include() -> Result<(), Box<dyn Error>> {
     with_database(|registry| {
-        seed_database(&registry)?;
+        seed_database(registry)?;
 
         let doc = record_document(
-            &registry,
+            registry,
             "users",
             Identifier::Integer(1),
             "/users/1?include=posts.comments.replies.replies",
@@ -605,10 +605,10 @@ fn test_deep_four_level_include() -> Result<(), Box<dyn Error>> {
 #[test]
 fn test_multiple_relationships_same_level() -> Result<(), Box<dyn Error>> {
     with_database(|registry| {
-        seed_database(&registry)?;
+        seed_database(registry)?;
 
         let doc = record_document(
-            &registry,
+            registry,
             "users",
             Identifier::Integer(1),
             "/users/1?include=posts,comments,profile",
@@ -642,10 +642,10 @@ fn test_multiple_relationships_same_level() -> Result<(), Box<dyn Error>> {
 #[test]
 fn test_self_referential_comment_replies() -> Result<(), Box<dyn Error>> {
     with_database(|registry| {
-        seed_database(&registry)?;
+        seed_database(registry)?;
 
         let doc = record_document(
-            &registry,
+            registry,
             "comments",
             Identifier::Integer(1),
             "/comments/1?include=replies,replies.replies",
@@ -682,10 +682,10 @@ fn test_self_referential_comment_replies() -> Result<(), Box<dyn Error>> {
 #[test]
 fn test_belongs_to_with_author() -> Result<(), Box<dyn Error>> {
     with_database(|registry| {
-        seed_database(&registry)?;
+        seed_database(registry)?;
 
         let doc = record_document(
-            &registry,
+            registry,
             "posts",
             Identifier::Integer(1),
             "/posts/1?fields[posts]=title,author&include=author",
@@ -714,10 +714,10 @@ fn test_belongs_to_with_author() -> Result<(), Box<dyn Error>> {
 #[test]
 fn test_collection_with_includes() -> Result<(), Box<dyn Error>> {
     with_database(|registry| {
-        seed_database(&registry)?;
+        seed_database(registry)?;
 
         let doc = collection_document(
-            &registry,
+            registry,
             "posts",
             "/posts?include=author,comments&fields[posts]=title",
         )?;
@@ -754,10 +754,10 @@ fn test_collection_with_includes() -> Result<(), Box<dyn Error>> {
 #[test]
 fn test_has_one_relationship() -> Result<(), Box<dyn Error>> {
     with_database(|registry| {
-        seed_database(&registry)?;
+        seed_database(registry)?;
 
         let doc = record_document(
-            &registry,
+            registry,
             "users",
             Identifier::Integer(2),
             "/users/2?include=profile&fields[users]=username",
@@ -784,10 +784,10 @@ fn test_has_one_relationship() -> Result<(), Box<dyn Error>> {
 #[test]
 fn test_belongs_to_relationship_in_included() -> Result<(), Box<dyn Error>> {
     with_database(|registry| {
-        seed_database(&registry)?;
+        seed_database(registry)?;
 
         let doc = record_document(
-            &registry,
+            registry,
             "users",
             Identifier::Integer(1),
             "/users/1?include=posts.author",
@@ -817,10 +817,10 @@ fn test_belongs_to_relationship_in_included() -> Result<(), Box<dyn Error>> {
 #[test]
 fn test_nested_belongs_to_chain() -> Result<(), Box<dyn Error>> {
     with_database(|registry| {
-        seed_database(&registry)?;
+        seed_database(registry)?;
 
         let doc = record_document(
-            &registry,
+            registry,
             "comments",
             Identifier::Integer(9),
             "/comments/9?include=post.author",
@@ -854,11 +854,11 @@ fn test_nested_belongs_to_chain() -> Result<(), Box<dyn Error>> {
 #[test]
 fn test_sparse_fieldset_excludes_relationships_not_requested() -> Result<(), Box<dyn Error>> {
     with_database(|registry| {
-        seed_database(&registry)?;
+        seed_database(registry)?;
 
         // Request only username, which means posts relationship should NOT appear
         let doc = record_document(
-            &registry,
+            registry,
             "users",
             Identifier::Integer(1),
             "/users/1?fields[users]=username&include=posts",
@@ -883,11 +883,11 @@ fn test_sparse_fieldset_excludes_relationships_not_requested() -> Result<(), Box
 #[test]
 fn test_relationship_without_include() -> Result<(), Box<dyn Error>> {
     with_database(|registry| {
-        seed_database(&registry)?;
+        seed_database(registry)?;
 
         // Request posts relationship in fieldset but don't include it
         let doc = record_document(
-            &registry,
+            registry,
             "users",
             Identifier::Integer(1),
             "/users/1?fields[users]=username,posts",

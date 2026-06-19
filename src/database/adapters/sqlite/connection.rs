@@ -20,10 +20,8 @@ impl ToSql for Attribute {
         match self {
             Attribute::Null => Ok(ToSqlOutput::Owned(DatabaseValue::Null)),
             Attribute::Text(value) => Ok(ToSqlOutput::Owned(DatabaseValue::Text(value.clone()))),
-            Attribute::Integer(value) => {
-                Ok(ToSqlOutput::Owned(DatabaseValue::Integer(value.clone())))
-            }
-            Attribute::Float(value) => Ok(ToSqlOutput::Owned(DatabaseValue::Real(value.clone()))),
+            Attribute::Integer(value) => Ok(ToSqlOutput::Owned(DatabaseValue::Integer(*value))),
+            Attribute::Float(value) => Ok(ToSqlOutput::Owned(DatabaseValue::Real(*value))),
             Attribute::Boolean(value) => {
                 Ok(ToSqlOutput::Owned(DatabaseValue::Integer(if *value {
                     1
@@ -111,10 +109,10 @@ fn materialise_attributes(schema: &TableSchema, row: &Row) -> Result<Attributes,
         })
         .collect::<Result<Vec<_>, Error>>()?;
 
-    Ok(Attributes::from_iter(entries.into_iter()))
+    Ok(Attributes::from_iter(entries))
 }
 
-fn build_bindings(bindings: &Vec<Attribute>) -> Vec<&dyn ToSql> {
+fn build_bindings(bindings: &[Attribute]) -> Vec<&dyn ToSql> {
     bindings.iter().map(|b| b as &dyn ToSql).collect()
 }
 

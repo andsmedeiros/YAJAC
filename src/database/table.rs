@@ -111,7 +111,7 @@ pub trait Table<'sch, Connection: ConnectionInterface, QueryBuilder: QueryBuilde
                         && let Some((name, _)) =
                             schema.foreign_keys.iter().find(|(fk, _)| fk == &name)
                     {
-                        foreign_keys.insert(&name, attribute);
+                        foreign_keys.insert(name, attribute);
                     } else {
                         Err(Error::SchemaValidationFailure {
                             schema: schema.name.to_string(),
@@ -134,6 +134,6 @@ pub trait Table<'sch, Connection: ConnectionInterface, QueryBuilder: QueryBuilde
         self.run_fetch(query, bindings)?
             .into_iter()
             .next()
-            .ok_or_else(|| Error::RecordNotFound)
+            .ok_or(Error::RecordNotFound)
     }
 }

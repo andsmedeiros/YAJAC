@@ -44,7 +44,7 @@ impl MigratorInterface for Migrator<'_> {
                 "Running migration #{}: {}.",
                 migration.version, migration.name
             );
-            self.in_transaction(|transaction| Self::run_migration(&transaction, migration))
+            self.in_transaction(|transaction| Self::run_migration(transaction, migration))
         } else {
             info!("No migration is pending");
             Ok(())
@@ -63,7 +63,7 @@ impl MigratorInterface for Migrator<'_> {
                 "Rolling back migration #{}: {}.",
                 migration.version, migration.name
             );
-            self.in_transaction(|transaction| Self::rollback_migration(&transaction, migration))
+            self.in_transaction(|transaction| Self::rollback_migration(transaction, migration))
         } else {
             info!("No migration to rollback.");
             Ok(())
@@ -86,7 +86,7 @@ impl MigratorInterface for Migrator<'_> {
                         "Running migration #{}: {}.",
                         migration.version, migration.name
                     );
-                    Self::run_migration(&transaction, &migration)?;
+                    Self::run_migration(transaction, migration)?;
                 }
                 Ok(())
             })?;
@@ -115,7 +115,7 @@ impl MigratorInterface for Migrator<'_> {
                         "Rolling back migration #{}: {}.",
                         migration.version, migration.name
                     );
-                    Self::rollback_migration(&transaction, migration)?;
+                    Self::rollback_migration(transaction, migration)?;
                 }
                 Ok(())
             })?;

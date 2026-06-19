@@ -87,7 +87,7 @@ impl StatusCode {
 
 impl Display for StatusCode {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0.to_string())
+        write!(f, "{}", self.0)
     }
 }
 

@@ -131,7 +131,7 @@ impl From<HttpError> for Error {
         Error::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "UnexpectedError",
-            &error.to_string(),
+            error.to_string(),
         )
     }
 }
@@ -141,7 +141,7 @@ impl From<JsonError> for Error {
         Error::new(
             StatusCode::BAD_REQUEST,
             "JsonSerialisationError",
-            &error.to_string(),
+            error.to_string(),
         )
         .with_meta(json!({
             "kind": format!("{:?}", error.classify()),
@@ -153,7 +153,7 @@ impl From<JsonError> for Error {
 
 impl From<Error> for Vec<Error> {
     fn from(error: Error) -> Self {
-        vec![error].into()
+        vec![error]
     }
 }
 

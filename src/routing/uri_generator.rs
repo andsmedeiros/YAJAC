@@ -1,6 +1,6 @@
 use crate::{http_wrappers::Uri, json_api::identifier::Identifier};
 
-const GENERATED_INVALID_MSG: &'static str =
+const GENERATED_INVALID_MSG: &str =
     "Generated an invalid URI. This is a bug and should not happen!";
 
 pub trait UriGenerator {

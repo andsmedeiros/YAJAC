@@ -404,7 +404,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     colog::init();
 
     with_database(|registry| {
-        seed_database(&registry)?;
+        seed_database(registry)?;
 
         let uri: Uri = "/users?include=posts.comments.replies.replies".parse()?;
         let schema = registry.table("users")?.schema();
@@ -412,7 +412,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut collection = registry.table("users")?.query(&query_params)?;
         let included =
-            DataLoader::new(&registry).load_for_collection(&mut collection, &query_params)?;
+            DataLoader::new(registry).load_for_collection(&mut collection, &query_params)?;
         let document = to_document(&collection, included, &uri, &DefaultUriGenerator::default())?;
         println!("{}", serde_json::to_string_pretty(&document)?);
 

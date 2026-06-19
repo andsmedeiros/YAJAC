@@ -107,17 +107,17 @@ fn find<'sch, 'req, T: 'sch>(
     name: &'req str,
 ) -> Option<&'sch T> {
     collection
-        .into_iter()
+        .iter()
         .find_map(|(key, value)| if *key == name { Some(value) } else { None })
 }
 
 impl<'sch> TableSchema<'sch> {
     pub fn attribute(&self, attribute_name: &str) -> Option<AttributeType> {
-        find(self.attributes, attribute_name).map(|kind| kind.clone())
+        find(self.attributes, attribute_name).copied()
     }
 
     pub fn foreign_key(&self, foreign_key_name: &str) -> Option<AttributeType> {
-        find(self.foreign_keys, foreign_key_name).map(|kind| kind.clone())
+        find(self.foreign_keys, foreign_key_name).copied()
     }
 
     pub fn relationship(&self, relationship_name: &str) -> Option<&Relationship<'sch>> {

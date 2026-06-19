@@ -12,7 +12,7 @@ pub struct Uri(http::Uri);
 
 impl Display for Uri {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0.to_string())
+        write!(f, "{}", self.0)
     }
 }
 

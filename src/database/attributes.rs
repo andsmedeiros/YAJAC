@@ -288,7 +288,7 @@ impl From<Attribute> for Value {
             Attribute::Text(value) => Value::String(value),
             Attribute::Integer(value) => Value::Number(value.into()),
             Attribute::Float(value) => serde_json::Number::from_f64(value)
-                .and_then(|value| Some(Value::Number(value)))
+                .map(Value::Number)
                 .unwrap_or(Value::Null),
             Attribute::Boolean(value) => Value::Bool(value),
             Attribute::DateTime(value) => Value::String(value.to_rfc3339()),
@@ -461,7 +461,7 @@ pub fn from_value(schema: &TableSchema, value: Value) -> Result<Attributes, Erro
     }
     .collect::<Result<Vec<_>, Error>>()?;
 
-    Ok(Attributes::from_iter(entries.into_iter()))
+    Ok(Attributes::from_iter(entries))
 }
 
 #[cfg(test)]
@@ -484,14 +484,14 @@ mod tests {
         assert_eq!(text.as_string().unwrap(), "hello");
         assert_eq!(*integer.as_i64().unwrap(), 42);
         assert_eq!(*float.as_f64().unwrap(), 3.14);
-        assert_eq!(*boolean.as_bool().unwrap(), true);
+        assert!(*boolean.as_bool().unwrap());
         assert!(datetime.as_datetime().is_ok());
 
         // Test successful to_* conversions
         assert_eq!(text.clone().to_string().unwrap(), "hello");
         assert_eq!(integer.clone().to_i64().unwrap(), 42);
         assert_eq!(float.clone().to_f64().unwrap(), 3.14);
-        assert_eq!(boolean.clone().to_bool().unwrap(), true);
+        assert!(boolean.clone().to_bool().unwrap());
         assert!(datetime.clone().to_datetime().is_ok());
 
         // Test failed conversions
@@ -535,7 +535,7 @@ mod tests {
         assert_eq!(attributes["name"].as_string().unwrap(), "John");
         assert_eq!(*attributes["age"].as_i64().unwrap(), 30);
         assert_eq!(*attributes["score"].as_f64().unwrap(), 85.5);
-        assert_eq!(*attributes["active"].as_bool().unwrap(), true);
+        assert!(*attributes["active"].as_bool().unwrap());
 
         // Test failures
         let json_unknown = json!({"unknown_field": "value"});
@@ -592,11 +592,11 @@ mod tests {
         // Test string conversions
         let json_true = json!({"flag": "true"});
         let attributes = from_value(&schema, json_true).unwrap();
-        assert_eq!(*attributes["flag"].as_bool().unwrap(), true);
+        assert!(*attributes["flag"].as_bool().unwrap());
 
         let json_false = json!({"flag": "FALSE"});
         let attributes = from_value(&schema, json_false).unwrap();
-        assert_eq!(*attributes["flag"].as_bool().unwrap(), false);
+        assert!(!(*attributes["flag"].as_bool().unwrap()));
 
         let json_invalid_str = json!({"flag": "maybe"});
         assert!(from_value(&schema, json_invalid_str).is_err());
@@ -604,11 +604,11 @@ mod tests {
         // Test number conversions
         let json_one = json!({"flag": 1});
         let attributes = from_value(&schema, json_one).unwrap();
-        assert_eq!(*attributes["flag"].as_bool().unwrap(), true);
+        assert!(*attributes["flag"].as_bool().unwrap());
 
         let json_zero = json!({"flag": 0});
         let attributes = from_value(&schema, json_zero).unwrap();
-        assert_eq!(*attributes["flag"].as_bool().unwrap(), false);
+        assert!(!(*attributes["flag"].as_bool().unwrap()));
 
         let json_invalid_num = json!({"flag": 2});
         assert!(from_value(&schema, json_invalid_num).is_err());

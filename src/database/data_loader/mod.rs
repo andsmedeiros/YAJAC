@@ -271,7 +271,7 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
         Ok(related_collection)
     }
 
-    fn load_collection_by<'req>(
+    fn load_collection_by(
         table: &Adapter::Table<'sch>,
         column: &'sch str,
         attributes: &[Option<Attribute>],
@@ -289,7 +289,7 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
             filter: Some([(column, vec![In(attributes)])].into()),
             fields: fields
                 .iter()
-                .map(|(key, value)| (*key, value.iter().map(|s| *s).collect()))
+                .map(|(key, value)| (*key, value.iter().copied().collect()))
                 .collect(),
             ..QueryParameters::new(table.schema())
         };
@@ -320,8 +320,8 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
             })
     }
 
-    fn index_for_unique_attribute<'req>(
-        collection: &'req [Record],
+    fn index_for_unique_attribute(
+        collection: &[Record],
         attribute: &str,
         relationship: &str,
     ) -> Result<HashMap<Attribute, Identifier>, Error> {
@@ -334,8 +334,8 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
             .collect()
     }
 
-    fn index_for_repeating_attribute<'req>(
-        collection: &'req [Record],
+    fn index_for_repeating_attribute(
+        collection: &[Record],
         attribute: &str,
         relationship: &str,
     ) -> Result<HashMap<Attribute, Vec<Identifier>>, Error> {

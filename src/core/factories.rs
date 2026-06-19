@@ -54,7 +54,7 @@ pub fn make_resource(record: &Record, uri_generator: &dyn UriGenerator) -> Resul
     let relationships = record.relationships
         .iter()
         .map(|(relationship, value)| -> Result<_, Error> {
-            let descriptor = record.schema.relationship(&relationship)
+            let descriptor = record.schema.relationship(relationship)
                 .ok_or_else(|| Error::DocumentSerialisationError {
                     message: format!("Failed to describe relationship '{}' on model '{}'", relationship, record.kind())
                 })?;
@@ -68,7 +68,7 @@ pub fn make_resource(record: &Record, uri_generator: &dyn UriGenerator) -> Resul
                     }),
                 (SchemaRelationship::HasMany(def), DatabaseRelationship::HasMany(ids)) =>
                     Linkage::ToMany(ids
-                        .into_iter()
+                        .iter()
                         .map(|id| Identifier::Existing {
                             kind: def.resource.to_string(),
                             id: id.to_string()
@@ -151,7 +151,7 @@ pub fn to_document<'a>(
         content,
         meta: None,
         jsonapi: Some(implementation_info()),
-        links: Some(document_links(&uri)),
+        links: Some(document_links(uri)),
         included: Some(included),
     })
 }
