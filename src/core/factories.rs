@@ -1,7 +1,7 @@
 use crate::{
     core::error::Error,
     database::{
-        query_parameters::QueryParameters, record::Record,
+        record::Record,
         relationships::Relationship as DatabaseRelationship,
         schema::Relationship as SchemaRelationship,
     },
@@ -44,36 +44,15 @@ impl<'a> From<Vec<JsonApiError>> for Content<'a> {
     }
 }
 
-fn extract_attributes(
-    record: &Record,
-    query_parameters: &QueryParameters,
-) -> HashMap<String, Value> {
-    let attributes = record
-        .attributes
-        .iter()
-        .map(|(key, value)| (key.clone(), Value::from(value.clone())));
-
-    if let Some(ref parameters) = query_parameters.fields {
-        if let Some(model_parameters) = parameters.get(record.schema.name) {
-            attributes
-                .filter(|(attribute, _)| model_parameters.contains(attribute))
-                .collect()
-        } else {
-            attributes.collect()
-        }
-    } else {
-        attributes.collect()
-    }
-}
-
 pub fn make_resource(
     record: &Record,
-    query_parameters: &QueryParameters,
     uri_generator: &dyn UriGenerator,
 ) -> Result<Resource, Error> {
     let identifier = record.identifier()?;
-
-    let attributes = extract_attributes(record, query_parameters);
+    let attributes = record.attributes
+        .iter()
+        .map(|(name, value)| (name.clone(), Value::from(value.clone())))
+        .collect();
 
     let relationships = record.relationships
         .iter()
@@ -153,15 +132,14 @@ fn document_links(uri: &Uri) -> document::Links {
 pub fn to_document<'a>(
     content: impl Into<Content<'a>>,
     included: Vec<Record>,
-    uri: Uri,
-    query_parameters: &QueryParameters,
+    uri: &Uri,
     uri_generator: &dyn UriGenerator,
 ) -> Result<Document, Error> {
     let content: PrimaryContent = match content.into() {
-        Content::Resource(record) => make_resource(record, query_parameters, uri_generator)?.into(),
+        Content::Resource(record) => make_resource(record, uri_generator)?.into(),
         Content::Collection(collection) => collection
             .into_iter()
-            .map(|record| make_resource(record, query_parameters, uri_generator))
+            .map(|record| make_resource(record, uri_generator))
             .collect::<Result<Vec<_>, _>>()?
             .into(),
         Content::Errors(errors) => errors.into(),
@@ -169,7 +147,7 @@ pub fn to_document<'a>(
 
     let included = included
         .into_iter()
-        .map(|record| make_resource(&record, query_parameters, uri_generator))
+        .map(|record| make_resource(&record, uri_generator))
         .collect::<Result<Vec<_>, Error>>()?;
 
     Ok(Document {

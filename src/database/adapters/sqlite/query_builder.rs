@@ -1,3 +1,4 @@
+use crate::database::attributes::Identifier;
 use crate::database::{
     attributes::{Attribute, Attributes},
     error::Error,
@@ -9,8 +10,6 @@ use crate::database::{
     schema::{AttributeType, TableSchema},
 };
 use itertools::Itertools;
-use std::{any::type_name, slice, str::FromStr};
-use crate::database::attributes::Identifier;
 
 struct ExtractedAttributes {
     fields: Vec<String>,
@@ -34,17 +33,10 @@ pub struct QueryBuilder<'sch> {
 
 impl<'sch> QueryBuilder<'sch> {
     fn build_select_clause(&self, fields: &FieldsParameters, query: &mut Vec<String>) {
-        query.extend([
-            "SELECT".to_string(),
-            self.fields_for_model(fields)
-        ]);
+        query.extend(["SELECT".to_string(), self.fields_for_model(fields)]);
     }
 
-    fn build_insert_clause(
-        &self,
-        attributes: Attributes,
-        query: &mut Vec<String>,
-    ) -> Bindings {
+    fn build_insert_clause(&self, attributes: Attributes, query: &mut Vec<String>) -> Bindings {
         let attributes = self.extract_attributes(attributes);
         let placeholders = attributes.to_placeholders();
 
@@ -78,11 +70,7 @@ impl<'sch> QueryBuilder<'sch> {
         }
 
         query.push(format!("WHERE id = ?{}", attributes.values.len() + 1));
-        [
-            attributes.values.as_slice(),
-            &[Attribute::from(id)],
-        ]
-        .concat()
+        [attributes.values.as_slice(), &[Attribute::from(id)]].concat()
     }
 
     fn build_from_clause(&self, query: &mut Vec<String>) {
@@ -202,16 +190,16 @@ impl<'sch> QueryBuilder<'sch> {
         Ok(bindings)
     }
 
-    fn build_order_by_clause(
-        &self,
-        sort: &Option<SortParameters>,
-        query: &mut Vec<String>,
-    ) {
+    fn build_order_by_clause(&self, sort: &Option<SortParameters>, query: &mut Vec<String>) {
         if let Some(fields) = sort {
             query.push("ORDER BY".to_string());
             let mut sort_query = Vec::new();
 
-            for SortingAttribute { attribute: field, direction } in fields {
+            for SortingAttribute {
+                attribute: field,
+                direction,
+            } in fields
+            {
                 let direction = match direction {
                     SortDirection::Ascending => "ASC",
                     SortDirection::Descending => "DESC",
@@ -232,18 +220,33 @@ impl<'sch> QueryBuilder<'sch> {
         }
     }
 
-    fn build_returning_clause(&self, fields: &FieldsParameters, query: &mut Vec<String>)  {
-        query.extend([
-            "RETURNING".to_string(),
-            self.fields_for_model(fields)
-        ]);
+    fn build_returning_clause(&self, fields: &FieldsParameters, query: &mut Vec<String>) {
+        query.extend(["RETURNING".to_string(), self.fields_for_model(fields)]);
     }
 
     fn fields_for_model(&self, fields: &FieldsParameters) -> String {
-        fields
+        let fields = fields
             .get(self.schema.name)
             .expect("Columns for all requested models should have been pre-loaded by the query parameters parser")
             .iter()
+            .map(|field| if self.schema.has_attribute(field) || self.schema.has_foreign_key(field) {
+                field
+            } else {
+                self.schema
+                    .relationship(field)
+                    .expect(
+                        "\
+                        All columns provided to the query builder should have been pre-validated by \
+                        the query parameters parser\
+                        "
+                    )
+                    .related_resource()
+                    .keys.own
+            });
+
+        [self.schema.primary_key.name]
+            .into_iter()
+            .chain(fields)
             .join(", ")
     }
 
@@ -279,7 +282,11 @@ impl<'sch> QueryBuilderInterface<'sch> for QueryBuilder<'sch> {
         Ok((query.join(" ").to_string(), bindings))
     }
 
-    fn find(&self, id: Identifier, parameters: &QueryParameters) -> Result<(String, Bindings), Error> {
+    fn find(
+        &self,
+        id: Identifier,
+        parameters: &QueryParameters,
+    ) -> Result<(String, Bindings), Error> {
         let mut query = Vec::new();
 
         self.build_select_clause(&parameters.fields, &mut query);
@@ -320,7 +327,7 @@ impl<'sch> QueryBuilderInterface<'sch> for QueryBuilder<'sch> {
     fn delete(&self, id: Identifier) -> (String, Bindings) {
         (
             format!("DELETE FROM {} WHERE id = ?1", self.schema.name),
-            [ Attribute::from(id) ].into(),
+            [Attribute::from(id)].into(),
         )
     }
 }

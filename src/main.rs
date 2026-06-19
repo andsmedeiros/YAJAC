@@ -254,8 +254,6 @@ where
 fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error>> {
     use Attribute::{Integer, Null};
 
-    let query_params = QueryParameters::default();
-
     // Create users
     let users_table = registry.table("users")?;
     for (i, (username, email)) in [
@@ -275,7 +273,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
                 ),
                 ("email".to_string(), Attribute::Text(email.to_string())),
             ]),
-            &query_params,
+            &QueryParameters::new(users_table.schema()),
         )?;
     }
 
@@ -296,7 +294,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
                     Attribute::Text(avatar.to_string()),
                 ),
             ]),
-            &query_params,
+            &QueryParameters::new(profiles_table.schema()),
         )?;
     }
 
@@ -329,7 +327,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
                 ("content".to_string(), Attribute::Text(content.to_string())),
                 ("published".to_string(), Attribute::Boolean(published)),
             ]),
-            &query_params,
+            &QueryParameters::new(posts_table.schema()),
         )?;
     }
 
@@ -383,7 +381,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
                 ("parent_id".to_string(), parent_id),
                 ("content".to_string(), Attribute::Text(content.to_string())),
             ]),
-            &query_params,
+            &QueryParameters::new(comments_table.schema()),
         )?;
     }
 
@@ -395,7 +393,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
                 ("id".to_string(), Attribute::Integer(id)),
                 ("name".to_string(), Attribute::Text(name.to_string())),
             ]),
-            &query_params,
+            &QueryParameters::new(tags_table.schema()),
         )?;
     }
 
@@ -409,7 +407,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         seed_database(&registry)?;
 
         let uri: Uri = "/users?include=posts.comments.replies.replies".parse()?;
-        let query_params = QueryParameters::parse(&uri)?;
+        let schema = registry.table("users")?.schema();
+        let query_params = QueryParameters::parse(&uri, schema, registry)?;
 
         let mut collection = registry.table("users")?.query(&query_params)?;
         let included =
@@ -417,16 +416,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let document = to_document(
             &collection,
             included,
-            uri,
-            &query_params,
+            &uri,
             &DefaultUriGenerator::default(),
         )?;
-        // let mut record = users_table.find(1, &query_params)?;
-        // let included = DataLoader::new(&registry)
-        //     .load_for_record(&mut record, &query_params)?;
-        // let document =
-        //     to_document(&record, included, uri, &query_params, &DefaultUriGenerator::default())?;
-        // println!("{}", serde_json::to_string_pretty(&document).unwrap());
         println!("{}", serde_json::to_string_pretty(&document)?);
 
         Ok(())

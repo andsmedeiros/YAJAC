@@ -1,5 +1,3 @@
-mod load_context;
-
 #[cfg(test)]
 mod tests;
 
@@ -11,16 +9,16 @@ use super::{
     record::Record,
     registry::Registry,
     relationships::Relationship::*,
-    schema::{RelatedResource, Relationship, TableSchema},
+    schema::{RelatedResource, Relationship},
     table::Table,
 };
 use crate::database::attributes::Identifier;
-use crate::database::data_loader::load_context::{LoadContext, RequestedFields};
 use crate::database::relationships::Relationships;
 use std::{
     collections::{HashMap, HashSet, hash_map::Entry},
-    ptr, slice,
+    slice,
 };
+use crate::database::query_parameters::FieldsParameters;
 
 type GlobalIdentifier<'sch> = (&'sch str, Identifier);
 
@@ -44,7 +42,7 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
     pub fn load_for_record<'req>(
         self,
         record: &'req mut Record<'sch>,
-        query_parameters: &'req QueryParameters,
+        query_parameters: &'req QueryParameters<'sch, 'req>,
     ) -> Result<Vec<Record<'sch>>, Error> {
         self.load_for_collection(slice::from_mut(record), query_parameters)
     }
@@ -52,13 +50,10 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
     pub fn load_for_collection<'req>(
         mut self,
         collection: &'req mut [Record<'sch>],
-        query_parameters: &'req QueryParameters,
+        query_parameters: &'req QueryParameters<'sch, 'req>,
     ) -> Result<Vec<Record<'sch>>, Error> {
         if !collection.is_empty() {
-            let schema = Self::collection_schema(collection)?;
-            let context = LoadContext::new(schema, self.registry, query_parameters)?;
-
-            self.load_with_context(collection, &context)?;
+            self.load_with_context(collection, query_parameters)?;
         }
 
         let included = self
@@ -79,10 +74,10 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
     fn load_with_context<'req>(
         &mut self,
         collection: &'req mut [Record<'sch>],
-        context: &LoadContext<'sch, 'req, Adapter>,
+        query_parameters: &'req QueryParameters<'sch, 'req>,
     ) -> Result<(), Error> {
-        for (relationship, descriptor) in context.relationships_to_load() {
-            self.load_relationship(collection, &context, relationship, descriptor)?;
+        for (relationship, descriptor) in query_parameters.relationships_to_load() {
+            self.load_relationship(collection, query_parameters, relationship, descriptor)?;
         }
 
         Ok(())
@@ -91,24 +86,24 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
     fn load_relationship<'req>(
         &mut self,
         collection: &'req mut [Record<'sch>],
-        context: &LoadContext<'sch, 'req, Adapter>,
+        query_parameters: &'req QueryParameters<'sch, 'req>,
         relationship: &'sch str,
         descriptor: &'sch Relationship,
     ) -> Result<(), Error> {
         let mut related_collection = match descriptor {
             Relationship::BelongsTo(descriptor) => {
-                self.load_belongs_to(relationship, descriptor, collection, context)?
+                self.load_belongs_to(relationship, descriptor, collection, query_parameters)?
             }
             Relationship::HasMany(descriptor) => {
-                self.load_has_many(relationship, descriptor, collection, context)?
+                self.load_has_many(relationship, descriptor, collection, query_parameters)?
             }
             Relationship::HasOne(descriptor) => {
-                self.load_has_one(relationship, descriptor, collection, context)?
+                self.load_has_one(relationship, descriptor, collection, query_parameters)?
             }
         };
 
-        if context.is_included(relationship) {
-            let derived_context = context.derive(relationship)?;
+        if query_parameters.is_included(relationship) {
+            let derived_context = query_parameters.derive(relationship, self.registry)?;
             self.load_with_context(related_collection.as_mut_slice(), &derived_context)?;
 
             let related_identifiers = related_collection
@@ -140,23 +135,23 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
         relationship: &'sch str,
         descriptor: &'sch RelatedResource,
         collection: &'req mut [Record<'sch>],
-        context: &LoadContext<'sch, 'req, Adapter>,
+        query_parameters: &'req QueryParameters,
     ) -> Result<Vec<Record<'sch>>, Error> {
         let related_schema = self.registry.table(descriptor.resource)?.schema();
         let joins_on_primary_key = related_schema.is_primary_key(descriptor.keys.related);
 
-        let requested = context.is_requested(relationship);
-        let included = context.is_included(relationship);
+        let requested = query_parameters.is_requested(relationship);
+        let included = query_parameters.is_included(relationship);
         let query_needed = included || (requested && !joins_on_primary_key);
 
         let related_collection = if query_needed {
-            let table = context.registry.table(descriptor.resource)?;
+            let table = self.registry.table(descriptor.resource)?;
             let own_attributes = Self::collection_attribute(collection, descriptor.keys.own);
             Self::load_collection_by(
                 table,
                 descriptor.keys.related,
                 own_attributes.as_slice(),
-                &context.fields,
+                &query_parameters.fields,
             )?
         } else {
             Vec::new()
@@ -209,15 +204,15 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
         relationship: &'sch str,
         descriptor: &'sch RelatedResource,
         collection: &'req mut [Record<'sch>],
-        context: &LoadContext<'sch, 'req, Adapter>,
+        query_parameters: &'req QueryParameters
     ) -> Result<Vec<Record<'sch>>, Error> {
-        let table = context.registry.table(descriptor.resource)?;
+        let table = self.registry.table(descriptor.resource)?;
         let own_attributes = Self::collection_attribute(collection, descriptor.keys.own);
         let related_collection = Self::load_collection_by(
             table,
             descriptor.keys.related,
             &own_attributes,
-            &context.fields,
+            &query_parameters.fields,
         )?;
         let mut index = Self::index_for_unique_attribute(
             &related_collection,
@@ -225,7 +220,7 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
             relationship,
         )?;
 
-        if context.is_requested(relationship) {
+        if query_parameters.is_requested(relationship) {
             for record in collection {
                 if let Some(attribute) = Self::get_attribute(record, descriptor.keys.own)
                     && let Some(related_id) = index.remove(&attribute)
@@ -245,15 +240,15 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
         relationship: &'sch str,
         descriptor: &'sch RelatedResource,
         collection: &'req mut [Record<'sch>],
-        context: &LoadContext<'sch, 'req, Adapter>,
+        query_parameters: &'req QueryParameters
     ) -> Result<Vec<Record<'sch>>, Error> {
-        let table = context.registry.table(descriptor.resource)?;
+        let table = self.registry.table(descriptor.resource)?;
         let own_attributes = Self::collection_attribute(collection, descriptor.keys.own);
         let related_collection = Self::load_collection_by(
             table,
             descriptor.keys.related,
             own_attributes.as_slice(),
-            &context.fields,
+            &query_parameters.fields,
         )?;
         let mut index = Self::index_for_repeating_attribute(
             related_collection.as_slice(),
@@ -261,7 +256,7 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
             relationship,
         )?;
 
-        if context.is_requested(relationship) {
+        if query_parameters.is_requested(relationship) {
             for record in collection {
                 if let Some(attribute) = Self::get_attribute(record, descriptor.keys.own)
                     && let Some(related_ids) = index.remove(&attribute)
@@ -278,33 +273,30 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
 
     fn load_collection_by<'req>(
         table: &Adapter::Table<'sch>,
-        column: &str,
+        column: &'sch str,
         attributes: &[Option<Attribute>],
-        fields: &RequestedFields,
+        fields: &FieldsParameters,
     ) -> Result<Vec<Record<'sch>>, Error> {
         let attributes = attributes
             .iter()
             .filter_map(|entry| match entry {
-                None => None,
-                Some(Attribute::Null) => None,
-                Some(attribute) => Some(attribute.to_string()),
+                None | Some(Attribute::Null) => None,
+                Some(attribute) => Some(attribute.clone()),
             })
             .collect();
 
         let query_parameters = QueryParameters {
-            filter: Some([(column.to_string(), vec![In(attributes)])].into()),
-            fields: Some(
-                fields
+            filter: Some([(column, vec![In(attributes)])].into()),
+            fields: fields
                     .iter()
                     .map(|(key, value)| {
                         (
-                            key.to_string(),
-                            value.iter().map(ToString::to_string).collect(),
+                            *key,
+                            value.iter().map(|s| *s).collect(),
                         )
                     })
                     .collect(),
-            ),
-            ..QueryParameters::default()
+            ..QueryParameters::new(table.schema())
         };
 
         table.query(&query_parameters)
@@ -363,21 +355,6 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
         }
 
         Ok(index)
-    }
-
-    fn collection_schema(collection: &[Record<'sch>]) -> Result<&'sch TableSchema<'sch>, Error> {
-        let mut collection = collection.iter();
-        let first = collection.next().ok_or_else(|| Error::DataLoadingError {
-            message: "Attempted to load related data from an empty collection".to_string(),
-        })?;
-
-        if collection.any(|record| ptr::from_ref(record.schema) != ptr::from_ref(first.schema)) {
-            return Err(Error::DataLoadingError {
-                message: "Attempted to load related data from an heterogeneous collection; this is not supported.".to_string()
-            });
-        }
-
-        Ok(first.schema)
     }
 
     fn collection_attribute(collection: &[Record], attribute: &str) -> Vec<Option<Attribute>> {

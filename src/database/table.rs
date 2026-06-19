@@ -35,7 +35,7 @@ pub trait Table<'sch, Connection: ConnectionInterface, QueryBuilder: QueryBuilde
         self.query(parameters).map(|rows| rows.into_iter().next())
     }
 
-    fn find(&self, id: i32, parameters: &QueryParameters) -> Result<Record<'sch>, Error> {
+    fn find(&self, id: Identifier, parameters: &QueryParameters) -> Result<Record<'sch>, Error> {
         let (query, bindings) = QueryBuilder::new(self.schema()).find(id, parameters)?;
 
         self.run_fetch_single(query, bindings)
@@ -53,7 +53,7 @@ pub trait Table<'sch, Connection: ConnectionInterface, QueryBuilder: QueryBuilde
 
     fn update(
         &self,
-        id: i32,
+        id: Identifier,
         attributes: Attributes,
         parameters: &QueryParameters,
     ) -> Result<Record<'sch>, Error> {
@@ -63,7 +63,7 @@ pub trait Table<'sch, Connection: ConnectionInterface, QueryBuilder: QueryBuilde
         self.run_fetch_single(query, bindings)
     }
 
-    fn delete(&self, id: i32) -> Result<(), Error> {
+    fn delete(&self, id: Identifier) -> Result<(), Error> {
         let (query, bindings) = QueryBuilder::new(self.schema()).delete(id);
         self.connection()?.execute(query, bindings)
     }
