@@ -55,9 +55,9 @@ pub struct Error {
     status: StatusCode,
     code: String,
     title: String,
-    source: Option<Source>,
+    source: Option<Box<Source>>,
     detail: Option<String>,
-    meta: Option<Value>,
+    meta: Option<Box<Value>>,
 }
 
 impl Error {
@@ -77,7 +77,7 @@ impl Error {
     }
 
     pub fn with_source(mut self, source: Source) -> Self {
-        self.source = Some(source);
+        self.source = Some(Box::new(source));
         self
     }
 
@@ -87,7 +87,7 @@ impl Error {
     }
 
     pub fn with_meta(mut self, meta: Value) -> Self {
-        self.meta = Some(meta);
+        self.meta = Some(Box::new(meta));
         self
     }
 

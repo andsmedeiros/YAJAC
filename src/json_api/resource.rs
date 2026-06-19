@@ -29,3 +29,35 @@ pub struct Resource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub meta: Option<HashMap<String, Value>>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_resource_serializes_with_flattened_identifier_and_omits_empty_fields() {
+        let resource = Resource {
+            identifier: Identifier::Existing {
+                kind: "articles".to_string(),
+                id: "1".to_string(),
+            },
+            attributes: Some(HashMap::from([("title".to_string(), json!("Hello"))])),
+            relationships: None,
+            links: Some(Links {
+                this: "/articles/1".parse().unwrap(),
+            }),
+            meta: None,
+        };
+
+        assert_eq!(
+            serde_json::to_value(&resource).unwrap(),
+            json!({
+                "type": "articles",
+                "id": "1",
+                "attributes": { "title": "Hello" },
+                "links": { "self": "/articles/1" }
+            })
+        );
+    }
+}

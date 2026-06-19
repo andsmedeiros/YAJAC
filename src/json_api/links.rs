@@ -37,5 +37,36 @@ pub struct LinkObject {
 #[serde(untagged)]
 pub enum Link {
     Uri(Uri),
-    Object(LinkObject),
+    Object(Box<LinkObject>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_uri_link_serializes_as_string() {
+        let link = Link::Uri("/articles/1".parse().unwrap());
+
+        assert_eq!(serde_json::to_value(&link).unwrap(), json!("/articles/1"));
+    }
+
+    #[test]
+    fn test_object_link_serializes_as_object_omitting_empty_fields() {
+        let link = Link::Object(Box::new(LinkObject {
+            href: "/articles/1".parse().unwrap(),
+            rel: None,
+            described_by: None,
+            title: Some("Article".to_string()),
+            kind: Some("text/html".to_string()),
+            href_lang: None,
+            meta: None,
+        }));
+
+        assert_eq!(
+            serde_json::to_value(&link).unwrap(),
+            json!({ "href": "/articles/1", "title": "Article", "type": "text/html" })
+        );
+    }
 }
