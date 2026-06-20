@@ -2,6 +2,7 @@ use rusqlite::Connection;
 use std::error::Error;
 use yajac::database::QueryParameters;
 use yajac::database::adapters::SqliteAdapter;
+use yajac::database::adapters::sqlite::Pool as SqlitePool;
 use yajac::database::attributes::{Attribute, Attributes};
 use yajac::database::data_loader::DataLoader;
 use yajac::database::registry::Registry;
@@ -245,7 +246,7 @@ where
         ",
     )?;
 
-    let registry = Registry::<SqliteAdapter>::try_new(connection, &SCHEMAS)?;
+    let registry = Registry::<SqliteAdapter>::try_new(SqlitePool::new(connection), &SCHEMAS)?;
     func(&registry)?;
 
     Ok(())
@@ -254,8 +255,10 @@ where
 fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error>> {
     use Attribute::{Integer, Null};
 
+    let connection = registry.acquire()?;
+
     // Create users
-    let users_table = registry.table("users")?;
+    let users_table = registry.table("users", connection)?;
     for (i, (username, email)) in [
         ("alice", "alice@example.com"),
         ("bob", "bob@example.com"),
@@ -278,7 +281,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
     }
 
     // Create profiles
-    let profiles_table = registry.table("profiles")?;
+    let profiles_table = registry.table("profiles", connection)?;
     for (id, user_id, bio, avatar) in [
         (1, 1, "Alice's bio", "https://example.com/alice.jpg"),
         (2, 2, "Bob's bio", "https://example.com/bob.jpg"),
@@ -299,7 +302,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
     }
 
     // Create posts
-    let posts_table = registry.table("posts")?;
+    let posts_table = registry.table("posts", connection)?;
     for (id, author_id, title, content, published) in [
         (
             1,
@@ -332,7 +335,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
     }
 
     // Create comments (including nested replies for 4-level depth)
-    let comments_table = registry.table("comments")?;
+    let comments_table = registry.table("comments", connection)?;
     for (id, post_id, author_id, parent_id, content) in [
         // Post 1 comments - 4 levels deep
         (1, 1, 2, Null, "Bob commenting on Alice's first post"),
@@ -386,7 +389,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
     }
 
     // Create tags
-    let tags_table = registry.table("tags")?;
+    let tags_table = registry.table("tags", connection)?;
     for (id, name) in [(1, "rust"), (2, "programming"), (3, "web"), (4, "database")] {
         tags_table.insert(
             Attributes::from_iter([
@@ -407,12 +410,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         seed_database(registry)?;
 
         let uri: Uri = "/users?include=posts.comments.replies.replies".parse()?;
-        let schema = registry.table("users")?.schema();
+        let schema = registry.schema("users")?;
         let query_params = QueryParameters::parse(&uri, schema, registry)?;
 
-        let mut collection = registry.table("users")?.query(&query_params)?;
-        let included =
-            DataLoader::new(registry).load_for_collection(&mut collection, &query_params)?;
+        let connection = registry.acquire()?;
+        let mut collection = registry.table("users", connection)?.query(&query_params)?;
+        let included = DataLoader::new(registry, connection)
+            .load_for_collection(&mut collection, &query_params)?;
         let document = to_document(&collection, included, &uri, &DefaultUriGenerator::default())?;
         println!("{}", serde_json::to_string_pretty(&document)?);
 
