@@ -553,7 +553,6 @@ mod tests {
     use crate::database::adapters::sqlite::Pool;
     use crate::database::registry::Registry as DatabaseRegistry;
     use crate::database::schema::{IdentifierType, PrimaryKey, RelatedResource, RelationshipKeys};
-    use rusqlite::Connection;
 
     type Registry = DatabaseRegistry<'static, SqliteAdapter>;
 
@@ -641,8 +640,7 @@ mod tests {
     static SCHEMAS: [&TableSchema; 3] = [&ARTICLES, &USERS, &COMMENTS];
 
     fn registry() -> Registry {
-        DatabaseRegistry::try_new(Pool::new(Connection::open_in_memory().unwrap()), &SCHEMAS)
-            .unwrap()
+        DatabaseRegistry::try_new(Pool::memory().unwrap(), &SCHEMAS).unwrap()
     }
 
     fn mock_uri(query: &str) -> Uri {

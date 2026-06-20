@@ -349,7 +349,6 @@ mod tests {
     use crate::database::registry::Registry as DatabaseRegistry;
     use crate::database::schema::{IdentifierType, PrimaryKey};
     use crate::http_wrappers::Uri;
-    use rusqlite::Connection;
 
     type Registry = DatabaseRegistry<'static, SqliteAdapter>;
 
@@ -378,8 +377,7 @@ mod tests {
     static PLAIN_SCHEMAS: [&TableSchema; 1] = [&MY_SCHEMA_NO_FTS];
 
     fn registry(schemas: &'static [&'static TableSchema]) -> Registry {
-        DatabaseRegistry::try_new(Pool::new(Connection::open_in_memory().unwrap()), schemas)
-            .unwrap()
+        DatabaseRegistry::try_new(Pool::memory().unwrap(), schemas).unwrap()
     }
 
     fn mock_uri(query: &str) -> Uri {

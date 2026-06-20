@@ -11,7 +11,6 @@ use crate::database::{
     table::Table,
 };
 use crate::{core::to_document, http_wrappers::Uri, routing::DefaultUriGenerator};
-use rusqlite::Connection;
 use serde_json::{Value, json};
 use std::error::Error;
 
@@ -203,9 +202,9 @@ fn with_database<F>(func: F) -> Result<(), Box<dyn Error>>
 where
     F: FnOnce(&Registry<SqliteAdapter>) -> Result<(), Box<dyn Error>>,
 {
-    let connection = Connection::open(":memory:")?;
+    let registry = Registry::<SqliteAdapter>::try_new(Pool::memory()?, &SCHEMAS)?;
 
-    connection.execute_batch(
+    registry.acquire()?.execute_batch(
         "
         CREATE TABLE users (
             id INTEGER PRIMARY KEY,
@@ -248,7 +247,6 @@ where
         ",
     )?;
 
-    let registry = Registry::<SqliteAdapter>::try_new(Pool::new(connection), &SCHEMAS)?;
     func(&registry)?;
 
     Ok(())
@@ -260,7 +258,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
     let connection = registry.acquire()?;
 
     // Create users
-    let users_table = registry.table("users", connection)?;
+    let users_table = registry.table("users", &connection)?;
     for (i, (username, email)) in [
         ("alice", "alice@example.com"),
         ("bob", "bob@example.com"),
@@ -283,7 +281,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
     }
 
     // Create profiles
-    let profiles_table = registry.table("profiles", connection)?;
+    let profiles_table = registry.table("profiles", &connection)?;
     for (id, user_id, bio, avatar) in [
         (1, 1, "Alice's bio", "https://example.com/alice.jpg"),
         (2, 2, "Bob's bio", "https://example.com/bob.jpg"),
@@ -304,7 +302,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
     }
 
     // Create posts
-    let posts_table = registry.table("posts", connection)?;
+    let posts_table = registry.table("posts", &connection)?;
     for (id, author_id, title, content, published) in [
         (
             1,
@@ -337,7 +335,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
     }
 
     // Create comments (including nested replies for 4-level depth)
-    let comments_table = registry.table("comments", connection)?;
+    let comments_table = registry.table("comments", &connection)?;
     for (id, post_id, author_id, parent_id, content) in [
         // Post 1 comments - 4 levels deep
         (1, 1, 2, Null, "Bob commenting on Alice's first post"),
@@ -391,7 +389,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
     }
 
     // Create tags
-    let tags_table = registry.table("tags", connection)?;
+    let tags_table = registry.table("tags", &connection)?;
     for (id, name) in [(1, "rust"), (2, "programming"), (3, "web"), (4, "database")] {
         tags_table.insert(
             Attributes::from_iter([
@@ -414,10 +412,10 @@ fn record_document<'a: 'b, 'b>(
     let uri: Uri = uri_str.parse()?;
 
     let connection = registry.acquire()?;
-    let table = registry.table(model, connection)?;
+    let table = registry.table(model, &connection)?;
     let query_parameters = QueryParameters::parse(&uri, table.schema(), registry)?;
     let mut record = table.find(id, &query_parameters)?;
-    let loader = DataLoader::new(registry, connection);
+    let loader = DataLoader::new(registry, &connection);
     let included = loader.load_for_record(&mut record, &query_parameters)?;
     let document = to_document(&record, included, &uri, &DefaultUriGenerator::default())?;
 
@@ -431,10 +429,10 @@ fn collection_document<'a: 'b, 'b>(
 ) -> Result<Value, Box<dyn Error>> {
     let uri: Uri = uri_str.parse()?;
     let connection = registry.acquire()?;
-    let table = registry.table(model, connection)?;
+    let table = registry.table(model, &connection)?;
     let query_parameters = QueryParameters::parse(&uri, table.schema(), registry)?;
     let mut collection = table.query(&query_parameters)?;
-    let loader = DataLoader::new(registry, connection);
+    let loader = DataLoader::new(registry, &connection);
     let included = loader.load_for_collection(&mut collection, &query_parameters)?;
     let document = to_document(&collection, included, &uri, &DefaultUriGenerator::default())?;
 
