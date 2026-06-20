@@ -10,7 +10,6 @@ use crate::database::error::Error::{
 };
 use crate::database::registry::Registry;
 use crate::database::schema::{AttributeType, Relationship, TableSchema};
-use crate::database::table::Table;
 use crate::http_wrappers::Uri;
 use indexmap::{IndexMap, IndexSet};
 use regex::Regex;
@@ -189,9 +188,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
                     message: "Invalid relationship requested".to_string(),
                 })?;
 
-        let schema = registry
-            .table(include.descriptor.related_resource().resource)?
-            .schema();
+        let schema = registry.schema(include.descriptor.related_resource().resource)?;
 
         Ok(Self {
             fields: self.fields.clone(),
@@ -274,7 +271,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
             return Ok(());
         }
 
-        let schema = registry.table(model)?.schema();
+        let schema = registry.schema(model)?;
         let schema_fields = schema.fields().collect::<HashSet<_>>();
 
         let model_fields = fields
@@ -417,9 +414,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
                             message: "Invalid relationship requested".to_string(),
                         })?;
 
-                    schema = registry
-                        .table(descriptor.related_resource().resource)?
-                        .schema();
+                    schema = registry.schema(descriptor.related_resource().resource)?;
 
                     models.insert(schema.name, schema);
 
@@ -555,6 +550,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
 mod tests {
     use super::*;
     use crate::database::adapters::SqliteAdapter;
+    use crate::database::adapters::sqlite::Pool;
     use crate::database::registry::Registry as DatabaseRegistry;
     use crate::database::schema::{IdentifierType, PrimaryKey, RelatedResource, RelationshipKeys};
     use rusqlite::Connection;
@@ -645,7 +641,8 @@ mod tests {
     static SCHEMAS: [&TableSchema; 3] = [&ARTICLES, &USERS, &COMMENTS];
 
     fn registry() -> Registry {
-        DatabaseRegistry::try_new(Connection::open_in_memory().unwrap(), &SCHEMAS).unwrap()
+        DatabaseRegistry::try_new(Pool::new(Connection::open_in_memory().unwrap()), &SCHEMAS)
+            .unwrap()
     }
 
     fn mock_uri(query: &str) -> Uri {

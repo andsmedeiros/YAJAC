@@ -1,19 +1,16 @@
 use crate::database::{
     adapters::sqlite::{Connection, QueryBuilder},
-    error::Error,
     schema::TableSchema,
     table::Table as TableInterface,
 };
 
-use std::sync::{Arc, Mutex, MutexGuard};
-
-pub struct Table<'sch> {
+pub struct Table<'sch, 'req> {
     pub table_schema: &'sch TableSchema<'sch>,
-    pub connection: Arc<Mutex<Connection>>,
+    pub connection: &'req Connection,
 }
 
-impl<'sch> TableInterface<'sch, Connection, QueryBuilder<'sch>> for Table<'sch> {
-    fn new(table_schema: &'sch TableSchema, connection: Arc<Mutex<Connection>>) -> Self {
+impl<'sch, 'req> TableInterface<'sch, 'req, Connection, QueryBuilder<'sch>> for Table<'sch, 'req> {
+    fn new(table_schema: &'sch TableSchema<'sch>, connection: &'req Connection) -> Self {
         Self {
             table_schema,
             connection,
@@ -24,17 +21,15 @@ impl<'sch> TableInterface<'sch, Connection, QueryBuilder<'sch>> for Table<'sch> 
         self.table_schema
     }
 
-    fn connection(&self) -> Result<MutexGuard<'_, Connection>, Error> {
+    fn connection(&self) -> &'req Connection {
         self.connection
-            .lock()
-            .map_err(|err| Error::DatabaseFailure {
-                message: err.to_string(),
-            })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::database::adapters::sqlite::Pool;
+    use crate::database::connection::Connection as ConnectionInterface;
     use crate::database::{
         adapters::SqliteAdapter,
         attributes::{Attribute, Attributes, Identifier},
@@ -88,26 +83,30 @@ mod tests {
             )
             .unwrap();
 
-        DatabaseRegistry::try_new(connection, &SCHEMAS).unwrap()
+        DatabaseRegistry::try_new(Pool::new(connection), &SCHEMAS).unwrap()
     }
 
     fn seeded_registry() -> Result<Registry, Box<dyn StdError>> {
         let registry = registry();
-        let table = registry.table("my_table")?;
 
-        for (col1, col2, col3) in [
-            ("The quick brown fox", "jumps over the lazy dog", 42),
-            ("The five boxing wizards", "jump quickly", 1000),
-            ("Pack my box", "with five dozen liquor jugs", -1000),
-        ] {
-            table.insert(
-                Attributes::from_iter([
-                    ("col1".to_string(), Attribute::Text(col1.to_string())),
-                    ("col2".to_string(), Attribute::Text(col2.to_string())),
-                    ("col3".to_string(), Attribute::Integer(col3)),
-                ]),
-                &QueryParameters::new(&MY_SCHEMA),
-            )?;
+        {
+            let connection = registry.acquire()?;
+            let table = registry.table("my_table", connection)?;
+
+            for (col1, col2, col3) in [
+                ("The quick brown fox", "jumps over the lazy dog", 42),
+                ("The five boxing wizards", "jump quickly", 1000),
+                ("Pack my box", "with five dozen liquor jugs", -1000),
+            ] {
+                table.insert(
+                    Attributes::from_iter([
+                        ("col1".to_string(), Attribute::Text(col1.to_string())),
+                        ("col2".to_string(), Attribute::Text(col2.to_string())),
+                        ("col3".to_string(), Attribute::Integer(col3)),
+                    ]),
+                    &QueryParameters::new(&MY_SCHEMA),
+                )?;
+            }
         }
 
         Ok(registry)
@@ -122,8 +121,9 @@ mod tests {
     #[test]
     fn test_query_without_records() {
         let registry = registry();
+        let connection = registry.acquire().unwrap();
         let result = registry
-            .table("my_table")
+            .table("my_table", connection)
             .unwrap()
             .query(&QueryParameters::new(&MY_SCHEMA));
 
@@ -134,8 +134,9 @@ mod tests {
     #[test]
     fn test_first_without_records() {
         let registry = registry();
+        let connection = registry.acquire().unwrap();
         let result = registry
-            .table("my_table")
+            .table("my_table", connection)
             .unwrap()
             .first(&QueryParameters::new(&MY_SCHEMA));
 
@@ -146,8 +147,9 @@ mod tests {
     #[test]
     fn test_find_without_records() {
         let registry = registry();
+        let connection = registry.acquire().unwrap();
         let result = registry
-            .table("my_table")
+            .table("my_table", connection)
             .unwrap()
             .find(Identifier::Integer(1), &QueryParameters::new(&MY_SCHEMA));
 
@@ -158,7 +160,8 @@ mod tests {
     #[test]
     fn test_query() -> Result<(), Box<dyn StdError>> {
         let registry = seeded_registry()?;
-        let table = registry.table("my_table")?;
+        let connection = registry.acquire()?;
+        let table = registry.table("my_table", connection)?;
 
         let default_result = table.query(&QueryParameters::new(&MY_SCHEMA))?;
         assert_eq!(default_result.len(), 3);
@@ -205,8 +208,9 @@ mod tests {
     #[test]
     fn test_first() -> Result<(), Box<dyn StdError>> {
         let registry = seeded_registry()?;
+        let connection = registry.acquire()?;
         let result = registry
-            .table("my_table")?
+            .table("my_table", connection)?
             .first(&QueryParameters::new(&MY_SCHEMA))?;
 
         assert!(result.is_some());
@@ -221,8 +225,9 @@ mod tests {
     #[test]
     fn test_find() {
         let registry = registry();
+        let connection = registry.acquire().unwrap();
         let result = registry
-            .table("my_table")
+            .table("my_table", connection)
             .unwrap()
             .find(Identifier::Integer(1), &QueryParameters::new(&MY_SCHEMA));
 
@@ -233,7 +238,8 @@ mod tests {
     #[test]
     fn test_insert() -> Result<(), Box<dyn StdError>> {
         let registry = registry();
-        let result = registry.table("my_table")?.insert(
+        let connection = registry.acquire()?;
+        let result = registry.table("my_table", connection)?.insert(
             Attributes::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]),
             &QueryParameters::new(&MY_SCHEMA),
         )?;
@@ -249,7 +255,8 @@ mod tests {
     #[test]
     fn test_update() -> Result<(), Box<dyn StdError>> {
         let registry = registry();
-        let table = registry.table("my_table")?;
+        let connection = registry.acquire()?;
+        let table = registry.table("my_table", connection)?;
 
         table.insert(
             Attributes::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]),
@@ -273,7 +280,8 @@ mod tests {
     #[test]
     fn test_delete() -> Result<(), Box<dyn StdError>> {
         let registry = registry();
-        let table = registry.table("my_table")?;
+        let connection = registry.acquire()?;
+        let table = registry.table("my_table", connection)?;
 
         table.insert(
             Attributes::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]),
@@ -285,6 +293,33 @@ mod tests {
         let result = table.find(Identifier::Integer(1), &QueryParameters::new(&MY_SCHEMA));
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::RecordNotFound));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_transaction_rolls_back_on_error() -> Result<(), Box<dyn StdError>> {
+        let registry = registry();
+        let connection = registry.acquire()?;
+        let table = registry.table("my_table", connection)?;
+        let parameters = QueryParameters::new(&MY_SCHEMA);
+
+        let result: Result<(), Error> = connection.transaction(|| {
+            table.insert(
+                Attributes::from_iter([(
+                    "col1".to_string(),
+                    Attribute::Text("rolled-back".to_string()),
+                )]),
+                &parameters,
+            )?;
+
+            Err(Error::DataLoadingError {
+                message: "deliberate failure".to_string(),
+            })
+        });
+
+        assert!(result.is_err());
+        assert!(table.query(&parameters)?.is_empty());
 
         Ok(())
     }

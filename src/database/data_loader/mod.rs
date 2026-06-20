@@ -24,33 +24,38 @@ type GlobalIdentifier<'sch> = (&'sch str, Identifier);
 
 type RecordCache<'sch> = HashMap<GlobalIdentifier<'sch>, Record<'sch>>;
 
-pub struct DataLoader<'sch, 'reg, Adapter: AdapterInterface> {
-    registry: &'reg Registry<'sch, Adapter>,
+pub struct DataLoader<'sch, 'req, Adapter: AdapterInterface> {
+    registry: &'sch Registry<'sch, Adapter>,
+    connection: &'req Adapter::Connection,
     cache: RecordCache<'sch>,
     included_identifiers: HashSet<GlobalIdentifier<'sch>>,
 }
 
-impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter> {
-    pub fn new(registry: &'reg Registry<'sch, Adapter>) -> Self {
+impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
+    pub fn new(
+        registry: &'sch Registry<'sch, Adapter>,
+        connection: &'req Adapter::Connection,
+    ) -> Self {
         DataLoader {
             registry,
+            connection,
             cache: HashMap::new(),
             included_identifiers: HashSet::new(),
         }
     }
 
-    pub fn load_for_record<'req>(
+    pub fn load_for_record(
         self,
-        record: &'req mut Record<'sch>,
-        query_parameters: &'req QueryParameters<'sch, 'req>,
+        record: &mut Record<'sch>,
+        query_parameters: &QueryParameters<'sch, 'req>,
     ) -> Result<Vec<Record<'sch>>, Error> {
         self.load_for_collection(slice::from_mut(record), query_parameters)
     }
 
-    pub fn load_for_collection<'req>(
+    pub fn load_for_collection(
         mut self,
-        collection: &'req mut [Record<'sch>],
-        query_parameters: &'req QueryParameters<'sch, 'req>,
+        collection: &mut [Record<'sch>],
+        query_parameters: &QueryParameters<'sch, 'req>,
     ) -> Result<Vec<Record<'sch>>, Error> {
         if !collection.is_empty() {
             self.load_with_context(collection, query_parameters)?;
@@ -71,10 +76,10 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
         Ok(included)
     }
 
-    fn load_with_context<'req>(
+    fn load_with_context(
         &mut self,
-        collection: &'req mut [Record<'sch>],
-        query_parameters: &'req QueryParameters<'sch, 'req>,
+        collection: &mut [Record<'sch>],
+        query_parameters: &QueryParameters<'sch, 'req>,
     ) -> Result<(), Error> {
         for (relationship, descriptor) in query_parameters.relationships_to_load() {
             self.load_relationship(collection, query_parameters, relationship, descriptor)?;
@@ -83,10 +88,10 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
         Ok(())
     }
 
-    fn load_relationship<'req>(
+    fn load_relationship(
         &mut self,
-        collection: &'req mut [Record<'sch>],
-        query_parameters: &'req QueryParameters<'sch, 'req>,
+        collection: &mut [Record<'sch>],
+        query_parameters: &QueryParameters<'sch, 'req>,
         relationship: &'sch str,
         descriptor: &'sch Relationship,
     ) -> Result<(), Error> {
@@ -130,14 +135,14 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
         Ok(())
     }
 
-    fn load_belongs_to<'req>(
+    fn load_belongs_to(
         &mut self,
         relationship: &'sch str,
         descriptor: &'sch RelatedResource,
-        collection: &'req mut [Record<'sch>],
-        query_parameters: &'req QueryParameters,
+        collection: &mut [Record<'sch>],
+        query_parameters: &QueryParameters<'sch, 'req>,
     ) -> Result<Vec<Record<'sch>>, Error> {
-        let related_schema = self.registry.table(descriptor.resource)?.schema();
+        let related_schema = self.registry.schema(descriptor.resource)?;
         let joins_on_primary_key = related_schema.is_primary_key(descriptor.keys.related);
 
         let requested = query_parameters.is_requested(relationship);
@@ -145,10 +150,10 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
         let query_needed = included || (requested && !joins_on_primary_key);
 
         let related_collection = if query_needed {
-            let table = self.registry.table(descriptor.resource)?;
+            let table = self.registry.table(descriptor.resource, self.connection)?;
             let own_attributes = Self::collection_attribute(collection, descriptor.keys.own);
             Self::load_collection_by(
-                table,
+                &table,
                 descriptor.keys.related,
                 own_attributes.as_slice(),
                 &query_parameters.fields,
@@ -199,17 +204,17 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
         Ok(related_collection)
     }
 
-    fn load_has_one<'req>(
+    fn load_has_one(
         &mut self,
         relationship: &'sch str,
         descriptor: &'sch RelatedResource,
-        collection: &'req mut [Record<'sch>],
-        query_parameters: &'req QueryParameters,
+        collection: &mut [Record<'sch>],
+        query_parameters: &QueryParameters<'sch, 'req>,
     ) -> Result<Vec<Record<'sch>>, Error> {
-        let table = self.registry.table(descriptor.resource)?;
+        let table = self.registry.table(descriptor.resource, self.connection)?;
         let own_attributes = Self::collection_attribute(collection, descriptor.keys.own);
         let related_collection = Self::load_collection_by(
-            table,
+            &table,
             descriptor.keys.related,
             &own_attributes,
             &query_parameters.fields,
@@ -235,17 +240,17 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
         Ok(related_collection)
     }
 
-    fn load_has_many<'req>(
+    fn load_has_many(
         &mut self,
         relationship: &'sch str,
         descriptor: &'sch RelatedResource,
-        collection: &'req mut [Record<'sch>],
-        query_parameters: &'req QueryParameters,
+        collection: &mut [Record<'sch>],
+        query_parameters: &QueryParameters<'sch, 'req>,
     ) -> Result<Vec<Record<'sch>>, Error> {
-        let table = self.registry.table(descriptor.resource)?;
+        let table = self.registry.table(descriptor.resource, self.connection)?;
         let own_attributes = Self::collection_attribute(collection, descriptor.keys.own);
         let related_collection = Self::load_collection_by(
-            table,
+            &table,
             descriptor.keys.related,
             own_attributes.as_slice(),
             &query_parameters.fields,
@@ -272,7 +277,7 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
     }
 
     fn load_collection_by(
-        table: &Adapter::Table<'sch>,
+        table: &Adapter::Table<'sch, 'req>,
         column: &'sch str,
         attributes: &[Option<Attribute>],
         fields: &FieldsParameters,
@@ -359,9 +364,9 @@ impl<'sch: 'reg, 'reg, Adapter: AdapterInterface> DataLoader<'sch, 'reg, Adapter
             .collect()
     }
 
-    fn merge_records<'req>(
+    fn merge_records(
         source: Relationships<'sch>,
-        destination: &'req mut Relationships<'sch>,
+        destination: &mut Relationships<'sch>,
     ) -> Result<(), Error> {
         use Entry::*;
 

@@ -9,14 +9,19 @@ use super::{
 };
 use crate::database::attributes::{ForeignKeys, Identifier};
 use crate::database::schema::IdentifierType;
-use std::sync::{Arc, Mutex, MutexGuard};
 
-pub trait Table<'sch, Connection: ConnectionInterface, QueryBuilder: QueryBuilderInterface<'sch>> {
-    fn new(table_schema: &'sch TableSchema<'sch>, connection: Arc<Mutex<Connection>>) -> Self;
+pub trait Table<
+    'sch,
+    'req,
+    Connection: ConnectionInterface + 'req,
+    QueryBuilder: QueryBuilderInterface<'sch>,
+>
+{
+    fn new(table_schema: &'sch TableSchema<'sch>, connection: &'req Connection) -> Self;
 
     fn schema(&self) -> &'sch TableSchema<'sch>;
 
-    fn connection(&self) -> Result<MutexGuard<'_, Connection>, Error>;
+    fn connection(&self) -> &'req Connection;
 
     fn is_attribute(&self, name: &str) -> bool {
         self.schema().attribute(name).is_some()
@@ -65,7 +70,7 @@ pub trait Table<'sch, Connection: ConnectionInterface, QueryBuilder: QueryBuilde
 
     fn delete(&self, id: Identifier) -> Result<(), Error> {
         let (query, bindings) = QueryBuilder::new(self.schema()).delete(id);
-        self.connection()?.execute(query, bindings)
+        self.connection().execute(query, bindings)
     }
 
     fn run_fetch(
@@ -73,7 +78,7 @@ pub trait Table<'sch, Connection: ConnectionInterface, QueryBuilder: QueryBuilde
         query: String,
         bindings: Vec<Attribute>,
     ) -> Result<Vec<Record<'sch>>, Error> {
-        self.connection()?
+        self.connection()
             .query(query, bindings, self.schema())?
             .into_iter()
             .map(|mut raw_attributes| {

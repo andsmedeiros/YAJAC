@@ -1,39 +1,46 @@
 use super::{
     adapters::Adapter as AdapterInterface,
     error::Error,
+    pool::Pool as PoolInterface,
     schema::{RelatedResource, Relationship, TableSchema},
-    table::Table,
+    table::Table as TableInterface,
 };
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::collections::HashMap;
 
-pub struct Registry<'a, Adapter: AdapterInterface> {
-    contents: HashMap<&'a str, Adapter::Table<'a>>,
+pub struct Registry<'sch, Adapter: AdapterInterface> {
+    schemas: HashMap<&'sch str, &'sch TableSchema<'sch>>,
+    pool: Adapter::Pool,
 }
 
 impl<'sch, Adapter: AdapterInterface> Registry<'sch, Adapter> {
-    pub fn try_new(
-        connection: Adapter::Connection,
-        schema: &'sch [&'sch TableSchema],
-    ) -> Result<Self, Error> {
-        let connection = Arc::new(Mutex::new(connection));
-        let registry = Self {
-            contents: Self::validate_schema(schema)?
-                .into_iter()
-                .map(|(name, schema)| (name, Table::new(schema, connection.clone())))
-                .collect(),
-        };
+    pub fn try_new(pool: Adapter::Pool, schema: &'sch [&'sch TableSchema]) -> Result<Self, Error> {
+        let schemas = Self::validate_schema(schema)?;
 
-        Ok(registry)
+        Ok(Self { schemas, pool })
     }
 
-    pub fn table(&self, name: &str) -> Result<&Adapter::Table<'sch>, Error> {
-        self.contents.get(name).ok_or_else(|| Error::UnknownSchema {
-            schema: name.to_string(),
-            message: "The requested table is not registered".to_string(),
-        })
+    pub fn schema(&self, name: &str) -> Result<&'sch TableSchema<'sch>, Error> {
+        self.schemas
+            .get(name)
+            .copied()
+            .ok_or_else(|| Error::UnknownSchema {
+                schema: name.to_string(),
+                message: "The requested table is not registered".to_string(),
+            })
+    }
+
+    /// Acquires a connection from the pool, held for the request.
+    pub fn acquire(&self) -> Result<<Adapter::Pool as PoolInterface>::Handle<'_>, Error> {
+        self.pool.acquire()
+    }
+
+    /// Builds a request-scoped table bound to `connection`.
+    pub fn table<'req>(
+        &self,
+        name: &str,
+        connection: &'req Adapter::Connection,
+    ) -> Result<Adapter::Table<'sch, 'req>, Error> {
+        Ok(Adapter::Table::new(self.schema(name)?, connection))
     }
 
     fn validate_schema(
