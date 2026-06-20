@@ -226,7 +226,7 @@ impl<'a> Migrator<'a> {
                     INSERT INTO migrations (version, name, migrated_at) \
                     VALUES ($1, $2, $3)\
                 ",
-            params![migration.version, migration.name, Utc::now()],
+            params![migration.version as i64, migration.name, Utc::now()],
         )?;
 
         Ok(())
@@ -242,7 +242,7 @@ impl<'a> Migrator<'a> {
                     DELETE FROM migrations \
                     WHERE version = $1\
                 ",
-            params![migration.version],
+            params![migration.version as i64],
         )?;
 
         Ok(())
