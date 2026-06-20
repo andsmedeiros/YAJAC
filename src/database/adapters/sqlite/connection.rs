@@ -118,7 +118,7 @@ fn build_bindings(bindings: &[Attribute]) -> Vec<&dyn ToSql> {
 
 impl ConnectionInterface for Connection {
     fn query(
-        &mut self,
+        &self,
         query: String,
         bindings: Vec<Attribute>,
         table_schema: &TableSchema,
@@ -137,7 +137,7 @@ impl ConnectionInterface for Connection {
         Ok(rows)
     }
 
-    fn execute(&mut self, query: String, bindings: Vec<Attribute>) -> Result<(), Error> {
+    fn execute(&self, query: String, bindings: Vec<Attribute>) -> Result<(), Error> {
         debug!("{}, {:?}", query, bindings);
 
         let bindings = build_bindings(&bindings);
@@ -146,6 +146,14 @@ impl ConnectionInterface for Connection {
 
         debug!("Affected {} rows", row_count);
         Ok(())
+    }
+
+    fn transaction<R>(&self, operation: impl FnOnce() -> Result<R, Error>) -> Result<R, Error> {
+        let transaction = self.unchecked_transaction()?;
+        let value = operation()?;
+        transaction.commit()?;
+
+        Ok(value)
     }
 }
 

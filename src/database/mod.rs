@@ -4,6 +4,7 @@ pub mod connection;
 pub mod data_loader;
 pub mod error;
 pub mod migrator;
+pub mod pool;
 pub mod query_builder;
 pub mod query_parameters;
 pub mod record;
