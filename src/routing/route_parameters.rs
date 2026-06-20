@@ -1,4 +1,4 @@
-use super::error::{Error, FailtToParseParameterError, RequiredParameterMissingError};
+use super::error::{Error, FailedToParseParameterError, RequiredParameterMissingError};
 use std::{borrow::Borrow, collections::HashMap, fmt::Display, str::FromStr};
 
 #[derive(Debug, Clone)]
@@ -57,7 +57,7 @@ impl RouteParameters {
         self.get(key.borrow())
             .map(|value| {
                 value.parse::<T>().map_err(|_| {
-                    FailtToParseParameterError {
+                    FailedToParseParameterError {
                         parameter: key.borrow().into(),
                         message: "Provided parameter contains an unexpected value".to_string(),
                     }

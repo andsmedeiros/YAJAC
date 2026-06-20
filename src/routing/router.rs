@@ -13,12 +13,12 @@ use serde_json::{Value, json};
 use std::mem;
 
 pub trait Handler<'sch, Adapter: AdapterInterface>:
-    for<'req> Fn(Request, Context<'sch, 'req, Adapter>) -> Result + Sync + Send + 'sch
+    for<'req> Fn(Context<'sch, 'req, Adapter>) -> Result + Sync + Send + 'sch
 {
 }
 
 impl<'sch, T, Adapter: AdapterInterface> Handler<'sch, Adapter> for T where
-    T: for<'req> Fn(Request, Context<'sch, 'req, Adapter>) -> Result + Sync + Send + 'sch
+    T: for<'req> Fn(Context<'sch, 'req, Adapter>) -> Result + Sync + Send + 'sch
 {
 }
 
@@ -78,8 +78,8 @@ impl<'sch, Adapter: AdapterInterface> Router<'sch, Adapter> {
             })
             .and_then(|(route, parameters)| {
                 debug!("Matched!");
-                let context = Context::new(database, &uri, parameters);
-                (route.handler)(request, context).into()
+                let context = Context::from_request(database, &uri, parameters, request);
+                (route.handler)(context).into()
             })
             .unwrap_or_else(|| {
                 default_response()

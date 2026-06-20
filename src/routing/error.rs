@@ -28,12 +28,12 @@ impl Display for RequiredParameterMissingError {
 impl StdError for RequiredParameterMissingError {}
 
 #[derive(Debug, Clone, Serialize)]
-pub struct FailtToParseParameterError {
+pub struct FailedToParseParameterError {
     pub parameter: String,
     pub message: String,
 }
 
-impl Display for FailtToParseParameterError {
+impl Display for FailedToParseParameterError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -43,7 +43,7 @@ impl Display for FailtToParseParameterError {
     }
 }
 
-impl StdError for FailtToParseParameterError {}
+impl StdError for FailedToParseParameterError {}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ApiErrorKind {
@@ -116,8 +116,8 @@ impl From<RequiredParameterMissingError> for Error {
     }
 }
 
-impl From<FailtToParseParameterError> for Error {
-    fn from(error: FailtToParseParameterError) -> Self {
+impl From<FailedToParseParameterError> for Error {
+    fn from(error: FailedToParseParameterError) -> Self {
         Error::new(
             StatusCode::BAD_REQUEST,
             "FailedToParseParameterError",
