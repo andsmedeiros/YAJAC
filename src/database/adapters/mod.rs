@@ -27,3 +27,18 @@ impl Adapter for SqliteAdapter {
     type QueryBuilder<'sch> = sqlite::QueryBuilder<'sch>;
     type Table<'sch, 'req> = sqlite::Table<'sch, 'req>;
 }
+
+#[cfg(all(test, feature = "sqlite"))]
+mod tests {
+    use super::SqliteAdapter;
+    use crate::database::registry::Registry;
+
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    /// A registry over a real pool must be shareable across threads, so the request-handling path
+    /// that borrows it can run on whichever worker thread owns it.
+    #[test]
+    fn sqlite_registry_is_send_and_sync() {
+        assert_send_sync::<Registry<'static, SqliteAdapter>>();
+    }
+}
