@@ -7,7 +7,7 @@ use crate::database::schema::{
 };
 use crate::json_api::document::Document;
 use crate::routing::RouterBuilder;
-use crate::routing::controller::ResourceController;
+use crate::routing::controller::{ReadOnlyResourceController, ResourceController};
 use http::StatusCode;
 use serde_json::{Value, json};
 use std::error::Error as StdError;
@@ -130,6 +130,7 @@ static SCHEMAS: [&TableSchema; 4] = [&ARTICLES, &COMMENTS, &DRAFTS, &SUMMARIES];
 struct Articles;
 struct Comments;
 struct Drafts;
+struct Summaries;
 
 impl<'sch> ResourceController<'sch, SqliteAdapter> for Articles {
     fn resource_schema() -> &'sch TableSchema<'sch> {
@@ -146,6 +147,12 @@ impl<'sch> ResourceController<'sch, SqliteAdapter> for Comments {
 impl<'sch> ResourceController<'sch, SqliteAdapter> for Drafts {
     fn resource_schema() -> &'sch TableSchema<'sch> {
         &DRAFTS
+    }
+}
+
+impl<'sch> ReadOnlyResourceController<'sch, SqliteAdapter> for Summaries {
+    fn resource_schema() -> &'sch TableSchema<'sch> {
+        &SUMMARIES
     }
 }
 
@@ -196,6 +203,24 @@ fn serve(
         .resource::<Articles>("articles")
         .resource::<Comments>("comments")
         .resource::<Drafts>("drafts");
+    let router = builder.build();
+
+    let request = http::Request::builder()
+        .method(method)
+        .uri(uri)
+        .body(serde_json::to_vec(&body)?)?;
+
+    Ok(router.handle(registry, request))
+}
+
+fn serve_read_only(
+    registry: &Registry,
+    method: &str,
+    uri: &str,
+    body: Value,
+) -> Result<http::Response<Option<Document>>, Box<dyn StdError>> {
+    let mut builder = RouterBuilder::new();
+    builder.read_only_resource::<Summaries>("summaries");
     let router = builder.build();
 
     let request = http::Request::builder()
@@ -751,6 +776,61 @@ fn test_patch_rejects_id_mismatch() -> TestResult {
     )?;
 
     assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    Ok(())
+}
+
+#[test]
+fn test_read_only_index() -> TestResult {
+    let registry = registry()?;
+    let response = serve_read_only(&registry, "GET", "/summaries", Value::Null)?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let document = body(&response);
+    let data = document["data"].as_array().expect("a data array");
+    assert_eq!(data.len(), 2);
+    assert_eq!(data[0]["type"], json!("summaries"));
+
+    Ok(())
+}
+
+#[test]
+fn test_read_only_show() -> TestResult {
+    let registry = registry()?;
+    let response = serve_read_only(&registry, "GET", "/summaries/1", Value::Null)?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let document = body(&response);
+    assert_eq!(document["data"]["id"], json!("1"));
+    assert_eq!(
+        document["data"]["attributes"]["abstract"],
+        json!("About first")
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_read_only_rejects_create() -> TestResult {
+    let registry = registry()?;
+    let response = serve_read_only(
+        &registry,
+        "POST",
+        "/summaries",
+        json!({ "data": { "type": "summaries", "attributes": { "abstract": "New" } } }),
+    )?;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    Ok(())
+}
+
+#[test]
+fn test_read_only_rejects_delete() -> TestResult {
+    let registry = registry()?;
+    let response = serve_read_only(&registry, "DELETE", "/summaries/1", Value::Null)?;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     Ok(())
 }
