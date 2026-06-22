@@ -27,5 +27,10 @@ pub trait QueryBuilder<'a> {
         attributes: Attributes,
         parameters: &QueryParameters,
     ) -> Result<(String, Bindings), Error>;
+    fn update_batch(
+        &self,
+        attributes: Attributes,
+        parameters: &QueryParameters,
+    ) -> Result<(String, Bindings), Error>;
     fn delete(&self, id: Identifier) -> (String, Bindings);
 }

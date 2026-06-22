@@ -64,8 +64,17 @@ pub trait Table<
     ) -> Result<Record<'sch>, Error> {
         let (query, bindings) =
             QueryBuilder::new(self.schema()).update(id, attributes, parameters)?;
-
         self.run_fetch_single(query, bindings)
+    }
+
+    fn update_batch(
+        &self,
+        attributes: Attributes,
+        parameters: &QueryParameters,
+    ) -> Result<Vec<Record<'sch>>, Error> {
+        let (query, bindings) =
+            QueryBuilder::new(self.schema()).update_batch(attributes, parameters)?;
+        self.run_fetch(query, bindings)
     }
 
     fn delete(&self, id: Identifier) -> Result<(), Error> {

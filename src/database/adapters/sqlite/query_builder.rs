@@ -16,13 +16,25 @@ struct ExtractedAttributes {
     values: Vec<Attribute>,
 }
 
-impl ExtractedAttributes {
-    pub(super) fn to_placeholders(&self) -> Vec<String> {
-        (1..=self.fields.len()).map(|i| format!("?{i}")).collect()
-    }
+pub type Bindings = Vec<Attribute>;
+
+/// Binds values for a parameterised query, returning the positional placeholder (`?N`) for each so
+/// numbering stays consistent across every clause that contributes parameters.
+trait Binder {
+    fn bind(&mut self, value: Attribute) -> String;
+    fn bind_all(&mut self, values: impl IntoIterator<Item = Attribute>) -> Vec<String>;
 }
 
-pub type Bindings = Vec<Attribute>;
+impl Binder for Bindings {
+    fn bind(&mut self, value: Attribute) -> String {
+        self.push(value);
+        format!("?{}", self.len())
+    }
+
+    fn bind_all(&mut self, values: impl IntoIterator<Item = Attribute>) -> Vec<String> {
+        values.into_iter().map(|value| self.bind(value)).collect()
+    }
+}
 
 pub struct QueryBuilder<'sch> {
     schema: &'sch TableSchema<'sch>,
@@ -33,41 +45,42 @@ impl<'sch> QueryBuilder<'sch> {
         query.extend(["SELECT".to_string(), self.fields_for_model(fields, true)]);
     }
 
-    fn build_insert_clause(&self, attributes: Attributes, query: &mut Vec<String>) -> Bindings {
+    fn build_insert_clause(
+        &self,
+        attributes: Attributes,
+        query: &mut Vec<String>,
+        bindings: &mut Bindings,
+    ) {
         let attributes = self.extract_attributes(attributes);
-        let placeholders = attributes.to_placeholders();
+        let placeholders = bindings.bind_all(attributes.values);
 
         query.extend([
             "INSERT INTO".to_string(),
             format!("{}({})", self.schema.name, attributes.fields.join(", ")),
             format!("VALUES ({})", placeholders.join(", ")),
         ]);
-
-        attributes.values
     }
 
     fn build_update_clause(
         &self,
-        id: Identifier,
         attributes: Attributes,
         query: &mut Vec<String>,
-    ) -> Bindings {
+        bindings: &mut Bindings,
+    ) {
         let attributes = self.extract_attributes(attributes);
-        let placeholders = attributes.to_placeholders();
         query.extend(["UPDATE".to_string(), self.schema.name.to_string()]);
 
-        if !attributes.fields.is_empty() {
-            let fields = attributes
-                .fields
-                .into_iter()
-                .zip(placeholders)
-                .map(|(field, placeholder)| format!("{} = {}", field, placeholder))
-                .join(", ");
-            query.extend(["SET".to_string(), fields]);
+        if attributes.fields.is_empty() {
+            return;
         }
 
-        query.push(format!("WHERE id = ?{}", attributes.values.len() + 1));
-        [attributes.values.as_slice(), &[Attribute::from(id)]].concat()
+        let assignments = attributes
+            .fields
+            .into_iter()
+            .zip(attributes.values)
+            .map(|(field, value)| format!("{} = {}", field, bindings.bind(value)))
+            .join(", ");
+        query.extend(["SET".to_string(), assignments]);
     }
 
     fn build_from_clause(&self, query: &mut Vec<String>) {
@@ -104,24 +117,25 @@ impl<'sch> QueryBuilder<'sch> {
         filter: &Option<FilterParameters>,
         search: &Option<SearchParameters>,
         query: &mut Vec<String>,
-    ) -> Result<Bindings, Error> {
+        bindings: &mut Bindings,
+    ) -> Result<(), Error> {
         use FilterValue::*;
 
         if filter.is_none() && search.is_none() {
-            return Ok(Vec::new());
+            return Ok(());
         }
 
-        let mut bindings = Vec::new();
         let mut filter_query = Vec::new();
-        let mut i = 1;
 
         query.push("WHERE".to_string());
 
         if let Some(values) = search {
             for value in values {
-                filter_query.push(format!("{}_fts MATCH ?{}", self.schema.name, i));
-                bindings.push(Attribute::Text(value.to_string()));
-                i += 1;
+                filter_query.push(format!(
+                    "{}_fts MATCH {}",
+                    self.schema.name,
+                    bindings.bind(Attribute::Text(value.to_string()))
+                ));
             }
         }
 
@@ -139,16 +153,9 @@ impl<'sch> QueryBuilder<'sch> {
                                 _ => unreachable!(),
                             };
 
-                            let placeholders = values
-                                .iter()
-                                .enumerate()
-                                .map(|(pos, _)| format!("?{}", i + pos))
-                                .join(",");
+                            let placeholders = bindings.bind_all(values.iter().cloned()).join(",");
                             filter_query
-                                .push(format!("{table}.{field} {operator} ({placeholders})",));
-
-                            bindings.extend(values.clone());
-                            i += values.len();
+                                .push(format!("{table}.{field} {operator} ({placeholders})"));
                         }
                         Like(value) => {
                             let binding = if matches!(kind, AttributeType::Text) {
@@ -161,9 +168,8 @@ impl<'sch> QueryBuilder<'sch> {
                                         .to_string(),
                                 });
                             };
-                            filter_query.push(format!("{table}.{field} LIKE ?{i}"));
-                            bindings.push(binding);
-                            i += 1;
+                            filter_query
+                                .push(format!("{table}.{field} LIKE {}", bindings.bind(binding)));
                         }
                         filter => {
                             let (operator, binding) = match filter {
@@ -176,9 +182,10 @@ impl<'sch> QueryBuilder<'sch> {
                                 _ => unreachable!(),
                             };
 
-                            filter_query.push(format!("{table}.{field} {operator} ?{i}"));
-                            bindings.push(binding.clone());
-                            i += 1;
+                            filter_query.push(format!(
+                                "{table}.{field} {operator} {}",
+                                bindings.bind(binding.clone())
+                            ));
                         }
                     }
                 }
@@ -186,7 +193,7 @@ impl<'sch> QueryBuilder<'sch> {
         }
 
         query.push(filter_query.join(" AND ").to_string());
-        Ok(bindings)
+        Ok(())
     }
 
     fn build_order_by_clause(&self, sort: &Option<SortParameters>, query: &mut Vec<String>) {
@@ -279,16 +286,21 @@ impl<'sch> QueryBuilderInterface<'sch> for QueryBuilder<'sch> {
 
     fn query(&self, parameters: &QueryParameters) -> Result<(String, Bindings), Error> {
         let mut query = Vec::new();
+        let mut bindings = Bindings::new();
 
         self.build_select_clause(&parameters.fields, &mut query);
         self.build_from_clause(&mut query);
         self.build_join_clause(&parameters.search, &mut query)?;
-        let bindings =
-            self.build_where_clause(&parameters.filter, &parameters.search, &mut query)?;
+        self.build_where_clause(
+            &parameters.filter,
+            &parameters.search,
+            &mut query,
+            &mut bindings,
+        )?;
         self.build_order_by_clause(&parameters.sort, &mut query);
         self.build_limit_offset_clauses(&parameters.page, &mut query);
 
-        Ok((query.join(" ").to_string(), bindings))
+        Ok((query.join(" "), bindings))
     }
 
     fn find(
@@ -313,8 +325,9 @@ impl<'sch> QueryBuilderInterface<'sch> for QueryBuilder<'sch> {
         parameters: &QueryParameters,
     ) -> Result<(String, Bindings), Error> {
         let mut query = Vec::new();
+        let mut bindings = Bindings::new();
 
-        let bindings = self.build_insert_clause(attributes, &mut query);
+        self.build_insert_clause(attributes, &mut query, &mut bindings);
         self.build_returning_clause(&parameters.fields, &mut query);
 
         Ok((query.join(" "), bindings))
@@ -327,7 +340,25 @@ impl<'sch> QueryBuilderInterface<'sch> for QueryBuilder<'sch> {
         parameters: &QueryParameters,
     ) -> Result<(String, Bindings), Error> {
         let mut query = Vec::new();
-        let bindings = self.build_update_clause(id, attributes, &mut query);
+        let mut bindings = Bindings::new();
+
+        self.build_update_clause(attributes, &mut query, &mut bindings);
+        query.push(format!("WHERE id = {}", bindings.bind(Attribute::from(id))));
+        self.build_returning_clause(&parameters.fields, &mut query);
+
+        Ok((query.join(" "), bindings))
+    }
+
+    fn update_batch(
+        &self,
+        attributes: Attributes,
+        parameters: &QueryParameters,
+    ) -> Result<(String, Bindings), Error> {
+        let mut query = Vec::new();
+        let mut bindings = Bindings::new();
+
+        self.build_update_clause(attributes, &mut query, &mut bindings);
+        self.build_where_clause(&parameters.filter, &None, &mut query, &mut bindings)?;
         self.build_returning_clause(&parameters.fields, &mut query);
 
         Ok((query.join(" "), bindings))
@@ -349,6 +380,7 @@ mod tests {
     use crate::database::registry::Registry as DatabaseRegistry;
     use crate::database::schema::{IdentifierType, PrimaryKey};
     use crate::http_wrappers::Uri;
+    use indexmap::IndexSet;
 
     type Registry = DatabaseRegistry<'static, SqliteAdapter>;
 
@@ -656,6 +688,19 @@ mod tests {
         assert!(bindings.is_empty());
     }
 
+    fn scoped_to_id<'req>(
+        registry: &Registry,
+        uri: &'req Uri,
+        id: i64,
+    ) -> QueryParameters<'static, 'req> {
+        let mut parameters = QueryParameters::parse(uri, &MY_SCHEMA, registry).unwrap();
+        parameters.filter = Some(FilterParameters::from([(
+            "id",
+            vec![FilterValue::Equal(Attribute::Integer(id))],
+        )]));
+        parameters
+    }
+
     #[test]
     fn test_update_single_field() {
         let registry = registry(&FTS_SCHEMAS);
@@ -748,34 +793,58 @@ mod tests {
     }
 
     #[test]
+    fn test_update_batch_scopes_by_filter() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("");
+        let attributes = Attributes::from_iter([("col1".to_string(), Attribute::Null)]);
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .update_batch(attributes, &scoped_to_id(&registry, &uri, 5))
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "UPDATE my_table SET col1 = ?1 WHERE my_table.id = ?2 RETURNING id, col1, col2, col3"
+        );
+        assert_eq!(bindings, vec![Attribute::Null, Attribute::Integer(5)]);
+    }
+
+    #[test]
+    fn test_update_batch_with_in_filter() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("");
+        let mut parameters = parse(&registry, &uri);
+        parameters.filter = Some(FilterParameters::from([(
+            "col3",
+            vec![FilterValue::In(IndexSet::from([
+                Attribute::Integer(1),
+                Attribute::Integer(2),
+            ]))],
+        )]));
+        let attributes = Attributes::from_iter([("col1".to_string(), Attribute::Integer(7))]);
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .update_batch(attributes, &parameters)
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "UPDATE my_table SET col1 = ?1 WHERE my_table.col3 IN (?2,?3) RETURNING id, col1, col2, col3"
+        );
+        assert_eq!(
+            bindings,
+            vec![
+                Attribute::Integer(7),
+                Attribute::Integer(1),
+                Attribute::Integer(2)
+            ]
+        );
+    }
+
+    #[test]
     fn test_delete() {
         let (query, bindings) = QueryBuilder::new(&MY_SCHEMA).delete(Identifier::Integer(1));
 
         assert_eq!(query, "DELETE FROM my_table WHERE id = ?1");
         assert_eq!(bindings, vec![Attribute::Integer(1)]);
-    }
-
-    #[test]
-    fn test_extracted_attributes_placeholders() {
-        let extracted = ExtractedAttributes {
-            fields: vec!["col1".to_string(), "col2".to_string()],
-            values: vec![
-                Attribute::Text("value1".to_string()),
-                Attribute::Integer(42),
-            ],
-        };
-
-        assert_eq!(extracted.to_placeholders(), vec!["?1", "?2"]);
-    }
-
-    #[test]
-    fn test_placeholders_with_empty_fields() {
-        let extracted = ExtractedAttributes {
-            fields: vec![],
-            values: vec![],
-        };
-
-        assert!(extracted.to_placeholders().is_empty());
     }
 
     #[test]
