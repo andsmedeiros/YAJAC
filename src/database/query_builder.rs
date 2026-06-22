@@ -32,5 +32,11 @@ pub trait QueryBuilder<'a> {
         attributes: Attributes,
         parameters: &QueryParameters,
     ) -> Result<(String, Bindings), Error>;
+    fn insert_batch(
+        &self,
+        rows: Vec<Attributes>,
+        parameters: &QueryParameters,
+    ) -> Result<(String, Bindings), Error>;
     fn delete(&self, id: Identifier) -> (String, Bindings);
+    fn delete_batch(&self, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
 }

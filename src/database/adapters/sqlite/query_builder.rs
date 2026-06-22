@@ -47,18 +47,51 @@ impl<'sch> QueryBuilder<'sch> {
 
     fn build_insert_clause(
         &self,
-        attributes: Attributes,
+        rows: Vec<Attributes>,
         query: &mut Vec<String>,
         bindings: &mut Bindings,
-    ) {
-        let attributes = self.extract_attributes(attributes);
-        let placeholders = bindings.bind_all(attributes.values);
+    ) -> Result<(), Error> {
+        let mut rows = rows.into_iter();
+        let Some(first) = rows.next() else {
+            return Err(Error::InvalidOperation {
+                schema: self.schema.name.to_string(),
+                operation: "INSERT".to_string(),
+                message: "cannot insert without any records".to_string(),
+            });
+        };
+        let columns: Vec<String> = first.keys().cloned().collect();
+
+        let mut tuples = Vec::new();
+        for mut row in std::iter::once(first).chain(rows) {
+            let mut placeholders = Vec::with_capacity(columns.len());
+            for column in &columns {
+                let value = row
+                    .swap_remove(column)
+                    .ok_or_else(|| self.uniform_columns_error())?;
+                placeholders.push(bindings.bind(value));
+            }
+
+            if !row.is_empty() {
+                return Err(self.uniform_columns_error());
+            }
+            tuples.push(format!("({})", placeholders.join(", ")));
+        }
 
         query.extend([
             "INSERT INTO".to_string(),
-            format!("{}({})", self.schema.name, attributes.fields.join(", ")),
-            format!("VALUES ({})", placeholders.join(", ")),
+            format!("{}({})", self.schema.name, columns.join(", ")),
+            format!("VALUES {}", tuples.join(", ")),
         ]);
+
+        Ok(())
+    }
+
+    fn uniform_columns_error(&self) -> Error {
+        Error::InvalidOperation {
+            schema: self.schema.name.to_string(),
+            operation: "INSERT".to_string(),
+            message: "every record in a batch must declare the same attributes".to_string(),
+        }
     }
 
     fn build_update_clause(
@@ -327,7 +360,21 @@ impl<'sch> QueryBuilderInterface<'sch> for QueryBuilder<'sch> {
         let mut query = Vec::new();
         let mut bindings = Bindings::new();
 
-        self.build_insert_clause(attributes, &mut query, &mut bindings);
+        self.build_insert_clause(vec![attributes], &mut query, &mut bindings)?;
+        self.build_returning_clause(&parameters.fields, &mut query);
+
+        Ok((query.join(" "), bindings))
+    }
+
+    fn insert_batch(
+        &self,
+        rows: Vec<Attributes>,
+        parameters: &QueryParameters,
+    ) -> Result<(String, Bindings), Error> {
+        let mut query = Vec::new();
+        let mut bindings = Bindings::new();
+
+        self.build_insert_clause(rows, &mut query, &mut bindings)?;
         self.build_returning_clause(&parameters.fields, &mut query);
 
         Ok((query.join(" "), bindings))
@@ -369,6 +416,15 @@ impl<'sch> QueryBuilderInterface<'sch> for QueryBuilder<'sch> {
             format!("DELETE FROM {} WHERE id = ?1", self.schema.name),
             [Attribute::from(id)].into(),
         )
+    }
+
+    fn delete_batch(&self, parameters: &QueryParameters) -> Result<(String, Bindings), Error> {
+        let mut query = vec!["DELETE FROM".to_string(), self.schema.name.to_string()];
+        let mut bindings = Bindings::new();
+
+        self.build_where_clause(&parameters.filter, &None, &mut query, &mut bindings)?;
+
+        Ok((query.join(" "), bindings))
     }
 }
 
@@ -845,6 +901,76 @@ mod tests {
 
         assert_eq!(query, "DELETE FROM my_table WHERE id = ?1");
         assert_eq!(bindings, vec![Attribute::Integer(1)]);
+    }
+
+    #[test]
+    fn test_insert_batch_multiple_rows() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("");
+        let rows = vec![
+            Attributes::from_iter([
+                ("col1".to_string(), Attribute::Text("a".to_string())),
+                ("col2".to_string(), Attribute::Text("b".to_string())),
+            ]),
+            Attributes::from_iter([
+                ("col1".to_string(), Attribute::Text("c".to_string())),
+                ("col2".to_string(), Attribute::Text("d".to_string())),
+            ]),
+        ];
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .insert_batch(rows, &parse(&registry, &uri))
+            .unwrap();
+
+        assert_eq!(
+            query,
+            "INSERT INTO my_table(col1, col2) VALUES (?1, ?2), (?3, ?4) RETURNING id, col1, col2, col3"
+        );
+        assert_eq!(
+            bindings,
+            vec![
+                Attribute::Text("a".to_string()),
+                Attribute::Text("b".to_string()),
+                Attribute::Text("c".to_string()),
+                Attribute::Text("d".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_insert_batch_rejects_heterogeneous_columns() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("");
+        let rows = vec![
+            Attributes::from_iter([("col1".to_string(), Attribute::Text("a".to_string()))]),
+            Attributes::from_iter([("col2".to_string(), Attribute::Text("b".to_string()))]),
+        ];
+        let result = QueryBuilder::new(&MY_SCHEMA).insert_batch(rows, &parse(&registry, &uri));
+
+        assert!(matches!(result, Err(Error::InvalidOperation { .. })));
+    }
+
+    #[test]
+    fn test_delete_batch_scoped_by_filter() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("");
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .delete_batch(&scoped_to_id(&registry, &uri, 5))
+            .unwrap();
+
+        assert_eq!(query, "DELETE FROM my_table WHERE my_table.id = ?1");
+        assert_eq!(bindings, vec![Attribute::Integer(5)]);
+    }
+
+    #[test]
+    fn test_delete_batch_unscoped() {
+        let registry = registry(&FTS_SCHEMAS);
+        let uri = mock_uri("");
+        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+            .delete_batch(&parse(&registry, &uri))
+            .unwrap();
+
+        assert_eq!(query, "DELETE FROM my_table");
+        assert!(bindings.is_empty());
     }
 
     #[test]
