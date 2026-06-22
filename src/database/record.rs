@@ -46,3 +46,20 @@ impl<'sch> Record<'sch> {
         Ok(JsonApiIdentifier::Existing { kind, id })
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct NewRecord<'sch> {
+    pub schema: &'sch TableSchema<'sch>,
+    pub attributes: Attributes,
+    pub relationships: Relationships<'sch>,
+}
+
+impl<'sch> NewRecord<'sch> {
+    pub fn new(schema: &'sch TableSchema<'sch>) -> Self {
+        NewRecord {
+            schema,
+            attributes: Attributes::new(),
+            relationships: Relationships::new(),
+        }
+    }
+}
