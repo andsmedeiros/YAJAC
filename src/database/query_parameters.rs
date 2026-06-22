@@ -156,22 +156,18 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
         schema: &'sch TableSchema<'sch>,
         registry: &Registry<'sch, Adapter>,
     ) -> Result<QueryParameters<'sch, 'req>, Error> {
-        if let Some(query) = uri.query() {
-            let mut query_parameters = Self {
-                schema,
-                fields: FieldsParameters::new(),
-                include: IncludeParameters::new(),
-                filter: None,
-                search: None,
-                sort: None,
-                page: None,
-            };
-            query_parameters.parse_query(query, schema, registry)?;
+        let mut query_parameters = Self {
+            schema,
+            fields: FieldsParameters::new(),
+            include: IncludeParameters::new(),
+            filter: None,
+            search: None,
+            sort: None,
+            page: None,
+        };
+        query_parameters.parse_query(uri.query().unwrap_or_default(), schema, registry)?;
 
-            Ok(query_parameters)
-        } else {
-            Ok(QueryParameters::new(schema))
-        }
+        Ok(query_parameters)
     }
 
     pub fn derive<Adapter: AdapterInterface>(
@@ -683,7 +679,15 @@ mod tests {
         let uri = "http://localhost:8000/articles".parse::<Uri>().unwrap();
         let params = QueryParameters::parse(&uri, &ARTICLES, &registry).unwrap();
 
-        assert_eq!(params, QueryParameters::new(&ARTICLES));
+        assert_eq!(
+            params.fields["articles"],
+            ARTICLES.fields().collect::<IndexSet<_>>()
+        );
+        assert!(params.include.is_empty());
+        assert!(params.filter.is_none());
+        assert!(params.sort.is_none());
+        assert!(params.page.is_none());
+        assert!(params.search.is_none());
     }
 
     // --- Fields ---
