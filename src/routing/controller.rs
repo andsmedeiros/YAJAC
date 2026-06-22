@@ -2,15 +2,13 @@ use crate::{
     core::factories::to_document,
     database::{
         adapters::Adapter as AdapterInterface,
-        attributes::{Identifier, from_value},
-        data_loader::DataLoader,
+        attributes::Identifier,
+        composite::Composite,
         schema::{IdentifierType, TableSchema},
-        table::Table,
     },
     routing::{Context, DefaultUriGenerator, Error, Result, responder::*},
 };
 use http::StatusCode;
-use serde_json::to_value;
 
 pub trait ReadOnlyResourceController<'sch, Adapter: AdapterInterface + 'sch> {
     fn resource_schema() -> &'sch TableSchema<'sch>;
@@ -36,81 +34,75 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
 
     fn index<'req>(context: Context<'sch, 'req, Adapter>) -> Result {
         let schema = Self::resource_schema();
-        let query_parameters = context.query_parameters(schema)?;
-        let mut collection = context.table(schema.name)?.query(query_parameters)?;
-        let included = DataLoader::new(context.registry, context.connection()?)
-            .load_for_collection(&mut collection, query_parameters)?;
+        let parameters = context.query_parameters(schema)?;
+        let Composite { content, included } =
+            context.store()?.fetch_collection(schema, parameters)?;
         let document = to_document(
-            &collection,
+            &content,
             included,
             context.uri,
             &DefaultUriGenerator::default(),
         )?;
 
-        respond(to_value(&document)?)
+        respond(Some(document))
     }
 
     fn show<'req>(context: Context<'sch, 'req, Adapter>) -> Result {
         let schema = Self::resource_schema();
-        let query_parameters = context.query_parameters(schema)?;
+        let parameters = context.query_parameters(schema)?;
         let id = Self::require_id(&context)?;
-        let mut record = context.table(schema.name)?.find(id, query_parameters)?;
-        let included = DataLoader::new(context.registry, context.connection()?)
-            .load_for_record(&mut record, query_parameters)?;
+        let Composite { content, included } =
+            context.store()?.fetch_record(schema, id, parameters)?;
         let document = to_document(
-            &record,
+            &content,
             included,
             context.uri,
             &DefaultUriGenerator::default(),
         )?;
 
-        respond(to_value(&document)?)
+        respond(Some(document))
     }
 
     fn create<'req>(context: Context<'sch, 'req, Adapter>) -> Result {
         let schema = Self::resource_schema();
-        let query_parameters = context.query_parameters(schema)?;
-        let attributes = from_value(schema, context.body().clone())?;
+        let parameters = context.query_parameters(schema)?;
+        let store = context.store()?;
 
-        let mut record = context
-            .transaction(|cx| cx.table(schema.name)?.insert(attributes, query_parameters))?;
-        let included = DataLoader::new(context.registry, context.connection()?)
-            .load_for_record(&mut record, query_parameters)?;
+        let new_record = store.materialise_new(context.require_resource(schema)?, schema)?;
+        let Composite { content, included } = store.create_record(new_record, parameters)?;
         let document = to_document(
-            &record,
+            &content,
             included,
             context.uri,
             &DefaultUriGenerator::default(),
         )?;
 
-        respond_with(StatusCode::CREATED, to_value(&document)?)
+        respond_with(StatusCode::CREATED, Some(document))
     }
 
     fn update<'req>(context: Context<'sch, 'req, Adapter>) -> Result {
         let schema = Self::resource_schema();
-        let query_parameters = context.query_parameters(schema)?;
+        let parameters = context.query_parameters(schema)?;
         let id = Self::require_id(&context)?;
-        let attributes = from_value(schema, context.body().clone())?;
+        let store = context.store()?;
 
-        let mut record = context.transaction(|cx| {
-            cx.table(schema.name)?
-                .update(id, attributes, query_parameters)
-        })?;
-        let included = DataLoader::new(context.registry, context.connection()?)
-            .load_for_record(&mut record, query_parameters)?;
+        let record = store.materialise(context.require_resource(schema)?, schema, id)?;
+        let Composite { content, included } = store.update_record(record, parameters)?;
         let document = to_document(
-            &record,
+            &content,
             included,
             context.uri,
             &DefaultUriGenerator::default(),
         )?;
 
-        respond(to_value(&document)?)
+        respond(Some(document))
     }
 
     fn delete<'req>(context: Context<'sch, 'req, Adapter>) -> Result {
         let id = Self::require_id(&context)?;
-        context.table(Self::resource_schema().name)?.delete(id)?;
+        context
+            .store()?
+            .delete_record(Self::resource_schema(), id)?;
 
         no_content()
     }

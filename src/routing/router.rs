@@ -1,15 +1,16 @@
 use super::{
-    Context, Request, Result, RouteParameters,
+    Context, DefaultUriGenerator, Error, Request, Result, RouteParameters,
     controller::{ReadOnlyResourceController, ResourceController},
-    default_response,
+    default_response, respond_with,
 };
 use crate::{
+    core::factories::to_document,
     database::{adapters::Adapter as AdapterInterface, registry::Registry},
     http_wrappers::{StatusCode, Uri},
+    json_api::{document::Document, error::Error as JsonApiError},
 };
 use http::{Method, Response};
 use log::{debug, error};
-use serde_json::{Value, json};
 use std::mem;
 
 pub trait Handler<'sch, Adapter: AdapterInterface>:
@@ -62,8 +63,8 @@ impl<'sch, Adapter: AdapterInterface> Router<'sch, Adapter> {
     pub fn handle(
         &self,
         database: &'sch Registry<'sch, Adapter>,
-        request: Request,
-    ) -> Response<Value> {
+        request: http::Request<Vec<u8>>,
+    ) -> Response<Option<Document>> {
         let uri: Uri = request.uri().clone().into();
         let method = request.method().clone();
         let path_segments: Vec<&str> = uri.path().split('/').filter(|s| !s.is_empty()).collect();
@@ -76,52 +77,38 @@ impl<'sch, Adapter: AdapterInterface> Router<'sch, Adapter> {
                     .matches(&method, &path_segments)
                     .map(|parameters| (route, parameters))
             })
-            .and_then(|(route, parameters)| {
+            .map(|(route, parameters)| {
                 debug!("Matched!");
+                let (parts, body) = request.into_parts();
+                let request = Request::from_parts(parts, serde_json::from_slice(&body)?);
                 let context = Context::from_request(database, &uri, parameters, request);
-                (route.handler)(context).into()
+                (route.handler)(context)
             })
             .unwrap_or_else(|| {
-                default_response()
-                    .status(StatusCode::NOT_FOUND)
-                    .body(json!({
-                        "status": StatusCode::NOT_FOUND,
-                        "code": "ResourceNotFound",
-                        "title": format!(
-                            "{} {}: Resource not found",
-                            method,
-                            uri
-                        )
-                    }))
-                    .map_err(Into::into)
+                Err(Error::new(
+                    StatusCode::NOT_FOUND,
+                    "ResourceNotFound",
+                    format!("{method} {uri}: Resource not found"),
+                ))
             })
             .or_else(|error| {
-                serde_json::to_value(&error)
-                    .map_err(|error| {
-                        error!("Failed to serialise error to json: {:?}", error);
-                    })
-                    .and_then(|value| {
-                        default_response()
-                            .status(error.status_code())
-                            .body(value)
-                            .map_err(|error| {
-                                error!("Failed to construct error response: {:?}", error);
-                            })
-                    })
+                let status = error.status_code();
+                let document = to_document(
+                    vec![JsonApiError::from(error)],
+                    Vec::new(),
+                    &uri,
+                    &DefaultUriGenerator::default(),
+                )?;
+
+                respond_with(status.into(), Some(document))
             })
-            .or_else(|_| {
+            .unwrap_or_else(|error| {
+                error!("Failed to construct error response: {error:?}");
                 default_response()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(json!({
-                        "status": StatusCode::INTERNAL_SERVER_ERROR,
-                        "code": "ResponseConstructionError",
-                        "title": "The server failed to construct an error response"
-                    }))
+                    .body(None)
+                    .unwrap_or_else(|_| Response::new(None))
             })
-            .map_err(|error| {
-                error!("Failed to construct fallback error response: {:?}", error);
-            })
-            .expect("Failed to construct response")
     }
 }
 

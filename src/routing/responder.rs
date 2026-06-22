@@ -1,6 +1,7 @@
+use crate::json_api::document::Document;
 use crate::routing::Error;
 use http::{Response, StatusCode, response::Builder as ResponseBuilder};
-use serde_json::Value;
+
 pub fn default_response() -> ResponseBuilder {
     Response::builder()
         .header("Access-Control-Allow-Origin", "*")
@@ -15,6 +16,6 @@ pub fn respond<T>(payload: T) -> Result<Response<T>, Error> {
     respond_with(StatusCode::OK, payload)
 }
 
-pub fn no_content() -> Result<Response<Value>, Error> {
-    respond_with(StatusCode::NO_CONTENT, Value::Null)
+pub fn no_content() -> Result<Response<Option<Document>>, Error> {
+    respond_with(StatusCode::NO_CONTENT, None)
 }

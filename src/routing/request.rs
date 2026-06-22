@@ -1,4 +1,4 @@
+use crate::json_api::document::Document;
 use http::Request as HttpRequest;
-use serde_json::Value;
 
-pub type Request = HttpRequest<Value>;
+pub type Request = HttpRequest<Option<Document>>;
