@@ -79,6 +79,19 @@ pub trait Table<
         self.run_fetch(query, bindings)
     }
 
+    fn insert_batch(
+        &self,
+        rows: Vec<Attributes>,
+        parameters: &QueryParameters,
+    ) -> Result<Vec<Record<'sch>>, Error> {
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let (query, bindings) = QueryBuilder::new(self.schema()).insert_batch(rows, parameters)?;
+        self.run_fetch(query, bindings)
+    }
+
     fn require_attributes(&self, attributes: &Attributes) -> Result<(), Error> {
         if attributes.is_empty() {
             return Err(Error::InvalidOperation {
@@ -93,6 +106,11 @@ pub trait Table<
 
     fn delete(&self, id: Identifier) -> Result<(), Error> {
         let (query, bindings) = QueryBuilder::new(self.schema()).delete(id);
+        self.connection().execute(query, bindings)
+    }
+
+    fn delete_batch(&self, parameters: &QueryParameters) -> Result<(), Error> {
+        let (query, bindings) = QueryBuilder::new(self.schema()).delete_batch(parameters)?;
         self.connection().execute(query, bindings)
     }
 
