@@ -1,10 +1,12 @@
 use crate::{
-    core::error::Error as CoreError, database::error::Error as DatabaseError,
-    http_wrappers::StatusCode, json_api::error::Source,
+    core::error::Error as CoreError,
+    database::error::Error as DatabaseError,
+    http_wrappers::StatusCode,
+    json_api::error::{Error as JsonApiError, Source},
 };
 use http::Error as HttpError;
 use serde::{Deserialize, Serialize};
-use serde_json::{Error as JsonError, Value, json};
+use serde_json::{Error as JsonError, Value, error::Category as JsonCategory, json};
 use std::{
     error::Error as StdError,
     fmt::{Display, Formatter},
@@ -138,12 +140,12 @@ impl From<HttpError> for Error {
 
 impl From<JsonError> for Error {
     fn from(error: JsonError) -> Self {
-        Error::new(
-            StatusCode::BAD_REQUEST,
-            "JsonSerialisationError",
-            error.to_string(),
-        )
-        .with_meta(json!({
+        let status = match error.classify() {
+            JsonCategory::Data => StatusCode::UNPROCESSABLE_ENTITY,
+            _ => StatusCode::BAD_REQUEST,
+        };
+
+        Error::new(status, "JsonSerialisationError", error.to_string()).with_meta(json!({
             "kind": format!("{:?}", error.classify()),
             "line": error.line(),
             "column": error.column()
@@ -180,6 +182,11 @@ impl From<DatabaseError> for Error {
                 "DatabaseFailure",
                 error.to_string(),
             ),
+            error @ DatabaseError::ConstraintViolation { .. } => Error::new(
+                StatusCode::CONFLICT,
+                "ConstraintViolation",
+                error.to_string(),
+            ),
             error => Error::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "InternalServerError",
@@ -202,3 +209,18 @@ impl From<CoreError> for Error {
 }
 
 impl StdError for Error {}
+
+impl From<Error> for JsonApiError {
+    fn from(error: Error) -> Self {
+        JsonApiError {
+            id: None,
+            links: None,
+            status: Some(error.status),
+            code: Some(error.code),
+            title: Some(error.title),
+            detail: error.detail,
+            source: error.source.map(|source| *source),
+            meta: error.meta.map(|meta| *meta),
+        }
+    }
+}

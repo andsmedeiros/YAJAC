@@ -42,6 +42,9 @@ pub enum Error {
     DatabaseFailure {
         message: String,
     },
+    ConstraintViolation {
+        message: String,
+    },
     RecordNotFound,
     DataLoadingError {
         message: String,
@@ -51,8 +54,15 @@ pub enum Error {
 #[cfg(feature = "sqlite")]
 impl From<rusqlite::Error> for Error {
     fn from(error: rusqlite::Error) -> Self {
-        Error::DatabaseFailure {
-            message: error.to_string(),
+        let message = error.to_string();
+
+        match error {
+            rusqlite::Error::SqliteFailure(failure, _)
+                if failure.code == rusqlite::ErrorCode::ConstraintViolation =>
+            {
+                Error::ConstraintViolation { message }
+            }
+            _ => Error::DatabaseFailure { message },
         }
     }
 }
@@ -120,6 +130,7 @@ impl Display for Error {
                 operation, schema, message
             ),
             DatabaseFailure { message } => write!(f, "Failed to execute query: {}", message),
+            ConstraintViolation { message } => write!(f, "Constraint violation: {}", message),
             RecordNotFound => write!(f, "Record not found"),
             DataLoadingError { message } => write!(
                 f,
