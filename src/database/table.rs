@@ -62,6 +62,7 @@ pub trait Table<
         attributes: Attributes,
         parameters: &QueryParameters,
     ) -> Result<Record<'sch>, Error> {
+        self.require_attributes(&attributes)?;
         let (query, bindings) =
             QueryBuilder::new(self.schema()).update(id, attributes, parameters)?;
         self.run_fetch_single(query, bindings)
@@ -72,9 +73,22 @@ pub trait Table<
         attributes: Attributes,
         parameters: &QueryParameters,
     ) -> Result<Vec<Record<'sch>>, Error> {
+        self.require_attributes(&attributes)?;
         let (query, bindings) =
             QueryBuilder::new(self.schema()).update_batch(attributes, parameters)?;
         self.run_fetch(query, bindings)
+    }
+
+    fn require_attributes(&self, attributes: &Attributes) -> Result<(), Error> {
+        if attributes.is_empty() {
+            return Err(Error::InvalidOperation {
+                schema: self.schema().name.to_string(),
+                operation: "UPDATE".to_string(),
+                message: "no attributes to update".to_string(),
+            });
+        }
+
+        Ok(())
     }
 
     fn delete(&self, id: Identifier) -> Result<(), Error> {
