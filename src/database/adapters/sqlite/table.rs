@@ -34,7 +34,7 @@ mod tests {
         adapters::SqliteAdapter,
         attributes::{Attribute, Attributes, Identifier},
         error::Error,
-        query_parameters::QueryParameters,
+        query_parameters::{FilterParameters, FilterValue, QueryParameters},
         registry::Registry as DatabaseRegistry,
         schema::{AttributeType, IdentifierType, PrimaryKey, TableSchema},
         table::Table,
@@ -295,6 +295,69 @@ mod tests {
         let result = table.find(Identifier::Integer(1), &QueryParameters::new(&MY_SCHEMA));
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::RecordNotFound));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_insert_batch() -> Result<(), Box<dyn StdError>> {
+        let registry = registry();
+        let connection = registry.acquire()?;
+        let table = registry.table("my_table", &connection)?;
+
+        let rows = vec![
+            Attributes::from_iter([("col1".to_string(), Attribute::Text("a".to_string()))]),
+            Attributes::from_iter([("col1".to_string(), Attribute::Text("b".to_string()))]),
+        ];
+        let inserted = table.insert_batch(rows, &QueryParameters::new(&MY_SCHEMA))?;
+
+        assert_eq!(inserted.len(), 2);
+        assert_eq!(table.query(&QueryParameters::new(&MY_SCHEMA))?.len(), 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_insert_batch_empty_is_a_noop() -> Result<(), Box<dyn StdError>> {
+        let registry = registry();
+        let connection = registry.acquire()?;
+        let table = registry.table("my_table", &connection)?;
+
+        let inserted = table.insert_batch(Vec::new(), &QueryParameters::new(&MY_SCHEMA))?;
+
+        assert!(inserted.is_empty());
+        assert!(table.query(&QueryParameters::new(&MY_SCHEMA))?.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_delete_batch_scoped_by_filter() -> Result<(), Box<dyn StdError>> {
+        let registry = seeded_registry()?;
+        let connection = registry.acquire()?;
+        let table = registry.table("my_table", &connection)?;
+
+        let mut parameters = QueryParameters::new(&MY_SCHEMA);
+        parameters.filter = Some(FilterParameters::from([(
+            "col3",
+            vec![FilterValue::LessThan(Attribute::Integer(0))],
+        )]));
+        table.delete_batch(&parameters)?;
+
+        assert_eq!(table.query(&QueryParameters::new(&MY_SCHEMA))?.len(), 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_delete_batch_unscoped_clears_table() -> Result<(), Box<dyn StdError>> {
+        let registry = seeded_registry()?;
+        let connection = registry.acquire()?;
+        let table = registry.table("my_table", &connection)?;
+
+        table.delete_batch(&QueryParameters::new(&MY_SCHEMA))?;
+
+        assert!(table.query(&QueryParameters::new(&MY_SCHEMA))?.is_empty());
 
         Ok(())
     }
