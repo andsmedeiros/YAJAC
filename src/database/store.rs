@@ -107,6 +107,30 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
             .transaction(|| self.table(schema)?.delete(id))
     }
 
+    pub fn create_collection(
+        &self,
+        _records: Vec<NewRecord<'sch>>,
+        _parameters: &QueryParameters<'sch, 'req>,
+    ) -> Result<CompositeCollection<'sch>, Error> {
+        unimplemented!()
+    }
+
+    pub fn update_collection(
+        &self,
+        _patch: NewRecord<'sch>,
+        _parameters: &QueryParameters<'sch, 'req>,
+    ) -> Result<CompositeCollection<'sch>, Error> {
+        unimplemented!()
+    }
+
+    pub fn delete_collection(
+        &self,
+        _schema: &'sch TableSchema<'sch>,
+        _parameters: &QueryParameters<'sch, 'req>,
+    ) -> Result<(), Error> {
+        unimplemented!()
+    }
+
     pub fn materialise_new(
         &self,
         resource: &Resource,
@@ -344,4 +368,800 @@ fn scope<'sch>(
     let mut parameters = QueryParameters::new(schema);
     parameters.filter = Some(filter);
     parameters
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Store;
+    use crate::database::adapters::SqliteAdapter;
+    use crate::database::adapters::sqlite::{Connection, Pool};
+    use crate::database::attributes::{Attribute, Attributes, ForeignKeys, Identifier};
+    use crate::database::error::Error;
+    use crate::database::query_parameters::{FilterParameters, FilterValue, QueryParameters};
+    use crate::database::record::{NewRecord, Record};
+    use crate::database::registry::Registry;
+    use crate::database::relationships::Relationship;
+    use crate::database::schema::{
+        AttributeType, IdentifierType, PrimaryKey, RelatedResource,
+        Relationship as SchemaRelationship, RelationshipKeys, TableSchema,
+    };
+    use crate::database::table::Table;
+    use crate::http_wrappers::Uri;
+    use std::error::Error as StdError;
+
+    static USERS_SCHEMA: TableSchema = TableSchema {
+        name: "users",
+        primary_key: PrimaryKey {
+            name: "id",
+            kind: IdentifierType::Integer,
+        },
+        attributes: &[("name", AttributeType::Text)],
+        foreign_keys: &[],
+        relationships: &[
+            (
+                "posts",
+                SchemaRelationship::HasMany(RelatedResource {
+                    resource: "posts",
+                    keys: RelationshipKeys {
+                        related: "author_id",
+                        own: "id",
+                    },
+                }),
+            ),
+            (
+                "profile",
+                SchemaRelationship::HasOne(RelatedResource {
+                    resource: "profiles",
+                    keys: RelationshipKeys {
+                        related: "user_id",
+                        own: "id",
+                    },
+                }),
+            ),
+        ],
+        text_index: false,
+    };
+
+    static POSTS_SCHEMA: TableSchema = TableSchema {
+        name: "posts",
+        primary_key: PrimaryKey {
+            name: "id",
+            kind: IdentifierType::Integer,
+        },
+        attributes: &[("title", AttributeType::Text)],
+        foreign_keys: &[("author_id", AttributeType::Integer)],
+        relationships: &[(
+            "author",
+            SchemaRelationship::BelongsTo(RelatedResource {
+                resource: "users",
+                keys: RelationshipKeys {
+                    related: "id",
+                    own: "author_id",
+                },
+            }),
+        )],
+        text_index: false,
+    };
+
+    static PROFILES_SCHEMA: TableSchema = TableSchema {
+        name: "profiles",
+        primary_key: PrimaryKey {
+            name: "id",
+            kind: IdentifierType::Integer,
+        },
+        attributes: &[("bio", AttributeType::Text)],
+        foreign_keys: &[("user_id", AttributeType::Integer)],
+        relationships: &[(
+            "user",
+            SchemaRelationship::BelongsTo(RelatedResource {
+                resource: "users",
+                keys: RelationshipKeys {
+                    related: "id",
+                    own: "user_id",
+                },
+            }),
+        )],
+        text_index: false,
+    };
+
+    static SCHEMAS: [&TableSchema; 3] = [&USERS_SCHEMA, &POSTS_SCHEMA, &PROFILES_SCHEMA];
+
+    fn with_registry<F>(func: F) -> Result<(), Box<dyn StdError>>
+    where
+        F: FnOnce(&Registry<SqliteAdapter>) -> Result<(), Box<dyn StdError>>,
+    {
+        let registry = Registry::<SqliteAdapter>::try_new(Pool::memory()?, &SCHEMAS)?;
+
+        registry.acquire()?.execute_batch(
+            "
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL
+            );
+
+            CREATE TABLE posts (
+                id INTEGER PRIMARY KEY,
+                author_id INTEGER,
+                title TEXT NOT NULL,
+                FOREIGN KEY(author_id) REFERENCES users(id)
+            );
+
+            CREATE TABLE profiles (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL UNIQUE,
+                bio TEXT,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+            ",
+        )?;
+
+        func(&registry)
+    }
+
+    fn seed_user(
+        registry: &Registry<SqliteAdapter>,
+        connection: &Connection,
+        id: i64,
+        name: &str,
+    ) -> Result<(), Error> {
+        registry.table("users", connection)?.insert(
+            Attributes::from_iter([
+                ("id".to_string(), Attribute::Integer(id)),
+                ("name".to_string(), Attribute::Text(name.to_string())),
+            ]),
+            &QueryParameters::new(&USERS_SCHEMA),
+        )?;
+
+        Ok(())
+    }
+
+    fn seed_post(
+        registry: &Registry<SqliteAdapter>,
+        connection: &Connection,
+        id: i64,
+        author_id: i64,
+        title: &str,
+    ) -> Result<(), Error> {
+        registry.table("posts", connection)?.insert(
+            Attributes::from_iter([
+                ("id".to_string(), Attribute::Integer(id)),
+                ("author_id".to_string(), Attribute::Integer(author_id)),
+                ("title".to_string(), Attribute::Text(title.to_string())),
+            ]),
+            &QueryParameters::new(&POSTS_SCHEMA),
+        )?;
+
+        Ok(())
+    }
+
+    fn all_posts<'a>(
+        registry: &Registry<'a, SqliteAdapter>,
+        connection: &Connection,
+    ) -> Result<Vec<Record<'a>>, Error> {
+        registry
+            .table("posts", connection)?
+            .query(&QueryParameters::new(&POSTS_SCHEMA))
+    }
+
+    fn title_of<'a>(record: &'a Record) -> &'a str {
+        record.attributes["title"]
+            .as_string()
+            .expect("title should be a text attribute")
+    }
+
+    fn author_of<'a>(record: &'a Record) -> Option<&'a Attribute> {
+        record.foreign_keys.get("author_id")
+    }
+
+    fn new_post(title: &str, author: i64) -> NewRecord<'static> {
+        let mut post = NewRecord::new(&POSTS_SCHEMA);
+        post.attributes
+            .insert("title".to_string(), Attribute::Text(title.to_string()));
+        post.relationships.insert(
+            "author",
+            Relationship::BelongsTo(Identifier::Integer(author)),
+        );
+        post
+    }
+
+    // --- fetch_record ------------------------------------------------------
+
+    #[test]
+    fn test_fetch_record_returns_content() -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            seed_user(registry, &connection, 1, "alice")?;
+            seed_post(registry, &connection, 1, 1, "hello")?;
+
+            let store = Store::new(registry, &connection);
+            let uri: Uri = "/".parse()?;
+            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            let fetched = store.fetch_record(&POSTS_SCHEMA, Identifier::Integer(1), &parameters)?;
+
+            assert_eq!(fetched.content.id, Identifier::Integer(1));
+            assert_eq!(title_of(&fetched.content), "hello");
+            assert_eq!(author_of(&fetched.content), Some(&Attribute::Integer(1)));
+            assert!(fetched.included.is_empty());
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_fetch_record_loads_includes() -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            seed_user(registry, &connection, 1, "alice")?;
+            seed_post(registry, &connection, 1, 1, "hello")?;
+
+            let store = Store::new(registry, &connection);
+            let uri: Uri = "/posts/1?include=author".parse()?;
+            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            let fetched = store.fetch_record(&POSTS_SCHEMA, Identifier::Integer(1), &parameters)?;
+
+            assert_eq!(fetched.included.len(), 1);
+            assert_eq!(fetched.included[0].schema.name, "users");
+            assert_eq!(fetched.included[0].id, Identifier::Integer(1));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_fetch_record_missing_is_not_found() -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            let store = Store::new(registry, &connection);
+
+            let uri: Uri = "/".parse()?;
+            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            let result = store.fetch_record(&POSTS_SCHEMA, Identifier::Integer(999), &parameters);
+
+            assert!(matches!(result, Err(Error::RecordNotFound)));
+
+            Ok(())
+        })
+    }
+
+    // --- fetch_collection --------------------------------------------------
+
+    #[test]
+    fn test_fetch_collection_returns_all_records() -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            seed_user(registry, &connection, 1, "alice")?;
+            seed_post(registry, &connection, 1, 1, "one")?;
+            seed_post(registry, &connection, 2, 1, "two")?;
+            seed_post(registry, &connection, 3, 1, "three")?;
+
+            let store = Store::new(registry, &connection);
+            let uri: Uri = "/".parse()?;
+            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            let fetched = store.fetch_collection(&POSTS_SCHEMA, &parameters)?;
+
+            assert_eq!(fetched.content.len(), 3);
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_fetch_collection_scoped_by_filter() -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            seed_user(registry, &connection, 1, "alice")?;
+            seed_user(registry, &connection, 2, "bob")?;
+            seed_post(registry, &connection, 1, 1, "alice-one")?;
+            seed_post(registry, &connection, 2, 1, "alice-two")?;
+            seed_post(registry, &connection, 3, 2, "bob-one")?;
+
+            let store = Store::new(registry, &connection);
+            let uri: Uri = "/".parse()?;
+            let mut parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            parameters.filter = Some(FilterParameters::from([(
+                "author_id",
+                vec![FilterValue::Equal(Attribute::Integer(1))],
+            )]));
+
+            let fetched = store.fetch_collection(&POSTS_SCHEMA, &parameters)?;
+
+            assert_eq!(fetched.content.len(), 2);
+            for record in &fetched.content {
+                assert_eq!(author_of(record), Some(&Attribute::Integer(1)));
+            }
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_fetch_collection_loads_includes() -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            seed_user(registry, &connection, 1, "alice")?;
+            seed_user(registry, &connection, 2, "bob")?;
+            seed_post(registry, &connection, 1, 1, "alice-one")?;
+            seed_post(registry, &connection, 2, 2, "bob-one")?;
+
+            let store = Store::new(registry, &connection);
+            let uri: Uri = "/posts?include=author".parse()?;
+            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            let fetched = store.fetch_collection(&POSTS_SCHEMA, &parameters)?;
+
+            assert_eq!(fetched.content.len(), 2);
+            assert_eq!(fetched.included.len(), 2);
+            assert!(
+                fetched
+                    .included
+                    .iter()
+                    .all(|record| record.schema.name == "users")
+            );
+
+            Ok(())
+        })
+    }
+
+    // --- create_record -----------------------------------------------------
+
+    #[test]
+    fn test_create_record_persists_attributes_and_belongs_to() -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            seed_user(registry, &connection, 1, "alice")?;
+
+            let store = Store::new(registry, &connection);
+            let uri: Uri = "/".parse()?;
+            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            let created = store.create_record(new_post("Hello", 1), &parameters)?;
+
+            assert_eq!(title_of(&created.content), "Hello");
+            assert_eq!(author_of(&created.content), Some(&Attribute::Integer(1)));
+
+            let persisted = all_posts(registry, &connection)?;
+            assert_eq!(persisted.len(), 1);
+            assert_eq!(author_of(&persisted[0]), Some(&Attribute::Integer(1)));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_create_record_links_has_many() -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            seed_user(registry, &connection, 1, "alice")?;
+            seed_post(registry, &connection, 1, 1, "one")?;
+            seed_post(registry, &connection, 2, 1, "two")?;
+
+            let store = Store::new(registry, &connection);
+
+            let mut user = NewRecord::new(&USERS_SCHEMA);
+            user.attributes
+                .insert("name".to_string(), Attribute::Text("dave".to_string()));
+            user.relationships.insert(
+                "posts",
+                Relationship::HasMany(vec![Identifier::Integer(1), Identifier::Integer(2)]),
+            );
+
+            let uri: Uri = "/".parse()?;
+            let parameters = QueryParameters::parse(&uri, &USERS_SCHEMA, registry)?;
+            let created = store.create_record(user, &parameters)?;
+            let new_id = *created.content.id.as_i64()?;
+
+            let posts = all_posts(registry, &connection)?;
+            assert_eq!(posts.len(), 2);
+            for post in &posts {
+                assert_eq!(author_of(post), Some(&Attribute::Integer(new_id)));
+            }
+
+            Ok(())
+        })
+    }
+
+    // --- update_record -----------------------------------------------------
+
+    #[test]
+    fn test_update_record_updates_attributes() -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            seed_user(registry, &connection, 1, "alice")?;
+            seed_post(registry, &connection, 1, 1, "before")?;
+
+            let store = Store::new(registry, &connection);
+            let record = Record::new(
+                &POSTS_SCHEMA,
+                Identifier::Integer(1),
+                Attributes::from_iter([(
+                    "title".to_string(),
+                    Attribute::Text("after".to_string()),
+                )]),
+                ForeignKeys::new(),
+            );
+
+            let uri: Uri = "/".parse()?;
+            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            store.update_record(record, &parameters)?;
+
+            let posts = all_posts(registry, &connection)?;
+            assert_eq!(posts.len(), 1);
+            assert_eq!(title_of(&posts[0]), "after");
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_update_record_replaces_has_many() -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            seed_user(registry, &connection, 1, "alice")?;
+            seed_user(registry, &connection, 2, "bob")?;
+            seed_post(registry, &connection, 1, 1, "p1")?;
+            seed_post(registry, &connection, 2, 1, "p2")?;
+            seed_post(registry, &connection, 3, 2, "p3")?;
+
+            let store = Store::new(registry, &connection);
+
+            // Reassign bob's posts to exactly {p1}: p1 is adopted, p3 (bob's) is detached.
+            let mut record = Record::new(
+                &USERS_SCHEMA,
+                Identifier::Integer(2),
+                Attributes::new(),
+                ForeignKeys::new(),
+            );
+            record
+                .relationships
+                .insert("posts", Relationship::HasMany(vec![Identifier::Integer(1)]));
+
+            let uri: Uri = "/".parse()?;
+            let parameters = QueryParameters::parse(&uri, &USERS_SCHEMA, registry)?;
+            store.update_record(record, &parameters)?;
+
+            let posts = all_posts(registry, &connection)?;
+            let author = |id: i64| {
+                posts
+                    .iter()
+                    .find(|post| post.id == Identifier::Integer(id))
+                    .map(author_of)
+                    .expect("post should exist")
+            };
+
+            assert_eq!(author(1), Some(&Attribute::Integer(2)));
+            assert_eq!(author(2), Some(&Attribute::Integer(1)));
+            assert_eq!(author(3), Some(&Attribute::Null));
+
+            Ok(())
+        })
+    }
+
+    // --- delete_record -----------------------------------------------------
+
+    #[test]
+    fn test_delete_record_removes_row() -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            seed_user(registry, &connection, 1, "alice")?;
+            seed_post(registry, &connection, 1, 1, "doomed")?;
+
+            let store = Store::new(registry, &connection);
+            store.delete_record(&POSTS_SCHEMA, Identifier::Integer(1))?;
+
+            assert!(all_posts(registry, &connection)?.is_empty());
+
+            Ok(())
+        })
+    }
+
+    // --- create_collection -------------------------------------------------
+
+    #[test]
+    fn test_create_collection_inserts_records_with_belongs_to() -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            seed_user(registry, &connection, 1, "alice")?;
+
+            let store = Store::new(registry, &connection);
+            let uri: Uri = "/".parse()?;
+            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            let created = store.create_collection(
+                vec![new_post("First", 1), new_post("Second", 1)],
+                &parameters,
+            )?;
+
+            assert_eq!(created.content.len(), 2);
+            for record in &created.content {
+                assert_eq!(author_of(record), Some(&Attribute::Integer(1)));
+            }
+
+            let mut titles: Vec<&str> = created.content.iter().map(title_of).collect();
+            titles.sort_unstable();
+            assert_eq!(titles, ["First", "Second"]);
+
+            assert_eq!(all_posts(registry, &connection)?.len(), 2);
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_create_collection_assigns_distinct_belongs_to_per_record()
+    -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            seed_user(registry, &connection, 1, "alice")?;
+            seed_user(registry, &connection, 2, "bob")?;
+
+            let store = Store::new(registry, &connection);
+            let uri: Uri = "/".parse()?;
+            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            store.create_collection(
+                vec![new_post("alice-post", 1), new_post("bob-post", 2)],
+                &parameters,
+            )?;
+
+            let posts = all_posts(registry, &connection)?;
+            let author = |title: &str| {
+                posts
+                    .iter()
+                    .find(|post| title_of(post) == title)
+                    .map(author_of)
+                    .expect("post should exist")
+            };
+
+            assert_eq!(author("alice-post"), Some(&Attribute::Integer(1)));
+            assert_eq!(author("bob-post"), Some(&Attribute::Integer(2)));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_create_collection_loads_includes() -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            seed_user(registry, &connection, 1, "alice")?;
+
+            let store = Store::new(registry, &connection);
+            let uri: Uri = "/posts?include=author".parse()?;
+            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            let created = store.create_collection(
+                vec![new_post("First", 1), new_post("Second", 1)],
+                &parameters,
+            )?;
+
+            assert_eq!(created.included.len(), 1);
+            assert_eq!(created.included[0].schema.name, "users");
+            assert_eq!(created.included[0].id, Identifier::Integer(1));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_create_collection_empty_is_a_noop() -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            let store = Store::new(registry, &connection);
+
+            let uri: Uri = "/".parse()?;
+            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            let created = store.create_collection(vec![], &parameters)?;
+
+            assert!(created.content.is_empty());
+            assert!(created.included.is_empty());
+            assert!(all_posts(registry, &connection)?.is_empty());
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_create_collection_rejects_has_many() -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            let store = Store::new(registry, &connection);
+
+            let mut user = NewRecord::new(&USERS_SCHEMA);
+            user.attributes
+                .insert("name".to_string(), Attribute::Text("dave".to_string()));
+            user.relationships
+                .insert("posts", Relationship::HasMany(vec![Identifier::Integer(1)]));
+
+            let uri: Uri = "/".parse()?;
+            let parameters = QueryParameters::parse(&uri, &USERS_SCHEMA, registry)?;
+            let result = store.create_collection(vec![user], &parameters);
+
+            assert!(matches!(result, Err(Error::InvalidOperation { .. })));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_create_collection_rejects_has_one() -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            let store = Store::new(registry, &connection);
+
+            let mut user = NewRecord::new(&USERS_SCHEMA);
+            user.attributes
+                .insert("name".to_string(), Attribute::Text("dave".to_string()));
+            user.relationships
+                .insert("profile", Relationship::HasOne(Identifier::Integer(1)));
+
+            let uri: Uri = "/".parse()?;
+            let parameters = QueryParameters::parse(&uri, &USERS_SCHEMA, registry)?;
+            let result = store.create_collection(vec![user], &parameters);
+
+            assert!(matches!(result, Err(Error::InvalidOperation { .. })));
+
+            Ok(())
+        })
+    }
+
+    // --- update_collection -------------------------------------------------
+
+    #[test]
+    fn test_update_collection_uniform_attribute_patch_scoped_by_filter()
+    -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            seed_user(registry, &connection, 1, "alice")?;
+            seed_user(registry, &connection, 2, "bob")?;
+            seed_post(registry, &connection, 1, 1, "alice-one")?;
+            seed_post(registry, &connection, 2, 1, "alice-two")?;
+            seed_post(registry, &connection, 3, 2, "bob-one")?;
+
+            let store = Store::new(registry, &connection);
+
+            let mut patch = NewRecord::new(&POSTS_SCHEMA);
+            patch
+                .attributes
+                .insert("title".to_string(), Attribute::Text("patched".to_string()));
+
+            let uri: Uri = "/".parse()?;
+            let mut parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            parameters.filter = Some(FilterParameters::from([(
+                "author_id",
+                vec![FilterValue::Equal(Attribute::Integer(1))],
+            )]));
+
+            let updated = store.update_collection(patch, &parameters)?;
+            assert_eq!(updated.content.len(), 2);
+
+            let posts = all_posts(registry, &connection)?;
+            for post in &posts {
+                let expected = if author_of(post) == Some(&Attribute::Integer(1)) {
+                    "patched"
+                } else {
+                    "bob-one"
+                };
+                assert_eq!(title_of(post), expected);
+            }
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_update_collection_bulk_reassigns_belongs_to() -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            seed_user(registry, &connection, 1, "alice")?;
+            seed_user(registry, &connection, 2, "bob")?;
+            seed_post(registry, &connection, 1, 1, "one")?;
+            seed_post(registry, &connection, 2, 1, "two")?;
+
+            let store = Store::new(registry, &connection);
+
+            let mut patch = NewRecord::new(&POSTS_SCHEMA);
+            patch
+                .relationships
+                .insert("author", Relationship::BelongsTo(Identifier::Integer(2)));
+
+            let uri: Uri = "/".parse()?;
+            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            store.update_collection(patch, &parameters)?;
+
+            let posts = all_posts(registry, &connection)?;
+            assert_eq!(posts.len(), 2);
+            for post in &posts {
+                assert_eq!(author_of(post), Some(&Attribute::Integer(2)));
+            }
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_update_collection_rejects_has_many() -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            let store = Store::new(registry, &connection);
+
+            let mut patch = NewRecord::new(&USERS_SCHEMA);
+            patch
+                .relationships
+                .insert("posts", Relationship::HasMany(vec![Identifier::Integer(1)]));
+
+            let uri: Uri = "/".parse()?;
+            let parameters = QueryParameters::parse(&uri, &USERS_SCHEMA, registry)?;
+            let result = store.update_collection(patch, &parameters);
+
+            assert!(matches!(result, Err(Error::InvalidOperation { .. })));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_update_collection_rejects_has_one() -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            let store = Store::new(registry, &connection);
+
+            let mut patch = NewRecord::new(&USERS_SCHEMA);
+            patch
+                .relationships
+                .insert("profile", Relationship::HasOne(Identifier::Integer(1)));
+
+            let uri: Uri = "/".parse()?;
+            let parameters = QueryParameters::parse(&uri, &USERS_SCHEMA, registry)?;
+            let result = store.update_collection(patch, &parameters);
+
+            assert!(matches!(result, Err(Error::InvalidOperation { .. })));
+
+            Ok(())
+        })
+    }
+
+    // --- delete_collection -------------------------------------------------
+
+    #[test]
+    fn test_delete_collection_scoped_by_filter() -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            seed_user(registry, &connection, 1, "alice")?;
+            seed_user(registry, &connection, 2, "bob")?;
+            seed_post(registry, &connection, 1, 1, "alice-one")?;
+            seed_post(registry, &connection, 2, 1, "alice-two")?;
+            seed_post(registry, &connection, 3, 2, "bob-one")?;
+
+            let store = Store::new(registry, &connection);
+
+            let uri: Uri = "/".parse()?;
+            let mut parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            parameters.filter = Some(FilterParameters::from([(
+                "author_id",
+                vec![FilterValue::Equal(Attribute::Integer(1))],
+            )]));
+
+            store.delete_collection(&POSTS_SCHEMA, &parameters)?;
+
+            let posts = all_posts(registry, &connection)?;
+            assert_eq!(posts.len(), 1);
+            assert_eq!(title_of(&posts[0]), "bob-one");
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_delete_collection_unscoped_clears_table() -> Result<(), Box<dyn StdError>> {
+        with_registry(|registry| {
+            let connection = registry.acquire()?;
+            seed_user(registry, &connection, 1, "alice")?;
+            seed_post(registry, &connection, 1, 1, "one")?;
+            seed_post(registry, &connection, 2, 1, "two")?;
+
+            let store = Store::new(registry, &connection);
+            let uri: Uri = "/".parse()?;
+            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            store.delete_collection(&POSTS_SCHEMA, &parameters)?;
+
+            assert!(all_posts(registry, &connection)?.is_empty());
+
+            Ok(())
+        })
+    }
 }
