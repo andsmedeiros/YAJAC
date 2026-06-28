@@ -49,6 +49,15 @@ pub enum Error {
     DataLoadingError {
         message: String,
     },
+    UnloadedAttributeAccess {
+        schema: String,
+        attribute: String,
+    },
+    MissingRecordId {
+        schema: String,
+    },
+    InconsistentCollection,
+    InvalidIndexAccess,
 }
 
 #[cfg(feature = "sqlite")]
@@ -137,6 +146,19 @@ impl Display for Error {
                 "Failed to load relationships for primary content: {}",
                 message
             ),
+            UnloadedAttributeAccess { schema, attribute } => write!(
+                f,
+                "Attempted to read attribute '{attribute}' of a record with schema '{schema}', but it was not loaded"
+            ),
+            MissingRecordId { schema } => write!(
+                f,
+                "Attempted to access ID of record with schema '{schema}', but it was not loaded"
+            ),
+            InconsistentCollection => write!(
+                f,
+                "Attempted to apply operation over an heterogeneous collection"
+            ),
+            InvalidIndexAccess => write!(f, "Attempted to extract an non-indexed value"),
         }
     }
 }
