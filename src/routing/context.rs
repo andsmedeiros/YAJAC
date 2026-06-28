@@ -1,6 +1,11 @@
 use super::Request;
+use crate::database::attributes::{ForeignKeys, Identifier};
 use crate::database::error::Error;
-use crate::database::schema::TableSchema;
+use crate::database::record::Record;
+use crate::database::relationships::Relationship;
+use crate::database::schema::{IdentifierType, Relationship as SchemaRelationship, TableSchema};
+use crate::json_api::identifier::Identifier as JsonApiIdentifier;
+use crate::json_api::relationship::Linkage;
 use crate::{
     database::{
         adapters::Adapter as AdapterInterface, connection::Connection as ConnectionInterface,
@@ -15,6 +20,7 @@ use crate::{
     routing::{Error as RoutingError, RouteParameters},
 };
 use http::HeaderMap;
+use itertools::Itertools;
 use std::cell::OnceCell;
 
 type Handle<'req, Adapter> = <<Adapter as AdapterInterface>::Pool as PoolInterface>::Handle<'req>;
@@ -73,8 +79,8 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
         Ok(Store::new(self.registry, self.connection()?))
     }
 
-    pub fn require_resource(&self, schema: &TableSchema) -> Result<&Resource, RoutingError> {
-        let document = self.body.as_ref().ok_or_else(|| {
+    pub fn require_resource(&mut self, schema: &TableSchema) -> Result<Resource, RoutingError> {
+        let document = self.body.take().ok_or_else(|| {
             RoutingError::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "MissingBody",
@@ -82,14 +88,14 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
             )
         })?;
 
-        let PrimaryContent::Record { data } = &document.content else {
+        let PrimaryContent::Record { data } = document.content else {
             return Err(RoutingError::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "InvalidDocument",
                 "the request body must contain a single resource object",
             ));
         };
-        let resource = data.as_ref();
+        let resource = *data;
 
         let (kind, id) = match &resource.identifier {
             ResourceIdentifier::Existing { kind, id } => (kind.as_str(), Some(id)),
@@ -125,6 +131,116 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
         }
 
         Ok(resource)
+    }
+
+    pub fn require_record(
+        &mut self,
+        schema: &'sch TableSchema<'sch>,
+    ) -> Result<Record<'sch>, RoutingError> {
+        let resource = self.require_resource(schema)?;
+        let record = Record {
+            schema,
+            id: self
+                .materialise_id(resource.identifier, schema.name)
+                .map(Some)
+                .or_else(|error| match error {
+                    Error::MissingRecordId { .. } => Ok(None),
+                    error => Err(error),
+                })?,
+            attributes: resource
+                .attributes
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(name, value)| Ok((name, serde_json::from_value(value)?)))
+                .try_collect::<_, _, RoutingError>()?,
+            relationships: resource
+                .relationships
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|(name, relationship)| {
+                    (|| -> Result<Option<(_, _)>, RoutingError> {
+                        let &(name, ref descriptor) = schema
+                            .relationships
+                            .iter()
+                            .find(|(n, _)| *n == name.as_str())
+                            .ok_or_else(|| Error::SchemaValidationFailure {
+                                schema: schema.name.to_string(),
+                                attribute: name,
+                                message: "Attempted to materialise unknown relationship"
+                                    .to_string(),
+                            })?;
+                        let result = match (relationship.data, descriptor) {
+                            (
+                                Some(Linkage::ToOne(identifier)),
+                                SchemaRelationship::HasOne(related),
+                            ) => Some(Relationship::HasOne(
+                                self.materialise_id(identifier, related.resource)?,
+                            )),
+                            (
+                                Some(Linkage::ToOne(identifier)),
+                                SchemaRelationship::BelongsTo(related),
+                            ) => Some(Relationship::BelongsTo(
+                                self.materialise_id(identifier, related.resource)?,
+                            )),
+                            (Some(Linkage::ToMany(ids)), SchemaRelationship::HasMany(related)) => {
+                                Some(Relationship::HasMany(
+                                    ids.into_iter()
+                                        .map(|identifier| {
+                                            self.materialise_id(identifier, related.resource)
+                                        })
+                                        .try_collect()?,
+                                ))
+                            }
+
+                            (Some(Linkage::Empty), _) => None,
+                            _ => Err(Error::SchemaValidationFailure {
+                                schema: schema.name.to_string(),
+                                attribute: name.to_string(),
+                                message: "Resource provided an invalid relationship linkage"
+                                    .to_string(),
+                            })?,
+                        }
+                        .map(|relationship| (name, relationship));
+
+                        Ok(result)
+                    })()
+                    .transpose()
+                })
+                .try_collect()?,
+            foreign_keys: ForeignKeys::new(),
+        };
+
+        Ok(record)
+    }
+
+    fn materialise_id(
+        &self,
+        identifier: JsonApiIdentifier,
+        schema: &str,
+    ) -> Result<Identifier, Error> {
+        let schema = self.registry.schema(schema)?;
+        let identifier = match identifier {
+            JsonApiIdentifier::Existing { kind, id } if kind.as_str() == schema.name => id,
+            JsonApiIdentifier::New { .. } => Err(Error::MissingRecordId {
+                schema: schema.name.to_string(),
+            })?,
+            _ => Err(Error::SchemaValidationFailure {
+                schema: schema.name.to_string(),
+                attribute: schema.primary_key.name.to_string(),
+                message: "Attempted to materialise identifier from a mismatched schema".to_string(),
+            })?,
+        };
+
+        match schema.primary_key.kind {
+            IdentifierType::Text => Ok(Identifier::Text(identifier)),
+            IdentifierType::Integer => {
+                Ok(Identifier::Integer(identifier.parse().map_err(|_| {
+                    Error::InvalidAttributeConversion {
+                        kind: "i64".to_string(),
+                    }
+                })?))
+            }
+        }
     }
 
     /// Runs `operation` inside a transaction on the request connection.

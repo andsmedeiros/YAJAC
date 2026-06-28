@@ -33,12 +33,12 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
         serve_show(Self::resource_schema(), context)
     }
 
-    fn create<'req>(context: Context<'sch, 'req, Adapter>) -> Result {
+    fn create<'req>(mut context: Context<'sch, 'req, Adapter>) -> Result {
         let schema = Self::resource_schema();
-        let parameters = context.query_parameters(schema)?;
+        let new_record = context.require_record(schema)?;
         let store = context.store()?;
 
-        let new_record = store.materialise_new(context.require_resource(schema)?, schema)?;
+        let parameters = context.query_parameters(schema)?;
         let Composite { content, included } = store.create_record(new_record, parameters)?;
         let document = to_document(
             &content,
@@ -50,13 +50,12 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
         respond_with(StatusCode::CREATED, Some(document))
     }
 
-    fn update<'req>(context: Context<'sch, 'req, Adapter>) -> Result {
+    fn update<'req>(mut context: Context<'sch, 'req, Adapter>) -> Result {
         let schema = Self::resource_schema();
-        let parameters = context.query_parameters(schema)?;
-        let id = require_id(schema, &context)?;
+        let record = context.require_record(schema)?;
         let store = context.store()?;
+        let parameters = context.query_parameters(schema)?;
 
-        let record = store.materialise(context.require_resource(schema)?, schema, id)?;
         let Composite { content, included } = store.update_record(record, parameters)?;
         let document = to_document(
             &content,
