@@ -136,7 +136,7 @@ pub struct QueryParameters<'sch, 'req> {
 
 impl<'sch, 'req> QueryParameters<'sch, 'req> {
     pub fn new(schema: &'sch TableSchema<'sch>) -> Self {
-        Self {
+        let mut parameters = Self {
             schema,
             fields: FieldsParameters::from_iter([(schema.name, schema.fields().collect())]),
             include: IncludeParameters::new(),
@@ -144,7 +144,11 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
             search: None,
             sort: None,
             page: None,
-        }
+        };
+        parameters
+            .discover_fields_for_remaining_models(ModelsToSerialise::from([(schema.name, schema)]));
+
+        parameters
     }
 
     /// Main entry point.
