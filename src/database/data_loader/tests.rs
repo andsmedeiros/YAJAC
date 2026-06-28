@@ -3,9 +3,10 @@ use crate::database::schema::{IdentifierType, PrimaryKey};
 use crate::database::{
     adapters::SqliteAdapter,
     adapters::sqlite::Pool,
-    attributes::{Attribute, Attributes},
+    attributes::{Attribute, Row},
     data_loader::DataLoader,
     query_parameters::QueryParameters,
+    record::Record,
     registry::Registry,
     schema::{AttributeType, RelatedResource, Relationship, RelationshipKeys, TableSchema},
     table::Table,
@@ -268,7 +269,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
     .enumerate()
     {
         users_table.insert(
-            Attributes::from_iter([
+            Row::from_iter([
                 ("id".to_string(), Attribute::Integer((i + 1) as i64)),
                 (
                     "username".to_string(),
@@ -288,7 +289,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
         (3, 3, "Charlie's bio", "https://example.com/charlie.jpg"),
     ] {
         profiles_table.insert(
-            Attributes::from_iter([
+            Row::from_iter([
                 ("id".to_string(), Attribute::Integer(id)),
                 ("user_id".to_string(), Attribute::Integer(user_id)),
                 ("bio".to_string(), Attribute::Text(bio.to_string())),
@@ -323,7 +324,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
         (5, 3, "Charlie's Post", "Content of Charlie's post", true),
     ] {
         posts_table.insert(
-            Attributes::from_iter([
+            Row::from_iter([
                 ("id".to_string(), Attribute::Integer(id)),
                 ("author_id".to_string(), Attribute::Integer(author_id)),
                 ("title".to_string(), Attribute::Text(title.to_string())),
@@ -377,7 +378,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
         (11, 3, 2, Integer(9), "Bob replying to Alice"),
     ] {
         comments_table.insert(
-            Attributes::from_iter([
+            Row::from_iter([
                 ("id".to_string(), Attribute::Integer(id)),
                 ("post_id".to_string(), Attribute::Integer(post_id)),
                 ("author_id".to_string(), Attribute::Integer(author_id)),
@@ -392,7 +393,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
     let tags_table = registry.table("tags", &connection)?;
     for (id, name) in [(1, "rust"), (2, "programming"), (3, "web"), (4, "database")] {
         tags_table.insert(
-            Attributes::from_iter([
+            Row::from_iter([
                 ("id".to_string(), Attribute::Integer(id)),
                 ("name".to_string(), Attribute::Text(name.to_string())),
             ]),
@@ -414,7 +415,8 @@ fn record_document<'a: 'b, 'b>(
     let connection = registry.acquire()?;
     let table = registry.table(model, &connection)?;
     let query_parameters = QueryParameters::parse(&uri, table.schema(), registry)?;
-    let mut record = table.find(id, &query_parameters)?;
+    let row = table.find(id, &query_parameters)?;
+    let mut record = Record::try_from_row(table.schema(), row)?;
     let loader = DataLoader::new(registry, &connection);
     let included = loader.load_for_record(&mut record, &query_parameters)?;
     let document = to_document(&record, included, &uri, &DefaultUriGenerator::default())?;
@@ -431,7 +433,11 @@ fn collection_document<'a: 'b, 'b>(
     let connection = registry.acquire()?;
     let table = registry.table(model, &connection)?;
     let query_parameters = QueryParameters::parse(&uri, table.schema(), registry)?;
-    let mut collection = table.query(&query_parameters)?;
+    let mut collection = table
+        .query(&query_parameters)?
+        .into_iter()
+        .map(|row| Record::try_from_row(table.schema(), row))
+        .collect::<Result<Vec<_>, _>>()?;
     let loader = DataLoader::new(registry, &connection);
     let included = loader.load_for_collection(&mut collection, &query_parameters)?;
     let document = to_document(&collection, included, &uri, &DefaultUriGenerator::default())?;

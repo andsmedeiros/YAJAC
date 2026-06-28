@@ -1,22 +1,20 @@
+use core::slice;
+use std::collections::HashMap;
+
 use crate::database::adapters::Adapter as AdapterInterface;
-use crate::database::attributes::{Attribute, Attributes, ForeignKeys, Identifier, from_value};
+use crate::database::attributes::{Attribute, Identifier, Row};
 use crate::database::composite::{Composite, CompositeCollection, CompositeRecord};
 use crate::database::connection::Connection as ConnectionInterface;
 use crate::database::data_loader::DataLoader;
 use crate::database::error::Error;
 use crate::database::query_parameters::{FilterParameters, FilterValue, QueryParameters};
-use crate::database::record::{NewRecord, Record};
+use crate::database::record::{Indexable, Record, RecordPatch, Refreshable};
 use crate::database::registry::Registry;
-use crate::database::relationships::{Relationship as DatabaseRelationship, Relationships};
-use crate::database::schema::{
-    IdentifierType, RelatedResource, Relationship as SchemaRelationship, TableSchema,
-};
+use crate::database::relationships::Relationship as DatabaseRelationship;
+use crate::database::schema::{Relationship as SchemaRelationship, TableSchema};
 use crate::database::table::Table as TableInterface;
-use crate::json_api::identifier::Identifier as ResourceIdentifier;
-use crate::json_api::relationship::Linkage;
-use crate::json_api::resource::Resource;
-use indexmap::IndexSet;
-use serde_json::Value;
+use indexmap::{IndexMap, IndexSet};
+use itertools::Itertools;
 
 pub struct Store<'sch, 'req, Adapter: AdapterInterface> {
     registry: &'sch Registry<'sch, Adapter>,
@@ -41,7 +39,8 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
         parameters: &QueryParameters<'sch, 'req>,
     ) -> Result<CompositeRecord<'sch>, Error> {
         self.connection.transaction(|| {
-            let mut content = self.table(schema)?.find(id, parameters)?;
+            let row = self.table(schema)?.find(id, parameters)?;
+            let mut content = Record::try_from_row(schema, row)?;
             let included = self.loader().load_for_record(&mut content, parameters)?;
 
             Ok(Composite { content, included })
@@ -54,7 +53,12 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
         parameters: &QueryParameters<'sch, 'req>,
     ) -> Result<CompositeCollection<'sch>, Error> {
         self.connection.transaction(|| {
-            let mut content = self.table(schema)?.query(parameters)?;
+            let mut content = self
+                .table(schema)?
+                .query(parameters)?
+                .into_iter()
+                .map(|row| Record::try_from_row(schema, row))
+                .collect::<Result<Vec<_>, _>>()?;
             let included = self
                 .loader()
                 .load_for_collection(&mut content, parameters)?;
@@ -63,38 +67,260 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
         })
     }
 
+    /// Populates each record's `foreign_keys` with whatever `belongs_to` relationships
+    /// are specified.
+    /// This prepares the records for inserting or updating and must be called prior to any
+    /// of these operations.
+    fn attach_belongs_to(&self, records: &mut [Record<'sch>]) -> Result<(), Error> {
+        let mut required_queries = HashMap::new();
+
+        for record in records.iter_mut() {
+            let schema = record.schema();
+            for (&name, linkage) in &record.relationships {
+                let &(name, ref descriptor ) = schema.relationships
+                    .iter()
+                    .find(|&entry| entry.0 == name)
+                    .ok_or_else(|| {
+                        Error::SchemaValidationFailure {
+                            schema: schema.name.to_string(),
+                            attribute: name.to_string(),
+                            message: format!(
+                                "Attempted to attach unknown relationship '{}' to record with schema '{}'",
+                                name, schema.name
+                            ),
+                        }
+                    })?;
+
+                if let SchemaRelationship::BelongsTo(descriptor) = descriptor {
+                    if let DatabaseRelationship::BelongsTo(id) = linkage {
+                        let related_table = self.registry.schema(descriptor.resource)?;
+                        if related_table.is_primary_key(descriptor.keys.related) {
+                            record
+                                .foreign_keys
+                                .insert(descriptor.keys.own, id.clone().into());
+                        } else {
+                            let (_, attributes, ids, relationships) = required_queries
+                                .entry(related_table.name)
+                                .or_insert_with(|| {
+                                    (
+                                        related_table,
+                                        IndexSet::new(),
+                                        IndexSet::new(),
+                                        HashMap::new(),
+                                    )
+                                });
+                            attributes.insert(descriptor.keys.related);
+                            ids.insert(id.clone().into());
+                            relationships.insert(name, descriptor);
+                        }
+                    } else {
+                        return Err(Error::SchemaValidationFailure {
+                            schema: schema.name.to_string(),
+                            attribute: name.to_string(),
+                            message: format!(
+                                "Attempted to attach relationship '{}' to record with schema '{}' with wrong linkage.",
+                                name, schema.name
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
+        for (related_table, attributes, ids, relationships) in required_queries.into_values() {
+            let index = self
+                .table(related_table)?
+                .query(&QueryParameters {
+                    fields: IndexMap::from([(related_table.name, attributes)]),
+                    filter: Some(FilterParameters::from([(
+                        related_table.primary_key.name,
+                        vec![FilterValue::In(ids)],
+                    )])),
+                    ..QueryParameters::new(related_table)
+                })?
+                .into_iter()
+                .map(|row| Record::try_from_row(related_table, row))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .index_by_primary_key()?;
+
+            for (relationship, descriptor) in relationships {
+                for record in records.iter_mut() {
+                    if let Some(DatabaseRelationship::BelongsTo(id)) =
+                        record.relationships.get(relationship)
+                    {
+                        let related_record =
+                            index.get(id).ok_or_else(|| Error::InvalidAttribute {
+                                attribute: relationship.to_string(),
+                                kind: "BelongsTo".to_string(),
+                                message: format!("Related record with id '{id}' not found."),
+                            })?;
+                        let value = related_record.require(descriptor.keys.related).cloned()?;
+                        record.foreign_keys.insert(descriptor.keys.own, value);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn attach_has_one_many(&self, records: &[Record<'sch>], replace: bool) -> Result<(), Error> {
+        let mut patches: HashMap<&str, HashMap<Attribute, Row>> = HashMap::new();
+
+        for record in records.iter() {
+            let schema = record.schema;
+            for (name, relationship) in &record.relationships {
+                let descriptor = schema
+                    .relationship(name)
+                    .ok_or_else(|| Error::SchemaValidationFailure {
+                            schema: schema.name.to_string(),
+                            attribute: name.to_string(),
+                            message: format!(
+                                "Attempted to attach unknown relationship '{}' to record with schema '{}'",
+                                name, schema.name
+                            ),
+                    })?;
+
+                let (ids, descriptor) = match (&relationship, descriptor) {
+                    (DatabaseRelationship::HasOne(id), SchemaRelationship::HasOne(descriptor)) => {
+                        (slice::from_ref(id), descriptor)
+                    }
+                    (
+                        DatabaseRelationship::HasMany(ids),
+                        SchemaRelationship::HasMany(descriptor),
+                    ) => (ids.as_slice(), descriptor),
+                    (DatabaseRelationship::HasOne(..), _)
+                    | (DatabaseRelationship::HasMany(..), _) => {
+                        Err(Error::SchemaValidationFailure {
+                            schema: schema.name.to_string(),
+                            attribute: name.to_string(),
+                            message: format!(
+                                "Attempted to attach relationship '{}' to record with schema '{}' with wrong linkage.",
+                                name, schema.name
+                            ),
+                        })?
+                    }
+                    _ => continue,
+                };
+
+                let value = record.require_owned(descriptor.keys.own)?;
+                for id in ids {
+                    patches
+                        .entry(descriptor.resource)
+                        .or_default()
+                        .entry(id.clone().into())
+                        .or_default()
+                        .insert(descriptor.keys.related.to_string(), value.clone());
+                }
+            }
+        }
+
+        let queries = patches.into_iter().map(|(table, patches)| {
+            (
+                table,
+                patches.into_iter().fold(
+                    HashMap::new(),
+                    |mut map: HashMap<Vec<_>, IndexSet<_>>, (id, patch)| {
+                        let key = patch
+                            .into_iter()
+                            .sorted_by(|a, b| Ord::cmp(a.0.as_str(), b.0.as_str()))
+                            .collect_vec();
+                        map.entry(key).or_default().insert(id);
+                        map
+                    },
+                ),
+            )
+        });
+
+        for (name, patches) in queries {
+            let schema = self.registry.schema(name)?;
+            let table = self.table(schema)?;
+            for (patch, ids) in &patches {
+                table.update_batch(
+                    Row::from_iter(patch.clone()),
+                    &QueryParameters {
+                        filter: Some(FilterParameters::from([(
+                            schema.primary_key.name,
+                            vec![FilterValue::In(ids.clone())],
+                        )])),
+                        ..QueryParameters::new(schema)
+                    },
+                )?;
+            }
+            if replace {
+                let patches = patches.into_iter().fold(
+                    HashMap::new(),
+                    |mut patches,
+                     (attributes, ids)|
+                     -> HashMap<(String, Attribute), IndexSet<Attribute>> {
+                        for attribute in attributes {
+                            patches.entry(attribute).or_default().extend(ids.clone())
+                        }
+                        patches
+                    },
+                );
+
+                for ((name, value), ids) in patches {
+                    table.update_batch(
+                        Row::from([(name.clone(), Attribute::Null)]),
+                        &QueryParameters {
+                            filter: Some(FilterParameters::from([
+                                (name.as_str(), vec![FilterValue::Equal(value)]),
+                                (schema.primary_key.name, vec![FilterValue::NotIn(ids)]),
+                            ])),
+                            ..QueryParameters::new(schema)
+                        },
+                    )?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn create_record(
         &self,
-        new_record: NewRecord<'sch>,
+        mut record: Record<'sch>,
         parameters: &QueryParameters<'sch, 'req>,
     ) -> Result<CompositeRecord<'sch>, Error> {
         self.connection.transaction(|| {
-            let mut content = self
-                .table(new_record.schema)?
-                .insert(new_record.attributes, parameters)?;
-            self.replace_relationships(&content, &new_record.relationships)?;
-            let included = self.loader().load_for_record(&mut content, parameters)?;
+            let schema = record.schema;
+            self.attach_belongs_to(slice::from_mut(&mut record))?;
+            record.refresh_with(|row| self.table(schema)?.insert(row, parameters))?;
+            self.attach_has_one_many(slice::from_ref(&record), false)?;
+            let included = self.loader().load_for_record(&mut record, parameters)?;
 
-            Ok(Composite { content, included })
+            Ok(Composite {
+                content: record,
+                included,
+            })
         })
     }
 
     pub fn update_record(
         &self,
-        record: Record<'sch>,
+        mut record: Record<'sch>,
         parameters: &QueryParameters<'sch, 'req>,
     ) -> Result<CompositeRecord<'sch>, Error> {
         self.connection.transaction(|| {
-            let table = self.table(record.schema)?;
-            let mut content = if record.attributes.is_empty() {
-                table.find(record.id.clone(), parameters)?
-            } else {
-                table.update(record.id.clone(), record.attributes, parameters)?
-            };
-            self.replace_relationships(&content, &record.relationships)?;
-            let included = self.loader().load_for_record(&mut content, parameters)?;
+            let schema = record.schema;
+            self.attach_belongs_to(slice::from_mut(&mut record))?;
+            let id = record.require_id()?.clone();
+            record.refresh_with(|row| {
+                if row.is_empty() {
+                    self.table(schema)?.find(id, parameters)
+                } else {
+                    self.table(schema)?.update(id, row, parameters)
+                }
+            })?;
+            self.attach_has_one_many(slice::from_ref(&record), true)?;
+            let included = self.loader().load_for_record(&mut record, parameters)?;
 
-            Ok(Composite { content, included })
+            Ok(Composite {
+                content: record,
+                included,
+            })
         })
     }
 
@@ -109,221 +335,75 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
 
     pub fn create_collection(
         &self,
-        _records: Vec<NewRecord<'sch>>,
-        _parameters: &QueryParameters<'sch, 'req>,
+        mut records: Vec<Record<'sch>>,
+        parameters: &QueryParameters<'sch, 'req>,
     ) -> Result<CompositeCollection<'sch>, Error> {
-        unimplemented!()
+        let schema = if let Some(first) = records.first() {
+            first.schema
+        } else {
+            return Ok(Composite {
+                content: Vec::new(),
+                included: Vec::new(),
+            });
+        };
+
+        if records.iter().any(|record| record.schema != schema) {
+            return Err(Error::InconsistentCollection);
+        }
+
+        self.connection.transaction(|| {
+            self.attach_belongs_to(&mut records)?;
+            records.refresh_with(|rows| self.table(schema)?.insert_batch(rows, parameters))?;
+            self.attach_has_one_many(&records, false)?;
+            let included = self
+                .loader()
+                .load_for_collection(&mut records, parameters)?;
+
+            Ok(Composite {
+                content: records,
+                included,
+            })
+        })
     }
 
     pub fn update_collection(
         &self,
-        _patch: NewRecord<'sch>,
-        _parameters: &QueryParameters<'sch, 'req>,
+        patch: RecordPatch<'sch>,
+        parameters: &QueryParameters<'sch, 'req>,
     ) -> Result<CompositeCollection<'sch>, Error> {
-        unimplemented!()
+        let schema = patch.schema;
+        let mut patch = Record::from(patch);
+        self.connection.transaction(|| {
+            self.attach_belongs_to(slice::from_mut(&mut patch))?;
+            let row = patch.take_row();
+            let mut records = self
+                .table(schema)?
+                .update_batch(row, parameters)?
+                .into_iter()
+                .map(|row| {
+                    Record::try_from_row(schema, row)
+                        .map(|record| record.with_relationships(patch.relationships.clone()))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            self.attach_has_one_many(&records, true)?;
+            let included = self
+                .loader()
+                .load_for_collection(&mut records, parameters)?;
+
+            Ok(Composite {
+                content: records,
+                included,
+            })
+        })
     }
 
     pub fn delete_collection(
         &self,
-        _schema: &'sch TableSchema<'sch>,
-        _parameters: &QueryParameters<'sch, 'req>,
+        schema: &'sch TableSchema<'sch>,
+        parameters: &QueryParameters<'sch, 'req>,
     ) -> Result<(), Error> {
-        unimplemented!()
-    }
-
-    pub fn materialise_new(
-        &self,
-        resource: &Resource,
-        schema: &'sch TableSchema<'sch>,
-    ) -> Result<NewRecord<'sch>, Error> {
-        let (attributes, relationships) = self.hydrate(resource, schema)?;
-
-        Ok(NewRecord {
-            schema,
-            attributes,
-            relationships,
-        })
-    }
-
-    pub fn materialise(
-        &self,
-        resource: &Resource,
-        schema: &'sch TableSchema<'sch>,
-        id: Identifier,
-    ) -> Result<Record<'sch>, Error> {
-        let (attributes, relationships) = self.hydrate(resource, schema)?;
-        let mut record = Record::new(schema, id, attributes, ForeignKeys::new());
-        record.relationships = relationships;
-
-        Ok(record)
-    }
-
-    fn hydrate(
-        &self,
-        resource: &Resource,
-        schema: &'sch TableSchema<'sch>,
-    ) -> Result<(Attributes, Relationships<'sch>), Error> {
-        let mut attributes = match &resource.attributes {
-            Some(map) => from_value(schema, Value::Object(map.clone().into_iter().collect()))?,
-            None => Attributes::new(),
-        };
-        let mut relationships = Relationships::new();
-
-        for (name, relationship) in resource.relationships.iter().flatten() {
-            let (key, descriptor) = self.relationship(schema, name)?;
-            let related = descriptor.related_resource();
-            let linkage = relationship.data.clone().unwrap_or(Linkage::Empty);
-
-            match descriptor {
-                SchemaRelationship::BelongsTo(_) => {
-                    let value = match linkage {
-                        Linkage::Empty => Attribute::Null,
-                        Linkage::ToOne(identifier) => {
-                            self.belongs_to_value(related, &identifier)?
-                        }
-                        Linkage::ToMany(_) => return Err(Self::mismatch(schema, name)),
-                    };
-                    attributes.insert(related.keys.own.to_string(), value);
-                }
-                SchemaRelationship::HasOne(_) | SchemaRelationship::HasMany(_) => {
-                    relationships.insert(
-                        key,
-                        DatabaseRelationship::HasMany(self.members(related, linkage)?),
-                    );
-                }
-            }
-        }
-
-        Ok((attributes, relationships))
-    }
-
-    fn replace_relationships(
-        &self,
-        owner: &Record<'sch>,
-        relationships: &Relationships<'sch>,
-    ) -> Result<(), Error> {
-        for (name, relationship) in relationships {
-            let DatabaseRelationship::HasMany(members) = relationship else {
-                continue;
-            };
-
-            let related = self.relationship(owner.schema, name)?.1.related_resource();
-            self.replace_relationship(owner, related, members)?;
-        }
-
-        Ok(())
-    }
-
-    fn replace_relationship(
-        &self,
-        owner: &Record<'sch>,
-        related: &RelatedResource<'sch>,
-        members: &[Identifier],
-    ) -> Result<(), Error> {
-        let owner_value = Self::value_at(owner, related.keys.own)?;
-        let related_schema = self.registry.schema(related.resource)?;
-        let table = self.table(related_schema)?;
-        let foreign_key = related.keys.related;
-        let primary_key = related_schema.primary_key.name;
-
-        let mut detach =
-            FilterParameters::from([(foreign_key, vec![FilterValue::Equal(owner_value.clone())])]);
-        if !members.is_empty() {
-            detach.insert(primary_key, vec![FilterValue::NotIn(member_set(members))]);
-        }
-        table.update_batch(
-            Attributes::from_iter([(foreign_key.to_string(), Attribute::Null)]),
-            &scope(related_schema, detach),
-        )?;
-
-        if !members.is_empty() {
-            let adopt =
-                FilterParameters::from([(primary_key, vec![FilterValue::In(member_set(members))])]);
-            table.update_batch(
-                Attributes::from_iter([(foreign_key.to_string(), owner_value)]),
-                &scope(related_schema, adopt),
-            )?;
-        }
-
-        Ok(())
-    }
-
-    fn members(
-        &self,
-        related: &RelatedResource<'sch>,
-        linkage: Linkage,
-    ) -> Result<Vec<Identifier>, Error> {
-        let kind = self.registry.schema(related.resource)?.primary_key.kind;
-
-        match linkage {
-            Linkage::Empty => Ok(Vec::new()),
-            Linkage::ToOne(identifier) => Ok(vec![target_identifier(&identifier, kind)?]),
-            Linkage::ToMany(identifiers) => identifiers
-                .iter()
-                .map(|identifier| target_identifier(identifier, kind))
-                .collect(),
-        }
-    }
-
-    fn belongs_to_value(
-        &self,
-        related: &RelatedResource<'sch>,
-        linkage: &ResourceIdentifier,
-    ) -> Result<Attribute, Error> {
-        let related_schema = self.registry.schema(related.resource)?;
-        let target = target_identifier(linkage, related_schema.primary_key.kind)?;
-
-        if related_schema.is_primary_key(related.keys.related) {
-            Ok(Attribute::from(target))
-        } else {
-            let record = self
-                .table(related_schema)?
-                .find(target, &QueryParameters::new(related_schema))?;
-            Self::value_at(&record, related.keys.related)
-        }
-    }
-
-    fn relationship(
-        &self,
-        schema: &'sch TableSchema<'sch>,
-        name: &str,
-    ) -> Result<(&'sch str, &'sch SchemaRelationship<'sch>), Error> {
-        schema
-            .relationships
-            .iter()
-            .find(|(key, _)| *key == name)
-            .map(|(key, descriptor)| (*key, descriptor))
-            .ok_or_else(|| Error::SchemaValidationFailure {
-                schema: schema.name.to_string(),
-                attribute: name.to_string(),
-                message: "Unknown relationship".to_string(),
-            })
-    }
-
-    fn value_at(record: &Record, column: &str) -> Result<Attribute, Error> {
-        if record.schema.is_primary_key(column) {
-            Ok(Attribute::from(record.id.clone()))
-        } else {
-            record
-                .attributes
-                .get(column)
-                .or_else(|| record.foreign_keys.get(column))
-                .map(ToOwned::to_owned)
-                .ok_or_else(|| Error::DataLoadingError {
-                    message: format!(
-                        "Column '{column}' was not loaded on '{}'",
-                        record.schema.name
-                    ),
-                })
-        }
-    }
-
-    fn mismatch(schema: &TableSchema, name: &str) -> Error {
-        Error::InconsistentSchema {
-            schema: schema.name.to_string(),
-            attribute: name.to_string(),
-            message: "Relationship kind does not match schema".to_string(),
-        }
+        self.connection
+            .transaction(|| self.table(schema)?.delete_batch(parameters))
     }
 
     fn table(&self, schema: &'sch TableSchema<'sch>) -> Result<Adapter::Table<'sch, 'req>, Error> {
@@ -335,59 +415,28 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
     }
 }
 
-fn target_identifier(
-    identifier: &ResourceIdentifier,
-    kind: IdentifierType,
-) -> Result<Identifier, Error> {
-    let ResourceIdentifier::Existing { id, .. } = identifier else {
-        return Err(Error::InvalidAttributeSet);
-    };
-
-    match kind {
-        IdentifierType::Integer => {
-            id.parse()
-                .map(Identifier::Integer)
-                .map_err(|_| Error::InvalidAttribute {
-                    attribute: id.clone(),
-                    kind: "Integer".to_string(),
-                    message: "linkage id is not a valid integer".to_string(),
-                })
-        }
-        IdentifierType::Text => Ok(Identifier::Text(id.clone())),
-    }
-}
-
-fn member_set(members: &[Identifier]) -> IndexSet<Attribute> {
-    members.iter().cloned().map(Attribute::from).collect()
-}
-
-fn scope<'sch>(
-    schema: &'sch TableSchema<'sch>,
-    filter: FilterParameters<'sch>,
-) -> QueryParameters<'sch, 'sch> {
-    let mut parameters = QueryParameters::new(schema);
-    parameters.filter = Some(filter);
-    parameters
-}
-
 #[cfg(test)]
 mod tests {
+    use itertools::Itertools;
+
     use super::Store;
     use crate::database::adapters::SqliteAdapter;
     use crate::database::adapters::sqlite::{Connection, Pool};
-    use crate::database::attributes::{Attribute, Attributes, ForeignKeys, Identifier};
+    use crate::database::attributes::{Attribute, Attributes, Identifier, Row};
     use crate::database::error::Error;
     use crate::database::query_parameters::{FilterParameters, FilterValue, QueryParameters};
-    use crate::database::record::{NewRecord, Record};
+    use crate::database::record::{Builder, Record, RecordPatch};
     use crate::database::registry::Registry;
-    use crate::database::relationships::Relationship;
+    use crate::database::relationships::{Relationship, Relationships};
     use crate::database::schema::{
         AttributeType, IdentifierType, PrimaryKey, RelatedResource,
         Relationship as SchemaRelationship, RelationshipKeys, TableSchema,
     };
     use crate::database::table::Table;
     use crate::http_wrappers::Uri;
+    use std::collections::HashMap;
     use std::error::Error as StdError;
+    use test_log::test;
 
     static USERS_SCHEMA: TableSchema = TableSchema {
         name: "users",
@@ -505,7 +554,7 @@ mod tests {
         name: &str,
     ) -> Result<(), Error> {
         registry.table("users", connection)?.insert(
-            Attributes::from_iter([
+            Row::from_iter([
                 ("id".to_string(), Attribute::Integer(id)),
                 ("name".to_string(), Attribute::Text(name.to_string())),
             ]),
@@ -523,7 +572,7 @@ mod tests {
         title: &str,
     ) -> Result<(), Error> {
         registry.table("posts", connection)?.insert(
-            Attributes::from_iter([
+            Row::from_iter([
                 ("id".to_string(), Attribute::Integer(id)),
                 ("author_id".to_string(), Attribute::Integer(author_id)),
                 ("title".to_string(), Attribute::Text(title.to_string())),
@@ -534,34 +583,34 @@ mod tests {
         Ok(())
     }
 
-    fn all_posts<'a>(
-        registry: &Registry<'a, SqliteAdapter>,
+    fn seed_profile(
+        registry: &Registry<SqliteAdapter>,
         connection: &Connection,
-    ) -> Result<Vec<Record<'a>>, Error> {
-        registry
-            .table("posts", connection)?
-            .query(&QueryParameters::new(&POSTS_SCHEMA))
+        id: i64,
+        user_id: i64,
+        bio: &str,
+    ) -> Result<(), Error> {
+        registry.table("profiles", connection)?.insert(
+            Row::from_iter([
+                ("id".to_string(), Attribute::Integer(id)),
+                ("user_id".to_string(), Attribute::Integer(user_id)),
+                ("bio".to_string(), Attribute::Text(bio.to_string())),
+            ]),
+            &QueryParameters::new(&PROFILES_SCHEMA),
+        )?;
+
+        Ok(())
     }
 
-    fn title_of<'a>(record: &'a Record) -> &'a str {
-        record.attributes["title"]
-            .as_string()
-            .expect("title should be a text attribute")
-    }
-
-    fn author_of<'a>(record: &'a Record) -> Option<&'a Attribute> {
-        record.foreign_keys.get("author_id")
-    }
-
-    fn new_post(title: &str, author: i64) -> NewRecord<'static> {
-        let mut post = NewRecord::new(&POSTS_SCHEMA);
-        post.attributes
-            .insert("title".to_string(), Attribute::Text(title.to_string()));
-        post.relationships.insert(
-            "author",
-            Relationship::BelongsTo(Identifier::Integer(author)),
-        );
-        post
+    fn new_post(title: &str, author: i64) -> Record<'static> {
+        Record::from((
+            &POSTS_SCHEMA,
+            Attributes::from_iter([("title".to_string(), Attribute::Text(title.to_string()))]),
+            Relationships::from_iter([(
+                "author",
+                Relationship::BelongsTo(Identifier::Integer(author)),
+            )]),
+        ))
     }
 
     // --- fetch_record ------------------------------------------------------
@@ -574,13 +623,15 @@ mod tests {
             seed_post(registry, &connection, 1, 1, "hello")?;
 
             let store = Store::new(registry, &connection);
-            let uri: Uri = "/".parse()?;
-            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            let parameters = QueryParameters::new(&POSTS_SCHEMA);
             let fetched = store.fetch_record(&POSTS_SCHEMA, Identifier::Integer(1), &parameters)?;
 
-            assert_eq!(fetched.content.id, Identifier::Integer(1));
-            assert_eq!(title_of(&fetched.content), "hello");
-            assert_eq!(author_of(&fetched.content), Some(&Attribute::Integer(1)));
+            assert_eq!(fetched.content.require_id()?.to_i64()?, 1);
+            assert_eq!(fetched.content.require("title")?.as_string()?, "hello");
+            assert_eq!(
+                fetched.content.require_related("author")?,
+                &Relationship::BelongsTo(Identifier::Integer(1))
+            );
             assert!(fetched.included.is_empty());
 
             Ok(())
@@ -601,7 +652,7 @@ mod tests {
 
             assert_eq!(fetched.included.len(), 1);
             assert_eq!(fetched.included[0].schema.name, "users");
-            assert_eq!(fetched.included[0].id, Identifier::Integer(1));
+            assert_eq!(fetched.included[0].require_id()?, &Identifier::Integer(1));
 
             Ok(())
         })
@@ -613,8 +664,7 @@ mod tests {
             let connection = registry.acquire()?;
             let store = Store::new(registry, &connection);
 
-            let uri: Uri = "/".parse()?;
-            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            let parameters = QueryParameters::new(&POSTS_SCHEMA);
             let result = store.fetch_record(&POSTS_SCHEMA, Identifier::Integer(999), &parameters);
 
             assert!(matches!(result, Err(Error::RecordNotFound)));
@@ -635,8 +685,7 @@ mod tests {
             seed_post(registry, &connection, 3, 1, "three")?;
 
             let store = Store::new(registry, &connection);
-            let uri: Uri = "/".parse()?;
-            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            let parameters = QueryParameters::new(&POSTS_SCHEMA);
             let fetched = store.fetch_collection(&POSTS_SCHEMA, &parameters)?;
 
             assert_eq!(fetched.content.len(), 3);
@@ -656,18 +705,22 @@ mod tests {
             seed_post(registry, &connection, 3, 2, "bob-one")?;
 
             let store = Store::new(registry, &connection);
-            let uri: Uri = "/".parse()?;
-            let mut parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
-            parameters.filter = Some(FilterParameters::from([(
-                "author_id",
-                vec![FilterValue::Equal(Attribute::Integer(1))],
-            )]));
+            let parameters = QueryParameters {
+                filter: Some(FilterParameters::from([(
+                    "author_id",
+                    vec![FilterValue::Equal(Attribute::Integer(1))],
+                )])),
+                ..QueryParameters::new(&POSTS_SCHEMA)
+            };
 
             let fetched = store.fetch_collection(&POSTS_SCHEMA, &parameters)?;
 
             assert_eq!(fetched.content.len(), 2);
             for record in &fetched.content {
-                assert_eq!(author_of(record), Some(&Attribute::Integer(1)));
+                assert_eq!(
+                    record.require_related("author")?,
+                    &Relationship::BelongsTo(Identifier::Integer(1))
+                );
             }
 
             Ok(())
@@ -710,16 +763,20 @@ mod tests {
             seed_user(registry, &connection, 1, "alice")?;
 
             let store = Store::new(registry, &connection);
-            let uri: Uri = "/".parse()?;
-            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            let parameters = QueryParameters::new(&POSTS_SCHEMA);
             let created = store.create_record(new_post("Hello", 1), &parameters)?;
 
-            assert_eq!(title_of(&created.content), "Hello");
-            assert_eq!(author_of(&created.content), Some(&Attribute::Integer(1)));
+            assert_eq!(created.content.require("title")?.as_string()?, "Hello");
+            assert_eq!(
+                created.content.require_related("author")?,
+                &Relationship::BelongsTo(Identifier::Integer(1))
+            );
 
-            let persisted = all_posts(registry, &connection)?;
+            let persisted = registry
+                .table("posts", &connection)?
+                .query(&QueryParameters::new(&POSTS_SCHEMA))?;
             assert_eq!(persisted.len(), 1);
-            assert_eq!(author_of(&persisted[0]), Some(&Attribute::Integer(1)));
+            assert_eq!(persisted[0]["author_id"], Attribute::Integer(1));
 
             Ok(())
         })
@@ -734,24 +791,24 @@ mod tests {
             seed_post(registry, &connection, 2, 1, "two")?;
 
             let store = Store::new(registry, &connection);
-
-            let mut user = NewRecord::new(&USERS_SCHEMA);
-            user.attributes
-                .insert("name".to_string(), Attribute::Text("dave".to_string()));
-            user.relationships.insert(
+            let attributes =
+                Attributes::from_iter([("name".to_string(), Attribute::Text("dave".to_string()))]);
+            let relationships = Relationships::from_iter([(
                 "posts",
                 Relationship::HasMany(vec![Identifier::Integer(1), Identifier::Integer(2)]),
-            );
+            )]);
+            let user = Record::from((&USERS_SCHEMA, attributes, relationships));
 
-            let uri: Uri = "/".parse()?;
-            let parameters = QueryParameters::parse(&uri, &USERS_SCHEMA, registry)?;
+            let parameters = QueryParameters::new(&USERS_SCHEMA);
             let created = store.create_record(user, &parameters)?;
-            let new_id = *created.content.id.as_i64()?;
+            let new_id = *created.content.require_id()?.as_i64()?;
 
-            let posts = all_posts(registry, &connection)?;
+            let posts = registry
+                .table("posts", &connection)?
+                .query(&QueryParameters::new(&POSTS_SCHEMA))?;
             assert_eq!(posts.len(), 2);
             for post in &posts {
-                assert_eq!(author_of(post), Some(&Attribute::Integer(new_id)));
+                assert_eq!(post["author_id"], Attribute::Integer(new_id));
             }
 
             Ok(())
@@ -768,23 +825,23 @@ mod tests {
             seed_post(registry, &connection, 1, 1, "before")?;
 
             let store = Store::new(registry, &connection);
-            let record = Record::new(
+            let record = Record::from_attributes(
                 &POSTS_SCHEMA,
-                Identifier::Integer(1),
                 Attributes::from_iter([(
                     "title".to_string(),
                     Attribute::Text("after".to_string()),
                 )]),
-                ForeignKeys::new(),
-            );
+            )
+            .with_id(Identifier::Integer(1).into());
 
-            let uri: Uri = "/".parse()?;
-            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            let parameters = QueryParameters::new(&POSTS_SCHEMA);
             store.update_record(record, &parameters)?;
 
-            let posts = all_posts(registry, &connection)?;
+            let posts = registry
+                .table("posts", &connection)?
+                .query(&QueryParameters::new(&POSTS_SCHEMA))?;
             assert_eq!(posts.len(), 1);
-            assert_eq!(title_of(&posts[0]), "after");
+            assert_eq!(posts[0]["title"], Attribute::Text("after".to_string()));
 
             Ok(())
         })
@@ -803,32 +860,26 @@ mod tests {
             let store = Store::new(registry, &connection);
 
             // Reassign bob's posts to exactly {p1}: p1 is adopted, p3 (bob's) is detached.
-            let mut record = Record::new(
+            let record = Record::from_relationships(
                 &USERS_SCHEMA,
-                Identifier::Integer(2),
-                Attributes::new(),
-                ForeignKeys::new(),
-            );
-            record
-                .relationships
-                .insert("posts", Relationship::HasMany(vec![Identifier::Integer(1)]));
+                Relationships::from([(
+                    "posts",
+                    Relationship::HasMany(vec![Identifier::Integer(1)]),
+                )]),
+            )
+            .with_id(Some(Identifier::Integer(2)));
+            store.update_record(record, &QueryParameters::new(&USERS_SCHEMA))?;
 
-            let uri: Uri = "/".parse()?;
-            let parameters = QueryParameters::parse(&uri, &USERS_SCHEMA, registry)?;
-            store.update_record(record, &parameters)?;
+            let posts: HashMap<Attribute, Row> = registry
+                .table("posts", &connection)?
+                .query(&QueryParameters::new(&POSTS_SCHEMA))?
+                .into_iter()
+                .map(|row| (row["id"].clone(), row))
+                .collect();
 
-            let posts = all_posts(registry, &connection)?;
-            let author = |id: i64| {
-                posts
-                    .iter()
-                    .find(|post| post.id == Identifier::Integer(id))
-                    .map(author_of)
-                    .expect("post should exist")
-            };
-
-            assert_eq!(author(1), Some(&Attribute::Integer(2)));
-            assert_eq!(author(2), Some(&Attribute::Integer(1)));
-            assert_eq!(author(3), Some(&Attribute::Null));
+            assert_eq!(posts[&Attribute::Integer(1)]["author_id"], Attribute::Integer(2));
+            assert_eq!(posts[&Attribute::Integer(2)]["author_id"], Attribute::Integer(1));
+            assert_eq!(posts[&Attribute::Integer(3)]["author_id"], Attribute::Null);
 
             Ok(())
         })
@@ -846,7 +897,12 @@ mod tests {
             let store = Store::new(registry, &connection);
             store.delete_record(&POSTS_SCHEMA, Identifier::Integer(1))?;
 
-            assert!(all_posts(registry, &connection)?.is_empty());
+            assert!(
+                registry
+                    .table("posts", &connection)?
+                    .query(&QueryParameters::new(&POSTS_SCHEMA))?
+                    .is_empty()
+            );
 
             Ok(())
         })
@@ -861,23 +917,34 @@ mod tests {
             seed_user(registry, &connection, 1, "alice")?;
 
             let store = Store::new(registry, &connection);
-            let uri: Uri = "/".parse()?;
-            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
             let created = store.create_collection(
                 vec![new_post("First", 1), new_post("Second", 1)],
-                &parameters,
+                &QueryParameters::new(&POSTS_SCHEMA),
             )?;
 
             assert_eq!(created.content.len(), 2);
             for record in &created.content {
-                assert_eq!(author_of(record), Some(&Attribute::Integer(1)));
+                assert_eq!(
+                    record.require_related("author")?,
+                    &Relationship::BelongsTo(Identifier::Integer(1))
+                );
             }
 
-            let mut titles: Vec<&str> = created.content.iter().map(title_of).collect();
+            let mut titles = created
+                .content
+                .iter()
+                .map(|record| record.require("title")?.as_string().map(String::as_str))
+                .collect::<Result<Vec<_>, Error>>()?;
             titles.sort_unstable();
             assert_eq!(titles, ["First", "Second"]);
 
-            assert_eq!(all_posts(registry, &connection)?.len(), 2);
+            assert_eq!(
+                registry
+                    .table("posts", &connection)?
+                    .query(&QueryParameters::new(&POSTS_SCHEMA))?
+                    .len(),
+                2
+            );
 
             Ok(())
         })
@@ -892,24 +959,32 @@ mod tests {
             seed_user(registry, &connection, 2, "bob")?;
 
             let store = Store::new(registry, &connection);
-            let uri: Uri = "/".parse()?;
-            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
-            store.create_collection(
-                vec![new_post("alice-post", 1), new_post("bob-post", 2)],
-                &parameters,
-            )?;
+            let posts: HashMap<String, Record> = store
+                .create_collection(
+                    vec![new_post("alice-post", 1), new_post("bob-post", 2)],
+                    &QueryParameters::new(&POSTS_SCHEMA),
+                )?
+                .content
+                .into_iter()
+                .map(|post| -> Result<_, Box<dyn StdError>> {
+                    Ok((post.require("title")?.as_string()?.clone(), post))
+                })
+                .try_collect()?;
 
-            let posts = all_posts(registry, &connection)?;
-            let author = |title: &str| {
+            assert_eq!(
                 posts
-                    .iter()
-                    .find(|post| title_of(post) == title)
-                    .map(author_of)
-                    .expect("post should exist")
-            };
-
-            assert_eq!(author("alice-post"), Some(&Attribute::Integer(1)));
-            assert_eq!(author("bob-post"), Some(&Attribute::Integer(2)));
+                    .get("alice-post")
+                    .expect("Alice's post should be in the index")
+                    .require_related("author")?,
+                &Relationship::BelongsTo(Identifier::Integer(1))
+            );
+            assert_eq!(
+                posts
+                    .get("bob-post")
+                    .expect("Bob's post should be in the index")
+                    .require_related("author")?,
+                &Relationship::BelongsTo(Identifier::Integer(2))
+            );
 
             Ok(())
         })
@@ -931,7 +1006,7 @@ mod tests {
 
             assert_eq!(created.included.len(), 1);
             assert_eq!(created.included[0].schema.name, "users");
-            assert_eq!(created.included[0].id, Identifier::Integer(1));
+            assert_eq!(created.included[0].id, Some(Identifier::Integer(1)));
 
             Ok(())
         })
@@ -943,57 +1018,79 @@ mod tests {
             let connection = registry.acquire()?;
             let store = Store::new(registry, &connection);
 
-            let uri: Uri = "/".parse()?;
-            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            let parameters = QueryParameters::new(&POSTS_SCHEMA);
             let created = store.create_collection(vec![], &parameters)?;
 
             assert!(created.content.is_empty());
             assert!(created.included.is_empty());
-            assert!(all_posts(registry, &connection)?.is_empty());
+            assert!(
+                registry
+                    .table("posts", &connection)?
+                    .query(&QueryParameters::new(&POSTS_SCHEMA))?
+                    .is_empty()
+            );
 
             Ok(())
         })
     }
 
     #[test]
-    fn test_create_collection_rejects_has_many() -> Result<(), Box<dyn StdError>> {
+    fn test_create_collection_links_has_many() -> Result<(), Box<dyn StdError>> {
         with_registry(|registry| {
             let connection = registry.acquire()?;
+            seed_user(registry, &connection, 1, "alice")?;
+            seed_post(registry, &connection, 1, 1, "one")?;
+            seed_post(registry, &connection, 2, 1, "two")?;
+
             let store = Store::new(registry, &connection);
+            let user = Record::from((
+                &USERS_SCHEMA,
+                Attributes::from_iter([("name".to_string(), Attribute::Text("dave".to_string()))]),
+                Relationships::from_iter([(
+                    "posts",
+                    Relationship::HasMany(vec![Identifier::Integer(1), Identifier::Integer(2)]),
+                )]),
+            ));
+            let created =
+                store.create_collection(vec![user], &QueryParameters::new(&USERS_SCHEMA))?;
+            let new_id = *created.content[0].require_id()?.as_i64()?;
 
-            let mut user = NewRecord::new(&USERS_SCHEMA);
-            user.attributes
-                .insert("name".to_string(), Attribute::Text("dave".to_string()));
-            user.relationships
-                .insert("posts", Relationship::HasMany(vec![Identifier::Integer(1)]));
-
-            let uri: Uri = "/".parse()?;
-            let parameters = QueryParameters::parse(&uri, &USERS_SCHEMA, registry)?;
-            let result = store.create_collection(vec![user], &parameters);
-
-            assert!(matches!(result, Err(Error::InvalidOperation { .. })));
+            let posts = registry
+                .table("posts", &connection)?
+                .query(&QueryParameters::new(&POSTS_SCHEMA))?;
+            assert_eq!(posts.len(), 2);
+            for post in &posts {
+                assert_eq!(post["author_id"], Attribute::Integer(new_id));
+            }
 
             Ok(())
         })
     }
 
     #[test]
-    fn test_create_collection_rejects_has_one() -> Result<(), Box<dyn StdError>> {
+    fn test_create_collection_links_has_one() -> Result<(), Box<dyn StdError>> {
         with_registry(|registry| {
             let connection = registry.acquire()?;
+            seed_user(registry, &connection, 1, "alice")?;
+            seed_profile(registry, &connection, 1, 1, "alice's profile")?;
+
             let store = Store::new(registry, &connection);
+            let user = Record::from((
+                &USERS_SCHEMA,
+                Attributes::from_iter([("name".to_string(), Attribute::Text("dave".to_string()))]),
+                Relationships::from_iter([(
+                    "profile",
+                    Relationship::HasOne(Identifier::Integer(1)),
+                )]),
+            ));
+            let created =
+                store.create_collection(vec![user], &QueryParameters::new(&USERS_SCHEMA))?;
+            let new_id = *created.content[0].require_id()?.as_i64()?;
 
-            let mut user = NewRecord::new(&USERS_SCHEMA);
-            user.attributes
-                .insert("name".to_string(), Attribute::Text("dave".to_string()));
-            user.relationships
-                .insert("profile", Relationship::HasOne(Identifier::Integer(1)));
-
-            let uri: Uri = "/".parse()?;
-            let parameters = QueryParameters::parse(&uri, &USERS_SCHEMA, registry)?;
-            let result = store.create_collection(vec![user], &parameters);
-
-            assert!(matches!(result, Err(Error::InvalidOperation { .. })));
+            let profile = registry
+                .table("profiles", &connection)?
+                .find(Identifier::Integer(1), &QueryParameters::new(&PROFILES_SCHEMA))?;
+            assert_eq!(profile["user_id"], Attribute::Integer(new_id));
 
             Ok(())
         })
@@ -1014,29 +1111,35 @@ mod tests {
 
             let store = Store::new(registry, &connection);
 
-            let mut patch = NewRecord::new(&POSTS_SCHEMA);
-            patch
-                .attributes
-                .insert("title".to_string(), Attribute::Text("patched".to_string()));
+            let patch = RecordPatch::from_attributes(
+                &POSTS_SCHEMA,
+                Attributes::from_iter([(
+                    "title".to_string(),
+                    Attribute::Text("patched".to_string()),
+                )]),
+            );
 
-            let uri: Uri = "/".parse()?;
-            let mut parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
-            parameters.filter = Some(FilterParameters::from([(
-                "author_id",
-                vec![FilterValue::Equal(Attribute::Integer(1))],
-            )]));
+            let parameters = QueryParameters {
+                filter: Some(FilterParameters::from([(
+                    "author_id",
+                    vec![FilterValue::Equal(Attribute::Integer(1))],
+                )])),
+                ..QueryParameters::new(&POSTS_SCHEMA)
+            };
 
             let updated = store.update_collection(patch, &parameters)?;
             assert_eq!(updated.content.len(), 2);
 
-            let posts = all_posts(registry, &connection)?;
+            let posts = registry
+                .table("posts", &connection)?
+                .query(&QueryParameters::new(&POSTS_SCHEMA))?;
             for post in &posts {
-                let expected = if author_of(post) == Some(&Attribute::Integer(1)) {
+                let expected = if post["author_id"] == Attribute::Integer(1) {
                     "patched"
                 } else {
                     "bob-one"
                 };
-                assert_eq!(title_of(post), expected);
+                assert_eq!(post["title"], Attribute::Text(expected.to_string()));
             }
 
             Ok(())
@@ -1054,62 +1157,24 @@ mod tests {
 
             let store = Store::new(registry, &connection);
 
-            let mut patch = NewRecord::new(&POSTS_SCHEMA);
-            patch
-                .relationships
-                .insert("author", Relationship::BelongsTo(Identifier::Integer(2)));
+            let patch = RecordPatch::from_relationships(
+                &POSTS_SCHEMA,
+                Relationships::from_iter([(
+                    "author",
+                    Relationship::BelongsTo(Identifier::Integer(2)),
+                )]),
+            );
 
-            let uri: Uri = "/".parse()?;
-            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            let parameters = QueryParameters::new(&POSTS_SCHEMA);
             store.update_collection(patch, &parameters)?;
 
-            let posts = all_posts(registry, &connection)?;
+            let posts = registry
+                .table("posts", &connection)?
+                .query(&QueryParameters::new(&POSTS_SCHEMA))?;
             assert_eq!(posts.len(), 2);
             for post in &posts {
-                assert_eq!(author_of(post), Some(&Attribute::Integer(2)));
+                assert_eq!(post["author_id"], Attribute::Integer(2));
             }
-
-            Ok(())
-        })
-    }
-
-    #[test]
-    fn test_update_collection_rejects_has_many() -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            let store = Store::new(registry, &connection);
-
-            let mut patch = NewRecord::new(&USERS_SCHEMA);
-            patch
-                .relationships
-                .insert("posts", Relationship::HasMany(vec![Identifier::Integer(1)]));
-
-            let uri: Uri = "/".parse()?;
-            let parameters = QueryParameters::parse(&uri, &USERS_SCHEMA, registry)?;
-            let result = store.update_collection(patch, &parameters);
-
-            assert!(matches!(result, Err(Error::InvalidOperation { .. })));
-
-            Ok(())
-        })
-    }
-
-    #[test]
-    fn test_update_collection_rejects_has_one() -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            let store = Store::new(registry, &connection);
-
-            let mut patch = NewRecord::new(&USERS_SCHEMA);
-            patch
-                .relationships
-                .insert("profile", Relationship::HasOne(Identifier::Integer(1)));
-
-            let uri: Uri = "/".parse()?;
-            let parameters = QueryParameters::parse(&uri, &USERS_SCHEMA, registry)?;
-            let result = store.update_collection(patch, &parameters);
-
-            assert!(matches!(result, Err(Error::InvalidOperation { .. })));
 
             Ok(())
         })
@@ -1129,18 +1194,21 @@ mod tests {
 
             let store = Store::new(registry, &connection);
 
-            let uri: Uri = "/".parse()?;
-            let mut parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
-            parameters.filter = Some(FilterParameters::from([(
-                "author_id",
-                vec![FilterValue::Equal(Attribute::Integer(1))],
-            )]));
+            let parameters = QueryParameters {
+                filter: Some(FilterParameters::from([(
+                    "author_id",
+                    vec![FilterValue::Equal(Attribute::Integer(1))],
+                )])),
+                ..QueryParameters::new(&POSTS_SCHEMA)
+            };
 
             store.delete_collection(&POSTS_SCHEMA, &parameters)?;
 
-            let posts = all_posts(registry, &connection)?;
+            let posts = registry
+                .table("posts", &connection)?
+                .query(&QueryParameters::new(&POSTS_SCHEMA))?;
             assert_eq!(posts.len(), 1);
-            assert_eq!(title_of(&posts[0]), "bob-one");
+            assert_eq!(posts[0]["title"], Attribute::Text("bob-one".to_string()));
 
             Ok(())
         })
@@ -1155,11 +1223,15 @@ mod tests {
             seed_post(registry, &connection, 2, 1, "two")?;
 
             let store = Store::new(registry, &connection);
-            let uri: Uri = "/".parse()?;
-            let parameters = QueryParameters::parse(&uri, &POSTS_SCHEMA, registry)?;
+            let parameters = QueryParameters::new(&POSTS_SCHEMA);
             store.delete_collection(&POSTS_SCHEMA, &parameters)?;
 
-            assert!(all_posts(registry, &connection)?.is_empty());
+            assert!(
+                registry
+                    .table("posts", &connection)?
+                    .query(&QueryParameters::new(&POSTS_SCHEMA))?
+                    .is_empty()
+            );
 
             Ok(())
         })

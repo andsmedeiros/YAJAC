@@ -2,8 +2,9 @@ use std::error::Error;
 use yajac::database::QueryParameters;
 use yajac::database::adapters::SqliteAdapter;
 use yajac::database::adapters::sqlite::Pool as SqlitePool;
-use yajac::database::attributes::{Attribute, Attributes};
+use yajac::database::attributes::{Attribute, Row};
 use yajac::database::data_loader::DataLoader;
+use yajac::database::record::Record;
 use yajac::database::registry::Registry;
 use yajac::database::schema::{
     AttributeType, IdentifierType, PrimaryKey, RelatedResource, Relationship, RelationshipKeys,
@@ -266,7 +267,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
     .enumerate()
     {
         users_table.insert(
-            Attributes::from_iter([
+            Row::from_iter([
                 ("id".to_string(), Attribute::Integer((i + 1) as i64)),
                 (
                     "username".to_string(),
@@ -286,7 +287,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
         (3, 3, "Charlie's bio", "https://example.com/charlie.jpg"),
     ] {
         profiles_table.insert(
-            Attributes::from_iter([
+            Row::from_iter([
                 ("id".to_string(), Attribute::Integer(id)),
                 ("user_id".to_string(), Attribute::Integer(user_id)),
                 ("bio".to_string(), Attribute::Text(bio.to_string())),
@@ -321,7 +322,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
         (5, 3, "Charlie's Post", "Content of Charlie's post", true),
     ] {
         posts_table.insert(
-            Attributes::from_iter([
+            Row::from_iter([
                 ("id".to_string(), Attribute::Integer(id)),
                 ("author_id".to_string(), Attribute::Integer(author_id)),
                 ("title".to_string(), Attribute::Text(title.to_string())),
@@ -375,7 +376,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
         (11, 3, 2, Integer(9), "Bob replying to Alice"),
     ] {
         comments_table.insert(
-            Attributes::from_iter([
+            Row::from_iter([
                 ("id".to_string(), Attribute::Integer(id)),
                 ("post_id".to_string(), Attribute::Integer(post_id)),
                 ("author_id".to_string(), Attribute::Integer(author_id)),
@@ -390,7 +391,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
     let tags_table = registry.table("tags", &connection)?;
     for (id, name) in [(1, "rust"), (2, "programming"), (3, "web"), (4, "database")] {
         tags_table.insert(
-            Attributes::from_iter([
+            Row::from_iter([
                 ("id".to_string(), Attribute::Integer(id)),
                 ("name".to_string(), Attribute::Text(name.to_string())),
             ]),
@@ -412,7 +413,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let query_params = QueryParameters::parse(&uri, schema, registry)?;
 
         let connection = registry.acquire()?;
-        let mut collection = registry.table("users", &connection)?.query(&query_params)?;
+        let mut collection = registry
+            .table("users", &connection)?
+            .query(&query_params)?
+            .into_iter()
+            .map(|row| Record::try_from_row(schema, row))
+            .collect::<Result<Vec<_>, _>>()?;
         let included = DataLoader::new(registry, &connection)
             .load_for_collection(&mut collection, &query_params)?;
         let document = to_document(&collection, included, &uri, &DefaultUriGenerator::default())?;

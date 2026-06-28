@@ -113,13 +113,16 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
 
             let related_identifiers = related_collection
                 .iter()
-                .map(|record| Ok((record.schema.name, record.id.clone())))
+                .map(|record| Ok((record.schema.name, record.require_id()?.clone())))
                 .collect::<Result<Vec<_>, Error>>()?;
             self.included_identifiers.extend(related_identifiers);
         }
 
         for record in related_collection {
-            match self.cache.entry((record.schema.name, record.id.clone())) {
+            match self
+                .cache
+                .entry((record.schema.name, record.require_id()?.clone()))
+            {
                 Entry::Occupied(mut existing) => {
                     Self::merge_records(
                         record.relationships,
@@ -186,12 +189,18 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
                     {
                         let related_id = index
                             .get(&attribute)
-                            .ok_or_else(|| Error::DataLoadingError {
+                            .ok_or_else(|| {
+                                let id = record.require_id()
+                                    .map(ToString::to_string)
+                                    .unwrap_or("".to_string());
+
+                                Error::DataLoadingError {
                                 message: format!(
                                     "Relationship '{}' of model '{}' with id '{}' references record '{}' with attribute '{}' set to '{}', but the record was not found",
-                                    relationship, record.schema.name, record.id,
+                                    relationship, record.schema.name, id,
                                     descriptor.resource, descriptor.keys.related, attribute
                                 )
+                            }
                             })?;
                         record
                             .relationships
@@ -299,12 +308,16 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
             ..QueryParameters::new(table.schema())
         };
 
-        table.query(&query_parameters)
+        table
+            .query(&query_parameters)?
+            .into_iter()
+            .map(|row| Record::try_from_row(table.schema(), row))
+            .collect()
     }
 
     fn get_attribute(record: &Record, key: &str) -> Option<Attribute> {
         if record.schema.is_primary_key(key) {
-            Some(Attribute::from(record.id.clone()))
+            Some(Attribute::from(record.require_id().ok()?.clone()))
         } else {
             record
                 .attributes
@@ -334,7 +347,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
             .iter()
             .map(|record| {
                 let foreign_key = Self::get_foreign_key(record, attribute, relationship)?;
-                Ok((foreign_key, record.id.clone()))
+                Ok((foreign_key, record.require_id()?.clone()))
             })
             .collect()
     }
@@ -351,7 +364,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
             index
                 .entry(foreign_key)
                 .or_insert_with(Vec::new)
-                .push(record.id.clone());
+                .push(record.require_id()?.clone());
         }
 
         Ok(index)

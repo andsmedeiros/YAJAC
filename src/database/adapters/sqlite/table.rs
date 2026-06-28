@@ -32,7 +32,7 @@ mod tests {
     use crate::database::connection::Connection as ConnectionInterface;
     use crate::database::{
         adapters::SqliteAdapter,
-        attributes::{Attribute, Attributes, Identifier},
+        attributes::{Attribute, Identifier, Row},
         error::Error,
         query_parameters::{FilterParameters, FilterValue, QueryParameters},
         registry::Registry as DatabaseRegistry,
@@ -101,7 +101,7 @@ mod tests {
                 ("Pack my box", "with five dozen liquor jugs", -1000),
             ] {
                 table.insert(
-                    Attributes::from_iter([
+                    Row::from_iter([
                         ("col1".to_string(), Attribute::Text(col1.to_string())),
                         ("col2".to_string(), Attribute::Text(col2.to_string())),
                         ("col3".to_string(), Attribute::Integer(col3)),
@@ -172,21 +172,15 @@ mod tests {
         let single = table.query(&QueryParameters::parse(&single_uri, &MY_SCHEMA, &registry)?)?;
         assert_eq!(single.len(), 1);
         assert_eq!(
-            single[0].attributes.get("col1").unwrap(),
+            single[0].get("col1").unwrap(),
             &Attribute::Text("The quick brown fox".to_string())
         );
 
         let many_uri = mock_uri("filter[col2]=like:jump");
         let many = table.query(&QueryParameters::parse(&many_uri, &MY_SCHEMA, &registry)?)?;
         assert_eq!(many.len(), 2);
-        assert_eq!(
-            many[0].attributes.get("col3").unwrap(),
-            &Attribute::Integer(42)
-        );
-        assert_eq!(
-            many[1].attributes.get("col3").unwrap(),
-            &Attribute::Integer(1000)
-        );
+        assert_eq!(many[0].get("col3").unwrap(), &Attribute::Integer(42));
+        assert_eq!(many[1].get("col3").unwrap(), &Attribute::Integer(1000));
 
         let none_uri = mock_uri("filter[col3]=lt:50&filter[col1]=like:I%20am%20not%20here");
         let none = table.query(&QueryParameters::parse(&none_uri, &MY_SCHEMA, &registry)?)?;
@@ -195,14 +189,8 @@ mod tests {
         let search_uri = mock_uri("search=five,box");
         let search = table.query(&QueryParameters::parse(&search_uri, &MY_SCHEMA, &registry)?)?;
         assert_eq!(search.len(), 2);
-        assert_eq!(
-            search[0].attributes.get("col3").unwrap(),
-            &Attribute::Integer(1000)
-        );
-        assert_eq!(
-            search[1].attributes.get("col3").unwrap(),
-            &Attribute::Integer(-1000)
-        );
+        assert_eq!(search[0].get("col3").unwrap(), &Attribute::Integer(1000));
+        assert_eq!(search[1].get("col3").unwrap(), &Attribute::Integer(-1000));
 
         Ok(())
     }
@@ -217,7 +205,7 @@ mod tests {
 
         assert!(result.is_some());
         assert_eq!(
-            result.unwrap().attributes.get("col1"),
+            result.unwrap().get("col1"),
             Some(&Attribute::Text("The quick brown fox".to_string()))
         );
 
@@ -242,12 +230,12 @@ mod tests {
         let registry = registry();
         let connection = registry.acquire()?;
         let result = registry.table("my_table", &connection)?.insert(
-            Attributes::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]),
+            Row::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]),
             &QueryParameters::new(&MY_SCHEMA),
         )?;
 
         assert_eq!(
-            result.attributes.get("col1").unwrap(),
+            result.get("col1").unwrap(),
             &Attribute::Text("value1".to_string())
         );
 
@@ -261,18 +249,18 @@ mod tests {
         let table = registry.table("my_table", &connection)?;
 
         table.insert(
-            Attributes::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]),
+            Row::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]),
             &QueryParameters::new(&MY_SCHEMA),
         )?;
 
         let result = table.update(
             Identifier::Integer(1),
-            Attributes::from_iter([("col1".to_string(), Attribute::Text("new_value".to_string()))]),
+            Row::from_iter([("col1".to_string(), Attribute::Text("new_value".to_string()))]),
             &QueryParameters::new(&MY_SCHEMA),
         )?;
 
         assert_eq!(
-            result.attributes.get("col1").unwrap(),
+            result.get("col1").unwrap(),
             &Attribute::Text("new_value".to_string())
         );
 
@@ -286,7 +274,7 @@ mod tests {
         let table = registry.table("my_table", &connection)?;
 
         table.insert(
-            Attributes::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]),
+            Row::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]),
             &QueryParameters::new(&MY_SCHEMA),
         )?;
 
@@ -306,8 +294,8 @@ mod tests {
         let table = registry.table("my_table", &connection)?;
 
         let rows = vec![
-            Attributes::from_iter([("col1".to_string(), Attribute::Text("a".to_string()))]),
-            Attributes::from_iter([("col1".to_string(), Attribute::Text("b".to_string()))]),
+            Row::from_iter([("col1".to_string(), Attribute::Text("a".to_string()))]),
+            Row::from_iter([("col1".to_string(), Attribute::Text("b".to_string()))]),
         ];
         let inserted = table.insert_batch(rows, &QueryParameters::new(&MY_SCHEMA))?;
 
@@ -371,7 +359,7 @@ mod tests {
 
         let result: Result<(), Error> = connection.transaction(|| {
             table.insert(
-                Attributes::from_iter([(
+                Row::from_iter([(
                     "col1".to_string(),
                     Attribute::Text("rolled-back".to_string()),
                 )]),
