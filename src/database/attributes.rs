@@ -2,7 +2,10 @@ use super::{
     error::Error,
     schema::{AttributeType, DateTime, TableSchema},
 };
-use crate::database::schema::IdentifierType;
+use crate::{
+    database::{registry::Registry, schema::IdentifierType},
+    json_api::identifier::Identifier as JsonApiIdentifier,
+};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -46,9 +49,9 @@ impl Identifier {
         }
     }
 
-    pub fn to_i64(self) -> Result<i64, Error> {
+    pub fn to_i64(&self) -> Result<i64, Error> {
         match self {
-            Identifier::Integer(i) => Ok(i),
+            Identifier::Integer(i) => Ok(*i),
             _ => Err(Error::InvalidAttributeConversion {
                 kind: "i64".to_string(),
             }),
@@ -74,6 +77,37 @@ impl Display for Identifier {
             Identifier::Text(text) => f.write_str(text),
             Identifier::Integer(int) => f.write_str(int.to_string().as_str()),
         }
+    }
+}
+
+impl<'sch> TryFrom<(JsonApiIdentifier, &'sch TableSchema<'sch>)> for Identifier {
+    type Error = Error;
+    fn try_from(value: (JsonApiIdentifier, &'sch TableSchema<'sch>)) -> Result<Self, Error> {
+        let (identifier, schema) = value;
+
+        let id = match identifier {
+            JsonApiIdentifier::New { kind, .. } => Err(Error::MissingRecordId { schema: kind })?,
+            JsonApiIdentifier::Existing { kind, id } if kind == schema.name => {
+                match schema.primary_key.kind {
+                    IdentifierType::Integer => {
+                        Identifier::Integer(id.parse().map_err(|_error| {
+                            Error::InvalidAttributeConversion {
+                                kind: "i64".to_string(),
+                            }
+                        })?)
+                    }
+                    IdentifierType::Text => Identifier::Text(id),
+                }
+            }
+
+            _ => Err(Error::SchemaValidationFailure {
+                schema: schema.name.to_string(),
+                attribute: schema.primary_key.name.to_string(),
+                message: "Resource identifier contains a mismatching schema".to_string(),
+            })?,
+        };
+
+        Ok(id)
     }
 }
 
@@ -191,9 +225,9 @@ impl Attribute {
         }
     }
 
-    pub fn to_i64(self) -> Result<i64, Error> {
+    pub fn to_i64(&self) -> Result<i64, Error> {
         match self {
-            Attribute::Integer(i) => Ok(i),
+            Attribute::Integer(i) => Ok(*i),
             _ => Err(Error::InvalidAttributeConversion {
                 kind: "i64".to_string(),
             }),
@@ -209,9 +243,9 @@ impl Attribute {
         }
     }
 
-    pub fn to_f64(self) -> Result<f64, Error> {
+    pub fn to_f64(&self) -> Result<f64, Error> {
         match self {
-            Attribute::Float(f) => Ok(f),
+            Attribute::Float(f) => Ok(*f),
             _ => Err(Error::InvalidAttributeConversion {
                 kind: "f64".to_string(),
             }),
@@ -227,9 +261,9 @@ impl Attribute {
         }
     }
 
-    pub fn to_bool(self) -> Result<bool, Error> {
+    pub fn to_bool(&self) -> Result<bool, Error> {
         match self {
-            Attribute::Boolean(b) => Ok(b),
+            Attribute::Boolean(b) => Ok(*b),
             _ => Err(Error::InvalidAttributeConversion {
                 kind: "bool".to_string(),
             }),
@@ -312,6 +346,10 @@ impl From<&Attribute> for Option<AttributeType> {
 }
 
 pub type Attributes = IndexMap<String, Attribute>;
+
+/// A flexible, schema-agnostic tabular container of column values, as exchanged with a `Table`.
+/// Unlike a `Record`, it makes no distinction between primary key, attributes and foreign keys.
+pub type Row = Attributes;
 
 pub type ForeignKeys<'sch> = IndexMap<&'sch str, Attribute>;
 
