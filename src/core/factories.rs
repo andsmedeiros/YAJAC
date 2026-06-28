@@ -44,7 +44,7 @@ impl<'a> From<Vec<JsonApiError>> for Content<'a> {
 }
 
 pub fn make_resource(record: &Record, uri_generator: &dyn UriGenerator) -> Result<Resource, Error> {
-    let identifier = record.identifier()?;
+    let identifier = record.identifier();
     let attributes = record
         .attributes
         .iter()
