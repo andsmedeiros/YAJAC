@@ -192,7 +192,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
                                 ))
                             }
 
-                            (Some(Linkage::Empty), _) => None,
+                            (None | Some(Linkage::Empty), _) => Some(Relationship::Empty),
                             _ => Err(Error::SchemaValidationFailure {
                                 schema: schema.name.to_string(),
                                 attribute: name.to_string(),
