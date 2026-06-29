@@ -151,7 +151,20 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
                 .attributes
                 .unwrap_or_default()
                 .into_iter()
-                .map(|(name, value)| Ok((name, serde_json::from_value(value)?)))
+                .map(|(name, value)| {
+                    if !schema.has_attribute(&name) {
+                        return Err(RoutingError::new(
+                            StatusCode::BAD_REQUEST,
+                            "UnknownAttribute",
+                            format!(
+                                "Unknown attribute '{name}' for resource type '{}'",
+                                schema.name
+                            ),
+                        ));
+                    }
+
+                    Ok((name, serde_json::from_value(value)?))
+                })
                 .try_collect::<_, _, RoutingError>()?,
             relationships: resource
                 .relationships
