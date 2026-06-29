@@ -6,6 +6,7 @@ pub enum Relationship {
     BelongsTo(Identifier),
     HasOne(Identifier),
     HasMany(Vec<Identifier>),
+    Empty,
 }
 
 pub type Relationships<'a> = HashMap<&'a str, Relationship>;
