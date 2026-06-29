@@ -75,6 +75,9 @@ pub fn make_resource(record: &Record, uri_generator: &dyn UriGenerator) -> Resul
                         })
                         .collect()
                     ),
+                (SchemaRelationship::HasMany(_), DatabaseRelationship::Empty) =>
+                    Linkage::ToMany(Vec::new()),
+                (_, DatabaseRelationship::Empty) => Linkage::Empty,
                 _ => Err(Error::DocumentSerialisationError {
                     message: format!(
                         "Relationship '{}' with value '{:?}' does not match schema definition of '{:?}'",
