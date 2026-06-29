@@ -1,5 +1,5 @@
 use core::slice;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::database::adapters::Adapter as AdapterInterface;
 use crate::database::attributes::{Attribute, Identifier, Row};
@@ -92,36 +92,44 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                     })?;
 
                 if let SchemaRelationship::BelongsTo(descriptor) = descriptor {
-                    if let DatabaseRelationship::BelongsTo(id) = linkage {
-                        let related_table = self.registry.schema(descriptor.resource)?;
-                        if related_table.is_primary_key(descriptor.keys.related) {
+                    match linkage {
+                        DatabaseRelationship::BelongsTo(id) => {
+                            let related_table = self.registry.schema(descriptor.resource)?;
+                            if related_table.is_primary_key(descriptor.keys.related) {
+                                record
+                                    .foreign_keys
+                                    .insert(descriptor.keys.own, id.clone().into());
+                            } else {
+                                let (_, attributes, ids, relationships) = required_queries
+                                    .entry(related_table.name)
+                                    .or_insert_with(|| {
+                                        (
+                                            related_table,
+                                            IndexSet::new(),
+                                            IndexSet::new(),
+                                            HashMap::new(),
+                                        )
+                                    });
+                                attributes.insert(descriptor.keys.related);
+                                ids.insert(id.clone().into());
+                                relationships.insert(name, descriptor);
+                            }
+                        }
+                        DatabaseRelationship::Empty => {
                             record
                                 .foreign_keys
-                                .insert(descriptor.keys.own, id.clone().into());
-                        } else {
-                            let (_, attributes, ids, relationships) = required_queries
-                                .entry(related_table.name)
-                                .or_insert_with(|| {
-                                    (
-                                        related_table,
-                                        IndexSet::new(),
-                                        IndexSet::new(),
-                                        HashMap::new(),
-                                    )
-                                });
-                            attributes.insert(descriptor.keys.related);
-                            ids.insert(id.clone().into());
-                            relationships.insert(name, descriptor);
+                                .insert(descriptor.keys.own, Attribute::Null);
                         }
-                    } else {
-                        return Err(Error::SchemaValidationFailure {
-                            schema: schema.name.to_string(),
-                            attribute: name.to_string(),
-                            message: format!(
-                                "Attempted to attach relationship '{}' to record with schema '{}' with wrong linkage.",
-                                name, schema.name
-                            ),
-                        });
+                        _ => {
+                            return Err(Error::SchemaValidationFailure {
+                                schema: schema.name.to_string(),
+                                attribute: name.to_string(),
+                                message: format!(
+                                    "Attempted to attach relationship '{}' to record with schema '{}' with wrong linkage.",
+                                    name, schema.name
+                                ),
+                            });
+                        }
                     }
                 }
             }
@@ -166,7 +174,10 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
     }
 
     fn attach_has_one_many(&self, records: &[Record<'sch>], replace: bool) -> Result<(), Error> {
+        use DatabaseRelationship as Data;
+        use SchemaRelationship as Schema;
         let mut patches: HashMap<&str, HashMap<Attribute, Row>> = HashMap::new();
+        let mut full_detachments: HashMap<&str, HashMap<&str, IndexSet<_>>> = HashMap::new();
 
         for record in records.iter() {
             let schema = record.schema;
@@ -183,15 +194,16 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                     })?;
 
                 let (ids, descriptor) = match (&relationship, descriptor) {
-                    (DatabaseRelationship::HasOne(id), SchemaRelationship::HasOne(descriptor)) => {
+                    (Data::Empty, Schema::HasOne(descriptor) | Schema::HasMany(descriptor)) => {
+                        ([].as_slice(), descriptor)
+                    }
+                    (Data::HasOne(id), Schema::HasOne(descriptor)) => {
                         (slice::from_ref(id), descriptor)
                     }
-                    (
-                        DatabaseRelationship::HasMany(ids),
-                        SchemaRelationship::HasMany(descriptor),
-                    ) => (ids.as_slice(), descriptor),
-                    (DatabaseRelationship::HasOne(..), _)
-                    | (DatabaseRelationship::HasMany(..), _) => {
+                    (Data::HasMany(ids), Schema::HasMany(descriptor)) => {
+                        (ids.as_slice(), descriptor)
+                    }
+                    (Data::HasOne(..) | Data::HasMany(..), _) => {
                         Err(Error::SchemaValidationFailure {
                             schema: schema.name.to_string(),
                             attribute: name.to_string(),
@@ -205,13 +217,22 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                 };
 
                 let value = record.require_owned(descriptor.keys.own)?;
-                for id in ids {
-                    patches
+                if !ids.is_empty() {
+                    for id in ids {
+                        patches
+                            .entry(descriptor.resource)
+                            .or_default()
+                            .entry(id.clone().into())
+                            .or_default()
+                            .insert(descriptor.keys.related.to_string(), value.clone());
+                    }
+                } else {
+                    full_detachments
                         .entry(descriptor.resource)
                         .or_default()
-                        .entry(id.clone().into())
+                        .entry(descriptor.keys.related)
                         .or_default()
-                        .insert(descriptor.keys.related.to_string(), value.clone());
+                        .insert(value);
                 }
             }
         }
@@ -269,6 +290,27 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                                 (name.as_str(), vec![FilterValue::Equal(value)]),
                                 (schema.primary_key.name, vec![FilterValue::NotIn(ids)]),
                             ])),
+                            ..QueryParameters::new(schema)
+                        },
+                    )?;
+                }
+            }
+        }
+
+        if replace {
+            for (schema, columns) in full_detachments {
+                let schema = self.registry.schema(schema)?;
+                let table = self.table(schema)?;
+
+                for (column, values) in columns {
+                    table.update_batch(
+                        Row::from([(column.to_string(), Attribute::Null)]),
+                        &QueryParameters {
+                            filter: Some(
+                                [(column, vec![FilterValue::In(values)])]
+                                    .into_iter()
+                                    .collect(),
+                            ),
                             ..QueryParameters::new(schema)
                         },
                     )?;
@@ -877,8 +919,14 @@ mod tests {
                 .map(|row| (row["id"].clone(), row))
                 .collect();
 
-            assert_eq!(posts[&Attribute::Integer(1)]["author_id"], Attribute::Integer(2));
-            assert_eq!(posts[&Attribute::Integer(2)]["author_id"], Attribute::Integer(1));
+            assert_eq!(
+                posts[&Attribute::Integer(1)]["author_id"],
+                Attribute::Integer(2)
+            );
+            assert_eq!(
+                posts[&Attribute::Integer(2)]["author_id"],
+                Attribute::Integer(1)
+            );
             assert_eq!(posts[&Attribute::Integer(3)]["author_id"], Attribute::Null);
 
             Ok(())
@@ -1087,9 +1135,10 @@ mod tests {
                 store.create_collection(vec![user], &QueryParameters::new(&USERS_SCHEMA))?;
             let new_id = *created.content[0].require_id()?.as_i64()?;
 
-            let profile = registry
-                .table("profiles", &connection)?
-                .find(Identifier::Integer(1), &QueryParameters::new(&PROFILES_SCHEMA))?;
+            let profile = registry.table("profiles", &connection)?.find(
+                Identifier::Integer(1),
+                &QueryParameters::new(&PROFILES_SCHEMA),
+            )?;
             assert_eq!(profile["user_id"], Attribute::Integer(new_id));
 
             Ok(())
