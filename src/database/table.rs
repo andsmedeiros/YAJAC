@@ -62,7 +62,11 @@ pub trait Table<
         self.run_fetch(query, bindings)
     }
 
-    fn insert_batch(&self, rows: Vec<Row>, parameters: &QueryParameters) -> Result<Vec<Row>, Error> {
+    fn insert_batch(
+        &self,
+        rows: Vec<Row>,
+        parameters: &QueryParameters,
+    ) -> Result<Vec<Row>, Error> {
         if rows.is_empty() {
             return Ok(Vec::new());
         }

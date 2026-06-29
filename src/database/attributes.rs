@@ -3,8 +3,7 @@ use super::{
     schema::{AttributeType, DateTime, TableSchema},
 };
 use crate::{
-    database::{registry::Registry, schema::IdentifierType},
-    json_api::identifier::Identifier as JsonApiIdentifier,
+    database::schema::IdentifierType, json_api::identifier::Identifier as JsonApiIdentifier,
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};

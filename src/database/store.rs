@@ -1,5 +1,5 @@
 use core::slice;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::database::adapters::Adapter as AdapterInterface;
 use crate::database::attributes::{Attribute, Identifier, Row};
