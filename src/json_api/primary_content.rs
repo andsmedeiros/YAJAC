@@ -100,7 +100,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&content).unwrap(),
             json!({ "errors": [
-                { "status": 500, "code": "Boom", "title": "It broke" }
+                { "status": "500", "code": "Boom", "title": "It broke" }
             ] })
         );
     }
