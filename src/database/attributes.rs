@@ -99,7 +99,7 @@ impl<'sch> TryFrom<(JsonApiIdentifier, &'sch TableSchema<'sch>)> for Identifier 
                 }
             }
 
-            _ => Err(Error::SchemaValidationFailure {
+            _ => Err(Error::ResourceValidationFailure {
                 schema: schema.name.to_string(),
                 attribute: schema.primary_key.name.to_string(),
                 message: "Resource identifier contains a mismatching schema".to_string(),
@@ -487,7 +487,7 @@ pub fn from_value(schema: &TableSchema, value: Value) -> Result<Attributes, Erro
                     attribute,
                     attribute_from_value(value, schema_name, attribute_type)?,
                 )),
-                None => Err(Error::SchemaValidationFailure {
+                None => Err(Error::ResourceValidationFailure {
                     schema: schema_name.to_string(),
                     attribute,
                     message: "Unknown attribute".to_string(),

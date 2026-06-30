@@ -77,18 +77,14 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
         for record in records.iter_mut() {
             let schema = record.schema();
             for (&name, linkage) in &record.relationships {
-                let &(name, ref descriptor ) = schema.relationships
+                let &(name, ref descriptor) = schema
+                    .relationships
                     .iter()
                     .find(|&entry| entry.0 == name)
-                    .ok_or_else(|| {
-                        Error::SchemaValidationFailure {
-                            schema: schema.name.to_string(),
-                            attribute: name.to_string(),
-                            message: format!(
-                                "Attempted to attach unknown relationship '{}' to record with schema '{}'",
-                                name, schema.name
-                            ),
-                        }
+                    .ok_or_else(|| Error::ResourceValidationFailure {
+                        schema: schema.name.to_string(),
+                        attribute: name.to_string(),
+                        message: "Attempted to attach unknown relationship".to_string(),
                     })?;
 
                 if let SchemaRelationship::BelongsTo(descriptor) = descriptor {
@@ -121,13 +117,11 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                                 .insert(descriptor.keys.own, Attribute::Null);
                         }
                         _ => {
-                            return Err(Error::SchemaValidationFailure {
+                            return Err(Error::ResourceValidationFailure {
                                 schema: schema.name.to_string(),
                                 attribute: name.to_string(),
-                                message: format!(
-                                    "Attempted to attach relationship '{}' to record with schema '{}' with wrong linkage.",
-                                    name, schema.name
-                                ),
+                                message: "Attempted to attach relationship with wrong linkage"
+                                    .to_string(),
                             });
                         }
                     }
@@ -158,10 +152,10 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                         record.relationships.get(relationship)
                     {
                         let related_record =
-                            index.get(id).ok_or_else(|| Error::InvalidAttribute {
-                                attribute: relationship.to_string(),
-                                kind: "BelongsTo".to_string(),
-                                message: format!("Related record with id '{id}' not found."),
+                            index.get(id).ok_or_else(|| Error::RelatedRecordNotFound {
+                                relationship: relationship.to_string(),
+                                resource: descriptor.resource.to_string(),
+                                id: id.to_string(),
                             })?;
                         let value = related_record.require(descriptor.keys.related).cloned()?;
                         record.foreign_keys.insert(descriptor.keys.own, value);
@@ -182,16 +176,14 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
         for record in records.iter() {
             let schema = record.schema;
             for (name, relationship) in &record.relationships {
-                let descriptor = schema
-                    .relationship(name)
-                    .ok_or_else(|| Error::SchemaValidationFailure {
+                let descriptor =
+                    schema
+                        .relationship(name)
+                        .ok_or_else(|| Error::ResourceValidationFailure {
                             schema: schema.name.to_string(),
                             attribute: name.to_string(),
-                            message: format!(
-                                "Attempted to attach unknown relationship '{}' to record with schema '{}'",
-                                name, schema.name
-                            ),
-                    })?;
+                            message: "Attempted to attach unknown relationship".to_string(),
+                        })?;
 
                 let (ids, descriptor) = match (&relationship, descriptor) {
                     (Data::Empty, Schema::HasOne(descriptor) | Schema::HasMany(descriptor)) => {
@@ -204,13 +196,11 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                         (ids.as_slice(), descriptor)
                     }
                     (Data::HasOne(..) | Data::HasMany(..), _) => {
-                        Err(Error::SchemaValidationFailure {
+                        Err(Error::ResourceValidationFailure {
                             schema: schema.name.to_string(),
                             attribute: name.to_string(),
-                            message: format!(
-                                "Attempted to attach relationship '{}' to record with schema '{}' with wrong linkage.",
-                                name, schema.name
-                            ),
+                            message: "Attempted to attach relationship with wrong linkage"
+                                .to_string(),
                         })?
                     }
                     _ => continue,
