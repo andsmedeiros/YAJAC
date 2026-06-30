@@ -58,7 +58,7 @@ impl<'sch, Adapter: AdapterInterface> Registry<'sch, Adapter> {
                 match descriptor {
                     BelongsTo(RelatedResource { resource, keys }) => {
                         if !schema.has_foreign_key(keys.own) {
-                            Err(Error::SchemaValidationFailure {
+                            Err(Error::InconsistentSchema {
                                 schema: schema.name.to_string(),
                                 attribute: relationship.to_string(),
                                 message: format!(
@@ -70,17 +70,17 @@ impl<'sch, Adapter: AdapterInterface> Registry<'sch, Adapter> {
 
                         if let Some(related_schema) = schema_registry.get(resource) {
                             if keys.related != "id" && !related_schema.has_attribute(keys.related) {
-                                Err(Error::SchemaValidationFailure {
+                                Err(Error::InconsistentSchema {
                                     schema: schema.name.to_string(),
                                     attribute: relationship.to_string(),
                                     message: format!(
                                         "Relationship refers to non-existent related column '{}' at table '{}'",
-                                        keys.own, resource
+                                        keys.related, resource
                                     ),
                                 })?
                             }
                         } else {
-                            Err(Error::SchemaValidationFailure {
+                            Err(Error::InconsistentSchema {
                                 schema: schema.name.to_string(),
                                 attribute: relationship.to_string(),
                                 message: format!(
@@ -93,7 +93,7 @@ impl<'sch, Adapter: AdapterInterface> Registry<'sch, Adapter> {
                     HasOne(RelatedResource { resource, keys })
                     | HasMany(RelatedResource { resource, keys }) => {
                         if keys.own != "id" && !schema.has_attribute(keys.own) {
-                            Err(Error::SchemaValidationFailure {
+                            Err(Error::InconsistentSchema {
                                 schema: schema.name.to_string(),
                                 attribute: relationship.to_string(),
                                 message: format!(
@@ -105,7 +105,7 @@ impl<'sch, Adapter: AdapterInterface> Registry<'sch, Adapter> {
 
                         if let Some(related_schema) = schema_registry.get(resource) {
                             if !related_schema.has_foreign_key(keys.related) {
-                                Err(Error::SchemaValidationFailure {
+                                Err(Error::InconsistentSchema {
                                     schema: schema.name.to_string(),
                                     attribute: relationship.to_string(),
                                     message: format!(
@@ -115,7 +115,7 @@ impl<'sch, Adapter: AdapterInterface> Registry<'sch, Adapter> {
                                 })?
                             }
                         } else {
-                            Err(Error::SchemaValidationFailure {
+                            Err(Error::InconsistentSchema {
                                 schema: schema.name.to_string(),
                                 attribute: relationship.to_string(),
                                 message: format!(

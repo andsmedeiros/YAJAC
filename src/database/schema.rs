@@ -157,10 +157,9 @@ impl<'sch> TableSchema<'sch> {
         } else {
             self.attribute(name)
                 .or_else(|| self.foreign_key(name))
-                .ok_or_else(|| Error::SchemaValidationFailure {
+                .ok_or_else(|| Error::InvalidAttributeAccess {
                     schema: self.name.to_string(),
                     attribute: name.to_string(),
-                    message: "Attribute not found in schema".to_string(),
                 })
         }
     }

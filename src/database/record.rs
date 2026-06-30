@@ -139,7 +139,7 @@ impl<'sch> Record<'sch> {
                     }
                     (IdentifierType::Text, Attribute::Text(value)) => Identifier::Text(value),
                     (kind, value) => {
-                        return Err(Error::SchemaValidationFailure {
+                        return Err(Error::InconsistentSchema {
                             schema: schema.name.to_string(),
                             attribute: schema.primary_key.name.to_string(),
                             message: format!(
@@ -158,7 +158,7 @@ impl<'sch> Record<'sch> {
                     .expect("has_foreign_key guarantees the column is present");
                 foreign_keys.insert(*key, value);
             } else {
-                return Err(Error::SchemaValidationFailure {
+                return Err(Error::InconsistentSchema {
                     schema: schema.name.to_string(),
                     attribute: name,
                     message: "Database returned an unknown attribute".to_string(),
