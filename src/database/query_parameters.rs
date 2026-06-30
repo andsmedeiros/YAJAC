@@ -6,7 +6,7 @@ use super::error::Error;
 use crate::database::adapters::Adapter as AdapterInterface;
 use crate::database::attributes::Attribute;
 use crate::database::error::Error::{
-    InvalidEncodingFailure, ParseParameterFailure, SchemaValidationFailure,
+    InvalidEncodingFailure, ParseParameterFailure, QueryValidationFailure,
 };
 use crate::database::registry::Registry;
 use crate::database::schema::{AttributeType, Relationship, TableSchema};
@@ -182,7 +182,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
         let include =
             self.include
                 .get(relationship)
-                .ok_or_else(|| Error::SchemaValidationFailure {
+                .ok_or_else(|| Error::QueryValidationFailure {
                     schema: self.schema.name.to_string(),
                     attribute: relationship.to_string(),
                     message: "Invalid relationship requested".to_string(),
@@ -280,7 +280,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
                 if let Some(&field) = schema_fields.get(field) {
                     Ok(field)
                 } else {
-                    Err(Error::SchemaValidationFailure {
+                    Err(Error::QueryValidationFailure {
                         schema: schema.name.to_string(),
                         attribute: field.to_string(),
                         message: "Requested field is invalid".to_string(),
@@ -324,7 +324,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
             .attributes
             .iter()
             .find(|(name, _)| *name == attribute)
-            .ok_or_else(|| SchemaValidationFailure {
+            .ok_or_else(|| QueryValidationFailure {
                 schema: schema.name.to_string(),
                 attribute: attribute.to_string(),
                 message: "Attempted to filter on an unknown attribute".to_string(),
@@ -361,7 +361,14 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
                     })
                 }
             })
-            .collect::<Result<Vec<_>, Error>>()?;
+            .collect::<Result<Vec<_>, Error>>()
+            .map_err(|error| match error {
+                Error::InvalidAttributeConversion { kind } => Error::ParseParameterFailure {
+                    parameter: format!("filter[{attribute}]"),
+                    message: format!("Filter value is not a valid {kind}"),
+                },
+                error => error,
+            })?;
 
         self.filter
             .get_or_insert_default()
@@ -408,7 +415,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
                         .relationships
                         .iter()
                         .find(|(r, _)| relationship == *r)
-                        .ok_or_else(|| Error::SchemaValidationFailure {
+                        .ok_or_else(|| Error::QueryValidationFailure {
                             schema: schema.name.to_string(),
                             attribute: relationship.to_string(),
                             message: "Invalid relationship requested".to_string(),
@@ -453,7 +460,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
                         let attribute =
                             attributes
                                 .get(attribute)
-                                .ok_or_else(|| SchemaValidationFailure {
+                                .ok_or_else(|| QueryValidationFailure {
                                     schema: schema.name.to_string(),
                                     attribute: attribute.to_string(),
                                     message: "Invalid attribute to sort".to_string(),
@@ -761,7 +768,7 @@ mod tests {
     fn test_parse_fields_invalid_field() {
         assert!(matches!(
             parse_err("fields[articles]=nonexistent"),
-            Error::SchemaValidationFailure { .. }
+            Error::QueryValidationFailure { .. }
         ));
     }
 
@@ -889,7 +896,7 @@ mod tests {
     fn test_parse_filter_unknown_attribute() {
         assert!(matches!(
             parse_err("filter[ghost]=eq:1"),
-            Error::SchemaValidationFailure { .. }
+            Error::QueryValidationFailure { .. }
         ));
     }
 
@@ -897,7 +904,7 @@ mod tests {
     fn test_parse_filter_on_relationship_is_rejected() {
         assert!(matches!(
             parse_err("filter[author]=eq:1"),
-            Error::SchemaValidationFailure { .. }
+            Error::QueryValidationFailure { .. }
         ));
     }
 
@@ -905,7 +912,7 @@ mod tests {
     fn test_parse_filter_on_foreign_key_is_rejected() {
         assert!(matches!(
             parse_err("filter[author_id]=eq:1"),
-            Error::SchemaValidationFailure { .. }
+            Error::QueryValidationFailure { .. }
         ));
     }
 
@@ -913,7 +920,7 @@ mod tests {
     fn test_parse_filter_invalid_value_for_type() {
         assert!(matches!(
             parse_err("filter[views]=eq:not_a_number"),
-            Error::InvalidAttributeConversion { .. }
+            Error::ParseParameterFailure { .. }
         ));
     }
 
@@ -921,7 +928,7 @@ mod tests {
     fn test_parse_filter_invalid_datetime_value() {
         assert!(matches!(
             parse_err("filter[created_at]=eq:not_a_date"),
-            Error::InvalidAttributeConversion { .. }
+            Error::ParseParameterFailure { .. }
         ));
     }
 
@@ -989,7 +996,7 @@ mod tests {
     fn test_parse_sort_invalid_attribute() {
         assert!(matches!(
             parse_err("sort=ghost"),
-            Error::SchemaValidationFailure { .. }
+            Error::QueryValidationFailure { .. }
         ));
     }
 
@@ -1188,7 +1195,7 @@ mod tests {
     fn test_parse_include_invalid_relationship() {
         assert!(matches!(
             parse_err("include=ghost"),
-            Error::SchemaValidationFailure { .. }
+            Error::QueryValidationFailure { .. }
         ));
     }
 
@@ -1196,7 +1203,7 @@ mod tests {
     fn test_parse_include_invalid_nested_relationship() {
         assert!(matches!(
             parse_err("include=comments.ghost"),
-            Error::SchemaValidationFailure { .. }
+            Error::QueryValidationFailure { .. }
         ));
     }
 
@@ -1204,7 +1211,7 @@ mod tests {
     fn test_parse_include_encoded_value_is_rejected() {
         assert!(matches!(
             parse_err("include=author%2Dprofile"),
-            Error::SchemaValidationFailure { .. }
+            Error::QueryValidationFailure { .. }
         ));
     }
 

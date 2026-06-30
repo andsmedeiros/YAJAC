@@ -130,10 +130,10 @@ impl<'sch> QueryBuilder<'sch> {
         }
 
         if !self.schema.text_index {
-            return Err(Error::InvalidOperation {
+            return Err(Error::QueryValidationFailure {
                 schema: self.schema.name.to_string(),
-                operation: "MATCH".to_string(),
-                message: "table does not support full-text search".to_string(),
+                attribute: "search".to_string(),
+                message: "This resource does not support full-text search".to_string(),
             });
         }
 
@@ -194,11 +194,12 @@ impl<'sch> QueryBuilder<'sch> {
                             let binding = if matches!(kind, AttributeType::Text) {
                                 Attribute::Text(format!("%{}%", value))
                             } else {
-                                return Err(Error::SchemaValidationFailure {
+                                return Err(Error::QueryValidationFailure {
                                     schema: self.schema.name.to_string(),
                                     attribute: field.to_string(),
-                                    message: "'LIKE' operator cannot be applied to attribute"
-                                        .to_string(),
+                                    message:
+                                        "The 'LIKE' operator can only be applied to text attributes"
+                                            .to_string(),
                                 });
                             };
                             filter_query
