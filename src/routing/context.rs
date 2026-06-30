@@ -140,13 +140,10 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
         let resource = self.require_resource(schema)?;
         let record = Record {
             schema,
-            id: self
-                .materialise_id(resource.identifier, schema.name)
-                .map(Some)
-                .or_else(|error| match error {
-                    Error::MissingRecordId { .. } => Ok(None),
-                    error => Err(error),
-                })?,
+            id: match resource.identifier {
+                ResourceIdentifier::New { .. } => None,
+                identifier => Some(self.materialise_id(identifier, schema.name)?),
+            },
             attributes: resource
                 .attributes
                 .unwrap_or_default()
@@ -154,7 +151,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
                 .map(|(name, value)| {
                     if !schema.has_attribute(&name) {
                         return Err(RoutingError::new(
-                            StatusCode::BAD_REQUEST,
+                            StatusCode::UNPROCESSABLE_ENTITY,
                             "UnknownAttribute",
                             format!(
                                 "Unknown attribute '{name}' for resource type '{}'",
@@ -176,11 +173,10 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
                             .relationships
                             .iter()
                             .find(|(n, _)| *n == name.as_str())
-                            .ok_or_else(|| Error::SchemaValidationFailure {
+                            .ok_or_else(|| Error::ResourceValidationFailure {
                                 schema: schema.name.to_string(),
                                 attribute: name,
-                                message: "Attempted to materialise unknown relationship"
-                                    .to_string(),
+                                message: "Attempted to attach unknown relationship".to_string(),
                             })?;
                         let result = match (relationship.data, descriptor) {
                             (
@@ -206,10 +202,10 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
                             }
 
                             (None | Some(Linkage::Empty), _) => Some(Relationship::Empty),
-                            _ => Err(Error::SchemaValidationFailure {
+                            _ => Err(Error::ResourceValidationFailure {
                                 schema: schema.name.to_string(),
                                 attribute: name.to_string(),
-                                message: "Resource provided an invalid relationship linkage"
+                                message: "Attempted to attach relationship with wrong linkage"
                                     .to_string(),
                             })?,
                         }
@@ -226,33 +222,42 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
         Ok(record)
     }
 
+    /// Resolves a request-supplied identifier into a typed primary key. As it validates client
+    /// input, every failure is a `routing::Error`: a `New` (`lid`) identifier has no id to resolve,
+    /// a mismatched type cannot name the expected resource, and a non-integer id cannot be parsed.
     fn materialise_id(
         &self,
         identifier: JsonApiIdentifier,
         schema: &str,
-    ) -> Result<Identifier, Error> {
+    ) -> Result<Identifier, RoutingError> {
         let schema = self.registry.schema(schema)?;
         let identifier = match identifier {
             JsonApiIdentifier::Existing { kind, id } if kind.as_str() == schema.name => id,
-            JsonApiIdentifier::New { .. } => Err(Error::MissingRecordId {
-                schema: schema.name.to_string(),
-            })?,
-            _ => Err(Error::SchemaValidationFailure {
-                schema: schema.name.to_string(),
-                attribute: schema.primary_key.name.to_string(),
-                message: "Attempted to materialise identifier from a mismatched schema".to_string(),
-            })?,
+            JsonApiIdentifier::New { .. } => {
+                return Err(RoutingError::new(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "UnresolvableLinkage",
+                    "A relationship linkage must reference an existing resource by id",
+                ));
+            }
+            _ => {
+                return Err(RoutingError::new(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "RelationshipTypeMismatch",
+                    "A relationship linkage references the wrong resource type",
+                ));
+            }
         };
 
         match schema.primary_key.kind {
             IdentifierType::Text => Ok(Identifier::Text(identifier)),
-            IdentifierType::Integer => {
-                Ok(Identifier::Integer(identifier.parse().map_err(|_| {
-                    Error::InvalidAttributeConversion {
-                        kind: "i64".to_string(),
-                    }
-                })?))
-            }
+            IdentifierType::Integer => identifier.parse().map(Identifier::Integer).map_err(|_| {
+                RoutingError::new(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "InvalidIdentifier",
+                    format!("Identifier '{identifier}' is not a valid integer"),
+                )
+            }),
         }
     }
 

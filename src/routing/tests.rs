@@ -474,7 +474,7 @@ fn test_create_rejects_unknown_attribute() -> TestResult {
         json!({ "data": { "type": "articles", "attributes": { "bogus": "x" } } }),
     )?;
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
     Ok(())
 }

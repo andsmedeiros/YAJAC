@@ -161,38 +161,7 @@ impl From<Error> for Vec<Error> {
 
 impl From<DatabaseError> for Error {
     fn from(error: DatabaseError) -> Self {
-        match error {
-            DatabaseError::RecordNotFound => Error::new(
-                StatusCode::NOT_FOUND,
-                "RecordNotFound",
-                "The requested record could not be found.",
-            ),
-            error @ DatabaseError::SchemaValidationFailure { .. } => Error::new(
-                StatusCode::BAD_REQUEST,
-                "SchemaValidationFailure",
-                error.to_string(),
-            ),
-            error @ DatabaseError::InvalidAttribute { .. } => Error::new(
-                StatusCode::BAD_REQUEST,
-                "InvalidAttribute",
-                error.to_string(),
-            ),
-            error @ DatabaseError::DatabaseFailure { .. } => Error::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "DatabaseFailure",
-                error.to_string(),
-            ),
-            error @ DatabaseError::ConstraintViolation { .. } => Error::new(
-                StatusCode::CONFLICT,
-                "ConstraintViolation",
-                error.to_string(),
-            ),
-            error => Error::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "InternalServerError",
-                error.to_string(),
-            ),
-        }
+        Error::new(error.status(), error.code(), error.title()).with_detail(error.to_string())
     }
 }
 
