@@ -93,6 +93,23 @@ impl<'sch, Adapter: AdapterInterface> Router<'sch, Adapter> {
             })
             .or_else(|error| {
                 let status = error.status_code();
+
+                let error = if status.is_server_error() {
+                    error!("{method} {uri} failed: {error:?}");
+
+                    if cfg!(debug_assertions) {
+                        error
+                    } else {
+                        Error::new(
+                            status.clone(),
+                            "InternalServerError",
+                            "Internal server error",
+                        )
+                    }
+                } else {
+                    error
+                };
+
                 let document = to_document(
                     vec![JsonApiError::from(error)],
                     Vec::new(),
