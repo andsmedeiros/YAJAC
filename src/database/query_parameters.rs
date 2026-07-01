@@ -138,15 +138,17 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
     pub fn new(schema: &'sch TableSchema<'sch>) -> Self {
         let mut parameters = Self {
             schema,
-            fields: FieldsParameters::from_iter([(schema.name, schema.fields().collect())]),
+            fields: FieldsParameters::from_iter([(schema.name(), schema.fields().collect())]),
             include: IncludeParameters::new(),
             filter: None,
             search: None,
             sort: None,
             page: None,
         };
-        parameters
-            .discover_fields_for_remaining_models(ModelsToSerialise::from([(schema.name, schema)]));
+        parameters.discover_fields_for_remaining_models(ModelsToSerialise::from([(
+            schema.name(),
+            schema,
+        )]));
 
         parameters
     }
@@ -183,7 +185,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
             self.include
                 .get(relationship)
                 .ok_or_else(|| Error::QueryValidationFailure {
-                    schema: self.schema.name.to_string(),
+                    schema: self.schema.name().to_string(),
                     attribute: relationship.to_string(),
                     message: "Invalid relationship requested".to_string(),
                 })?;
@@ -198,7 +200,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
     }
 
     pub fn is_requested(&self, field: &str) -> bool {
-        match self.fields.get(self.schema.name) {
+        match self.fields.get(self.schema.name()) {
             Some(fields) => fields.contains(field),
             None => false,
         }
@@ -214,10 +216,9 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
 
     pub fn relationships_to_load(
         &self,
-    ) -> impl Iterator<Item = &'sch (&'sch str, Relationship<'sch>)> {
+    ) -> impl Iterator<Item = (&'sch str, &'sch Relationship<'sch>)> {
         self.schema
-            .relationships
-            .iter()
+            .relationships()
             .filter(|(relationship, _)| self.should_load(relationship))
     }
 
@@ -249,7 +250,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
         }
 
         for (_, schema) in models_to_serialise {
-            for (_, relationship) in schema.relationships {
+            for (_, relationship) in schema.relationships() {
                 use Relationship::*;
                 if let HasOne(related) | HasMany(related) = relationship {
                     self.fields
@@ -281,7 +282,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
                     Ok(field)
                 } else {
                     Err(Error::QueryValidationFailure {
-                        schema: schema.name.to_string(),
+                        schema: schema.name().to_string(),
                         attribute: field.to_string(),
                         message: "Requested field is invalid".to_string(),
                     })
@@ -290,7 +291,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
             .collect::<Result<Vec<_>, Error>>()?;
 
         for field in model_fields {
-            self.fields.entry(schema.name).or_default().insert(field);
+            self.fields.entry(schema.name()).or_default().insert(field);
         }
 
         Ok(())
@@ -321,11 +322,10 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
         schema: &'sch TableSchema,
     ) -> Result<(), Error> {
         let (attribute, kind) = schema
-            .attributes
-            .iter()
+            .attributes()
             .find(|(name, _)| *name == attribute)
             .ok_or_else(|| QueryValidationFailure {
-                schema: schema.name.to_string(),
+                schema: schema.name().to_string(),
                 attribute: attribute.to_string(),
                 message: "Attempted to filter on an unknown attribute".to_string(),
             })?;
@@ -412,18 +412,17 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
                     };
 
                     let (relationship, descriptor) = schema
-                        .relationships
-                        .iter()
+                        .relationships()
                         .find(|(r, _)| relationship == *r)
                         .ok_or_else(|| Error::QueryValidationFailure {
-                            schema: schema.name.to_string(),
+                            schema: schema.name().to_string(),
                             attribute: relationship.to_string(),
                             message: "Invalid relationship requested".to_string(),
                         })?;
 
                     schema = registry.schema(descriptor.related_resource().resource)?;
 
-                    models.insert(schema.name, schema);
+                    models.insert(schema.name(), schema);
 
                     scope = &mut scope
                         .entry(relationship)
@@ -446,9 +445,8 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
         schema: &'sch TableSchema<'sch>,
     ) -> Result<(), Error> {
         let attributes = schema
-            .attributes
-            .iter()
-            .map(|(name, _)| *name)
+            .attributes()
+            .map(|(name, _)| name)
             .collect::<HashSet<_>>();
 
         self.sort = Some(
@@ -461,7 +459,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
                             attributes
                                 .get(attribute)
                                 .ok_or_else(|| QueryValidationFailure {
-                                    schema: schema.name.to_string(),
+                                    schema: schema.name().to_string(),
                                     attribute: attribute.to_string(),
                                     message: "Invalid attribute to sort".to_string(),
                                 })?;
@@ -515,7 +513,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
         schema: &'sch TableSchema<'sch>,
         registry: &Registry<'sch, Adapter>,
     ) -> Result<(), Error> {
-        let mut models_to_serialise = HashMap::from_iter([(schema.name, schema)]);
+        let mut models_to_serialise = HashMap::from_iter([(schema.name(), schema)]);
 
         for (entry, split) in query
             .split('&')
@@ -1247,7 +1245,7 @@ mod tests {
 
         let loaded = params
             .relationships_to_load()
-            .map(|(name, _)| *name)
+            .map(|(name, _)| name)
             .collect::<Vec<_>>();
 
         assert_eq!(loaded, vec!["comments"]);
@@ -1261,7 +1259,7 @@ mod tests {
 
         let derived = params.derive("comments", &registry).unwrap();
 
-        assert_eq!(derived.schema.name, "comments");
+        assert_eq!(derived.schema.name(), "comments");
         assert!(derived.is_included("article"));
     }
 

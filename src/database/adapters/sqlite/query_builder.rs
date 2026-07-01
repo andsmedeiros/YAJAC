@@ -54,7 +54,7 @@ impl<'sch> QueryBuilder<'sch> {
         let mut rows = rows.into_iter();
         let Some(first) = rows.next() else {
             return Err(Error::InvalidOperation {
-                schema: self.schema.name.to_string(),
+                schema: self.schema.name().to_string(),
                 operation: "INSERT".to_string(),
                 message: "cannot insert without any records".to_string(),
             });
@@ -79,7 +79,7 @@ impl<'sch> QueryBuilder<'sch> {
 
         query.extend([
             "INSERT INTO".to_string(),
-            format!("{}({})", self.schema.name, columns.join(", ")),
+            format!("{}({})", self.schema.name(), columns.join(", ")),
             format!("VALUES {}", tuples.join(", ")),
         ]);
 
@@ -88,7 +88,7 @@ impl<'sch> QueryBuilder<'sch> {
 
     fn uniform_columns_error(&self) -> Error {
         Error::InvalidOperation {
-            schema: self.schema.name.to_string(),
+            schema: self.schema.name().to_string(),
             operation: "INSERT".to_string(),
             message: "every record in a batch must declare the same attributes".to_string(),
         }
@@ -101,7 +101,7 @@ impl<'sch> QueryBuilder<'sch> {
         bindings: &mut Bindings,
     ) {
         let attributes = self.extract_attributes(attributes);
-        query.extend(["UPDATE".to_string(), self.schema.name.to_string()]);
+        query.extend(["UPDATE".to_string(), self.schema.name().to_string()]);
 
         if attributes.fields.is_empty() {
             return;
@@ -117,7 +117,7 @@ impl<'sch> QueryBuilder<'sch> {
     }
 
     fn build_from_clause(&self, query: &mut Vec<String>) {
-        query.extend(["FROM".to_string(), self.schema.name.to_string()]);
+        query.extend(["FROM".to_string(), self.schema.name().to_string()]);
     }
 
     fn build_join_clause(
@@ -129,9 +129,9 @@ impl<'sch> QueryBuilder<'sch> {
             return Ok(());
         }
 
-        if !self.schema.text_index {
+        if !self.schema.text_index() {
             return Err(Error::QueryValidationFailure {
-                schema: self.schema.name.to_string(),
+                schema: self.schema.name().to_string(),
                 attribute: "search".to_string(),
                 message: "This resource does not support full-text search".to_string(),
             });
@@ -139,7 +139,8 @@ impl<'sch> QueryBuilder<'sch> {
 
         query.push(format!(
             "JOIN {}_fts fts ON {}.id = fts.rowid",
-            self.schema.name, self.schema.name
+            self.schema.name(),
+            self.schema.name()
         ));
 
         Ok(())
@@ -166,7 +167,7 @@ impl<'sch> QueryBuilder<'sch> {
             for value in values {
                 filter_query.push(format!(
                     "{}_fts MATCH {}",
-                    self.schema.name,
+                    self.schema.name(),
                     bindings.bind(Attribute::Text(value.to_string()))
                 ));
             }
@@ -174,7 +175,7 @@ impl<'sch> QueryBuilder<'sch> {
 
         if let Some(filter) = filter {
             for (field, filters) in filter {
-                let table = self.schema.name;
+                let table = self.schema.name();
                 let kind = self.schema.attribute_type(field)?;
 
                 for filter in filters {
@@ -195,7 +196,7 @@ impl<'sch> QueryBuilder<'sch> {
                                 Attribute::Text(format!("%{}%", value))
                             } else {
                                 return Err(Error::QueryValidationFailure {
-                                    schema: self.schema.name.to_string(),
+                                    schema: self.schema.name().to_string(),
                                     attribute: field.to_string(),
                                     message:
                                         "The 'LIKE' operator can only be applied to text attributes"
@@ -244,7 +245,7 @@ impl<'sch> QueryBuilder<'sch> {
                     SortDirection::Ascending => "ASC",
                     SortDirection::Descending => "DESC",
                 };
-                sort_query.push(format!("{}.{} {}", self.schema.name, field, direction));
+                sort_query.push(format!("{}.{} {}", self.schema.name(), field, direction));
             }
 
             query.push(sort_query.join(", ").to_string());
@@ -271,7 +272,7 @@ impl<'sch> QueryBuilder<'sch> {
     /// `qualified` is set, each column is prefixed with the table name.
     fn fields_for_model(&self, fields: &FieldsParameters, qualified: bool) -> String {
         let fields = fields
-            .get(self.schema.name)
+            .get(self.schema.name())
             .expect("Columns for all requested models should have been pre-loaded by the query parameters parser")
             .iter()
             .map(|field| if self.schema.has_attribute(field) || self.schema.has_foreign_key(field) {
@@ -289,11 +290,11 @@ impl<'sch> QueryBuilder<'sch> {
                     .keys.own
             });
 
-        let columns = || [self.schema.primary_key.name].into_iter().chain(fields);
+        let columns = || [self.schema.primary_key().name].into_iter().chain(fields);
 
         if qualified {
             columns()
-                .map(|column| format!("{}.{}", self.schema.name, column))
+                .map(|column| format!("{}.{}", self.schema.name(), column))
                 .join(", ")
         } else {
             columns().join(", ")
@@ -414,13 +415,13 @@ impl<'sch> QueryBuilderInterface<'sch> for QueryBuilder<'sch> {
 
     fn delete(&self, id: Identifier) -> (String, Bindings) {
         (
-            format!("DELETE FROM {} WHERE id = ?1", self.schema.name),
+            format!("DELETE FROM {} WHERE id = ?1", self.schema.name()),
             [Attribute::from(id)].into(),
         )
     }
 
     fn delete_batch(&self, parameters: &QueryParameters) -> Result<(String, Bindings), Error> {
-        let mut query = vec!["DELETE FROM".to_string(), self.schema.name.to_string()];
+        let mut query = vec!["DELETE FROM".to_string(), self.schema.name().to_string()];
         let mut bindings = Bindings::new();
 
         self.build_where_clause(&parameters.filter, &None, &mut query, &mut bindings)?;

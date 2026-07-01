@@ -50,16 +50,16 @@ impl<'sch, Adapter: AdapterInterface> Registry<'sch, Adapter> {
 
         let schema_registry: HashMap<&'sch str, &'sch TableSchema> = registry_schema
             .iter()
-            .map(|schema| (schema.name, *schema))
+            .map(|schema| (schema.name(), *schema))
             .collect();
 
         for schema in registry_schema {
-            for (relationship, descriptor) in schema.relationships {
+            for (relationship, descriptor) in schema.relationships() {
                 match descriptor {
                     BelongsTo(RelatedResource { resource, keys }) => {
                         if !schema.has_foreign_key(keys.own) {
                             Err(Error::InconsistentSchema {
-                                schema: schema.name.to_string(),
+                                schema: schema.name().to_string(),
                                 attribute: relationship.to_string(),
                                 message: format!(
                                     "Relationship refers to non-existent foreign key '{}'",
@@ -71,7 +71,7 @@ impl<'sch, Adapter: AdapterInterface> Registry<'sch, Adapter> {
                         if let Some(related_schema) = schema_registry.get(resource) {
                             if keys.related != "id" && !related_schema.has_attribute(keys.related) {
                                 Err(Error::InconsistentSchema {
-                                    schema: schema.name.to_string(),
+                                    schema: schema.name().to_string(),
                                     attribute: relationship.to_string(),
                                     message: format!(
                                         "Relationship refers to non-existent related column '{}' at table '{}'",
@@ -81,7 +81,7 @@ impl<'sch, Adapter: AdapterInterface> Registry<'sch, Adapter> {
                             }
                         } else {
                             Err(Error::InconsistentSchema {
-                                schema: schema.name.to_string(),
+                                schema: schema.name().to_string(),
                                 attribute: relationship.to_string(),
                                 message: format!(
                                     "Relationship refers to non-existent resource '{}'",
@@ -94,7 +94,7 @@ impl<'sch, Adapter: AdapterInterface> Registry<'sch, Adapter> {
                     | HasMany(RelatedResource { resource, keys }) => {
                         if keys.own != "id" && !schema.has_attribute(keys.own) {
                             Err(Error::InconsistentSchema {
-                                schema: schema.name.to_string(),
+                                schema: schema.name().to_string(),
                                 attribute: relationship.to_string(),
                                 message: format!(
                                     "Relationship refers to non-existent attribute '{}'",
@@ -106,7 +106,7 @@ impl<'sch, Adapter: AdapterInterface> Registry<'sch, Adapter> {
                         if let Some(related_schema) = schema_registry.get(resource) {
                             if !related_schema.has_foreign_key(keys.related) {
                                 Err(Error::InconsistentSchema {
-                                    schema: schema.name.to_string(),
+                                    schema: schema.name().to_string(),
                                     attribute: relationship.to_string(),
                                     message: format!(
                                         "Relationship refers to non-existent foreign key '{}' at table '{}'",
@@ -116,7 +116,7 @@ impl<'sch, Adapter: AdapterInterface> Registry<'sch, Adapter> {
                             }
                         } else {
                             Err(Error::InconsistentSchema {
-                                schema: schema.name.to_string(),
+                                schema: schema.name().to_string(),
                                 attribute: relationship.to_string(),
                                 message: format!(
                                     "Relationship refers to non-existent resource '{}'",

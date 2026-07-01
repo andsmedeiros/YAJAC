@@ -77,12 +77,11 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
         for record in records.iter_mut() {
             let schema = record.schema();
             for (&name, linkage) in &record.relationships {
-                let &(name, ref descriptor) = schema
-                    .relationships
-                    .iter()
+                let (name, ref descriptor) = schema
+                    .relationships()
                     .find(|&entry| entry.0 == name)
                     .ok_or_else(|| Error::ResourceValidationFailure {
-                        schema: schema.name.to_string(),
+                        schema: schema.name().to_string(),
                         attribute: name.to_string(),
                         message: "Attempted to attach unknown relationship".to_string(),
                     })?;
@@ -97,7 +96,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                                     .insert(descriptor.keys.own, id.clone().into());
                             } else {
                                 let (_, attributes, ids, relationships) = required_queries
-                                    .entry(related_table.name)
+                                    .entry(related_table.name())
                                     .or_insert_with(|| {
                                         (
                                             related_table,
@@ -118,7 +117,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                         }
                         _ => {
                             return Err(Error::ResourceValidationFailure {
-                                schema: schema.name.to_string(),
+                                schema: schema.name().to_string(),
                                 attribute: name.to_string(),
                                 message: "Attempted to attach relationship with wrong linkage"
                                     .to_string(),
@@ -133,9 +132,9 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
             let index = self
                 .table(related_table)?
                 .query(&QueryParameters {
-                    fields: IndexMap::from([(related_table.name, attributes)]),
+                    fields: IndexMap::from([(related_table.name(), attributes)]),
                     filter: Some(FilterParameters::from([(
-                        related_table.primary_key.name,
+                        related_table.primary_key().name,
                         vec![FilterValue::In(ids)],
                     )])),
                     ..QueryParameters::new(related_table)
@@ -180,7 +179,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                     schema
                         .relationship(name)
                         .ok_or_else(|| Error::ResourceValidationFailure {
-                            schema: schema.name.to_string(),
+                            schema: schema.name().to_string(),
                             attribute: name.to_string(),
                             message: "Attempted to attach unknown relationship".to_string(),
                         })?;
@@ -197,7 +196,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                     }
                     (Data::HasOne(..) | Data::HasMany(..), _) => {
                         Err(Error::ResourceValidationFailure {
-                            schema: schema.name.to_string(),
+                            schema: schema.name().to_string(),
                             attribute: name.to_string(),
                             message: "Attempted to attach relationship with wrong linkage"
                                 .to_string(),
@@ -252,7 +251,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                     Row::from_iter(patch.clone()),
                     &QueryParameters {
                         filter: Some(FilterParameters::from([(
-                            schema.primary_key.name,
+                            schema.primary_key().name,
                             vec![FilterValue::In(ids.clone())],
                         )])),
                         ..QueryParameters::new(schema)
@@ -278,7 +277,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                         &QueryParameters {
                             filter: Some(FilterParameters::from([
                                 (name.as_str(), vec![FilterValue::Equal(value)]),
-                                (schema.primary_key.name, vec![FilterValue::NotIn(ids)]),
+                                (schema.primary_key().name, vec![FilterValue::NotIn(ids)]),
                             ])),
                             ..QueryParameters::new(schema)
                         },
@@ -439,7 +438,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
     }
 
     fn table(&self, schema: &'sch TableSchema<'sch>) -> Result<Adapter::Table<'sch, 'req>, Error> {
-        self.registry.table(schema.name, self.connection)
+        self.registry.table(schema.name(), self.connection)
     }
 
     fn loader(&self) -> DataLoader<'sch, 'req, Adapter> {
@@ -683,7 +682,7 @@ mod tests {
             let fetched = store.fetch_record(&POSTS_SCHEMA, Identifier::Integer(1), &parameters)?;
 
             assert_eq!(fetched.included.len(), 1);
-            assert_eq!(fetched.included[0].schema.name, "users");
+            assert_eq!(fetched.included[0].schema.name(), "users");
             assert_eq!(fetched.included[0].require_id()?, &Identifier::Integer(1));
 
             Ok(())
@@ -779,7 +778,7 @@ mod tests {
                 fetched
                     .included
                     .iter()
-                    .all(|record| record.schema.name == "users")
+                    .all(|record| record.schema.name() == "users")
             );
 
             Ok(())
@@ -1043,7 +1042,7 @@ mod tests {
             )?;
 
             assert_eq!(created.included.len(), 1);
-            assert_eq!(created.included[0].schema.name, "users");
+            assert_eq!(created.included[0].schema.name(), "users");
             assert_eq!(created.included[0].id, Some(Identifier::Integer(1)));
 
             Ok(())

@@ -45,7 +45,7 @@ impl<'sch> Record<'sch> {
     }
 
     pub fn kind(&self) -> &'sch str {
-        self.schema.name
+        self.schema.name()
     }
 
     pub fn schema(&self) -> &'sch TableSchema<'sch> {
@@ -80,7 +80,7 @@ impl<'sch> Record<'sch> {
     pub fn require(&self, name: &str) -> Result<&Attribute, Error> {
         self.get(name)
             .ok_or_else(|| Error::UnloadedAttributeAccess {
-                schema: self.schema.name.to_string(),
+                schema: self.schema.name().to_string(),
                 attribute: name.to_string(),
             })
     }
@@ -91,7 +91,7 @@ impl<'sch> Record<'sch> {
 
     pub fn require_id(&self) -> Result<&Identifier, Error> {
         self.get_id().ok_or_else(|| Error::MissingRecordId {
-            schema: self.schema.name.to_string(),
+            schema: self.schema.name().to_string(),
         })
     }
 
@@ -118,7 +118,7 @@ impl<'sch> Record<'sch> {
     pub fn require_related(&self, relationship: &str) -> Result<&Relationship, Error> {
         self.get_related(relationship)
             .ok_or_else(|| Error::UnloadedAttributeAccess {
-                schema: self.schema.name.to_string(),
+                schema: self.schema.name().to_string(),
                 attribute: relationship.to_string(),
             })
     }
@@ -133,15 +133,15 @@ impl<'sch> Record<'sch> {
 
         for (name, value) in row {
             if schema.is_primary_key(&name) {
-                id = Some(match (schema.primary_key.kind, value) {
+                id = Some(match (schema.primary_key().kind, value) {
                     (IdentifierType::Integer, Attribute::Integer(value)) => {
                         Identifier::Integer(value)
                     }
                     (IdentifierType::Text, Attribute::Text(value)) => Identifier::Text(value),
                     (kind, value) => {
                         return Err(Error::InconsistentSchema {
-                            schema: schema.name.to_string(),
-                            attribute: schema.primary_key.name.to_string(),
+                            schema: schema.name().to_string(),
+                            attribute: schema.primary_key().name.to_string(),
                             message: format!(
                                 "Expected primary key '{value:?}' to be of type '{kind}'"
                             ),
@@ -152,14 +152,13 @@ impl<'sch> Record<'sch> {
                 attributes.insert(name, value);
             } else if schema.has_foreign_key(&name) {
                 let (key, _) = schema
-                    .foreign_keys
-                    .iter()
+                    .foreign_keys()
                     .find(|(key, _)| **key == *name)
                     .expect("has_foreign_key guarantees the column is present");
-                foreign_keys.insert(*key, value);
+                foreign_keys.insert(key, value);
             } else {
                 return Err(Error::InconsistentSchema {
-                    schema: schema.name.to_string(),
+                    schema: schema.name().to_string(),
                     attribute: name,
                     message: "Database returned an unknown attribute".to_string(),
                 });
@@ -427,7 +426,7 @@ fn index_by<'sch, 'req>(
                         .get(column)
                         .or_else(|| record.foreign_keys.get(column))
                         .ok_or_else(|| Error::UnloadedAttributeAccess {
-                            schema: record.schema.name.to_string(),
+                            schema: record.schema.name().to_string(),
                             attribute: column.to_string(),
                         })?,
                     record,
@@ -449,7 +448,7 @@ fn group_by<'sch, 'req>(
                     .get(column)
                     .or_else(|| record.foreign_keys.get(column))
                     .ok_or_else(|| Error::UnloadedAttributeAccess {
-                        schema: record.schema.name.to_string(),
+                        schema: record.schema.name().to_string(),
                         attribute: column.to_string(),
                     })?,
                 record,

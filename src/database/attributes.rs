@@ -86,8 +86,8 @@ impl<'sch> TryFrom<(JsonApiIdentifier, &'sch TableSchema<'sch>)> for Identifier 
 
         let id = match identifier {
             JsonApiIdentifier::New { kind, .. } => Err(Error::MissingRecordId { schema: kind })?,
-            JsonApiIdentifier::Existing { kind, id } if kind == schema.name => {
-                match schema.primary_key.kind {
+            JsonApiIdentifier::Existing { kind, id } if kind == schema.name() => {
+                match schema.primary_key().kind {
                     IdentifierType::Integer => {
                         Identifier::Integer(id.parse().map_err(|_error| {
                             Error::InvalidAttributeConversion {
@@ -100,8 +100,8 @@ impl<'sch> TryFrom<(JsonApiIdentifier, &'sch TableSchema<'sch>)> for Identifier 
             }
 
             _ => Err(Error::ResourceValidationFailure {
-                schema: schema.name.to_string(),
-                attribute: schema.primary_key.name.to_string(),
+                schema: schema.name().to_string(),
+                attribute: schema.primary_key().name.to_string(),
                 message: "Resource identifier contains a mismatching schema".to_string(),
             })?,
         };
@@ -479,7 +479,7 @@ fn attribute_from_value(
 }
 
 pub fn from_value(schema: &TableSchema, value: Value) -> Result<Attributes, Error> {
-    let schema_name = schema.name;
+    let schema_name = schema.name();
     let entries = match value {
         Value::Object(object) => object.into_iter().map(|(attribute, value)| {
             match schema.attribute(attribute.as_str()) {

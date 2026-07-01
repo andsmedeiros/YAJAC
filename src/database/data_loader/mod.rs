@@ -113,7 +113,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
 
             let related_identifiers = related_collection
                 .iter()
-                .map(|record| Ok((record.schema.name, record.require_id()?.clone())))
+                .map(|record| Ok((record.schema.name(), record.require_id()?.clone())))
                 .collect::<Result<Vec<_>, Error>>()?;
             self.included_identifiers.extend(related_identifiers);
         }
@@ -121,7 +121,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
         for record in related_collection {
             match self
                 .cache
-                .entry((record.schema.name, record.require_id()?.clone()))
+                .entry((record.schema.name(), record.require_id()?.clone()))
             {
                 Entry::Occupied(mut existing) => {
                     Self::merge_records(
@@ -197,7 +197,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
                                 Error::DataLoadingError {
                                 message: format!(
                                     "Relationship '{}' of model '{}' with id '{}' references record '{}' with attribute '{}' set to '{}', but the record was not found",
-                                    relationship, record.schema.name, id,
+                                    relationship, record.schema.name(), id,
                                     descriptor.resource, descriptor.keys.related, attribute
                                 )
                             }
@@ -333,7 +333,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
             .ok_or_else(|| Error::DataLoadingError {
                 message: format!(
                     "Foreign key '{}', necessary for loading the relationship '{}' on model '{}', is not loaded.",
-                    key, relationship, record.schema.name
+                    key, relationship, record.schema.name()
                 )
             })
     }

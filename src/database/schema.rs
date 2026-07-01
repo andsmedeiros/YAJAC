@@ -112,6 +112,32 @@ fn find<'sch, 'req, T: 'sch>(
 }
 
 impl<'sch> TableSchema<'sch> {
+    pub fn name(&self) -> &'sch str {
+        self.name
+    }
+
+    pub fn primary_key(&self) -> PrimaryKey<'sch> {
+        self.primary_key
+    }
+
+    pub fn text_index(&self) -> bool {
+        self.text_index
+    }
+
+    pub fn attributes(&self) -> impl Iterator<Item = (&'sch str, &'sch AttributeType)> {
+        self.attributes.iter().map(|(name, kind)| (*name, kind))
+    }
+
+    pub fn foreign_keys(&self) -> impl Iterator<Item = (&'sch str, &'sch AttributeType)> {
+        self.foreign_keys.iter().map(|(name, kind)| (*name, kind))
+    }
+
+    pub fn relationships(&self) -> impl Iterator<Item = (&'sch str, &'sch Relationship<'sch>)> {
+        self.relationships
+            .iter()
+            .map(|(name, relationship)| (*name, relationship))
+    }
+
     pub fn attribute(&self, attribute_name: &str) -> Option<AttributeType> {
         find(self.attributes, attribute_name).copied()
     }

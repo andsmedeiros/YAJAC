@@ -114,7 +114,7 @@ fn require_id<'sch, 'req, Adapter: AdapterInterface + 'sch>(
     context: &Context<'sch, 'req, Adapter>,
 ) -> std::result::Result<Identifier, Error> {
     let parameters = context.route_parameters();
-    let identifier = match schema.primary_key.kind {
+    let identifier = match schema.primary_key().kind {
         IdentifierType::Text => Identifier::Text(parameters.require_as("id")?),
         IdentifierType::Integer => Identifier::Integer(parameters.require_as("id")?),
     };
