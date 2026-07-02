@@ -1,5 +1,4 @@
 use crate::database::attributes::Identifier;
-use crate::database::schema::{IdentifierType, PrimaryKey};
 use crate::database::{
     adapters::SqliteAdapter,
     adapters::sqlite::Pool,
@@ -8,202 +7,125 @@ use crate::database::{
     query_parameters::QueryParameters,
     record::Record,
     registry::Registry,
-    schema::{AttributeType, RelatedResource, Relationship, RelationshipKeys, TableSchema},
+    schema::{AttributeType, Related, SchemaBuilder, TableSchema},
     table::Table,
 };
 use crate::{core::to_document, http_wrappers::Uri, routing::DefaultUriGenerator};
 use serde_json::{Value, json};
 use std::error::Error;
 
-static USERS_SCHEMA: TableSchema = TableSchema {
-    name: "users",
-    primary_key: PrimaryKey {
-        name: "id",
-        kind: IdentifierType::Integer,
-    },
-    attributes: &[
-        ("username", AttributeType::Text),
-        ("email", AttributeType::Text),
-    ],
-    foreign_keys: &[],
-    relationships: &[
-        (
+fn users_schema() -> SchemaBuilder<'static> {
+    SchemaBuilder::table("users")
+        .attribute("username", AttributeType::Text)
+        .attribute("email", AttributeType::Text)
+        .has_one(
             "profile",
-            Relationship::HasOne(RelatedResource {
-                resource: "profiles",
-                keys: RelationshipKeys {
-                    related: "user_id",
-                    own: "id",
-                },
-            }),
-        ),
-        (
+            Related::to("profiles")
+                .pointing_related("user_id")
+                .to_own("id"),
+        )
+        .has_many(
             "posts",
-            Relationship::HasMany(RelatedResource {
-                resource: "posts",
-                keys: RelationshipKeys {
-                    related: "author_id",
-                    own: "id",
-                },
-            }),
-        ),
-        (
+            Related::to("posts")
+                .pointing_related("author_id")
+                .to_own("id"),
+        )
+        .has_many(
             "comments",
-            Relationship::HasMany(RelatedResource {
-                resource: "comments",
-                keys: RelationshipKeys {
-                    related: "author_id",
-                    own: "id",
-                },
-            }),
-        ),
-    ],
-    text_index: false,
-};
+            Related::to("comments")
+                .pointing_related("author_id")
+                .to_own("id"),
+        )
+}
 
-static PROFILES_SCHEMA: TableSchema = TableSchema {
-    name: "profiles",
-    primary_key: PrimaryKey {
-        name: "id",
-        kind: IdentifierType::Integer,
-    },
-    attributes: &[
-        ("bio", AttributeType::Text),
-        ("avatar_url", AttributeType::Text),
-    ],
-    foreign_keys: &[("user_id", AttributeType::Integer)],
-    relationships: &[(
-        "user",
-        Relationship::BelongsTo(RelatedResource {
-            resource: "users",
-            keys: RelationshipKeys {
-                related: "id",
-                own: "user_id",
-            },
-        }),
-    )],
-    text_index: false,
-};
+fn profiles_schema() -> SchemaBuilder<'static> {
+    SchemaBuilder::table("profiles")
+        .attribute("bio", AttributeType::Text)
+        .attribute("avatar_url", AttributeType::Text)
+        .foreign_key("user_id", AttributeType::Integer)
+        .belongs_to(
+            "user",
+            Related::to("users")
+                .pointing_own("user_id")
+                .to_related("id"),
+        )
+}
 
-static POSTS_SCHEMA: TableSchema = TableSchema {
-    name: "posts",
-    primary_key: PrimaryKey {
-        name: "id",
-        kind: IdentifierType::Integer,
-    },
-    attributes: &[
-        ("title", AttributeType::Text),
-        ("content", AttributeType::Text),
-        ("published", AttributeType::Boolean),
-    ],
-    foreign_keys: &[("author_id", AttributeType::Integer)],
-    relationships: &[
-        (
+fn posts_schema() -> SchemaBuilder<'static> {
+    SchemaBuilder::table("posts")
+        .attribute("title", AttributeType::Text)
+        .attribute("content", AttributeType::Text)
+        .attribute("published", AttributeType::Boolean)
+        .foreign_key("author_id", AttributeType::Integer)
+        .belongs_to(
             "author",
-            Relationship::BelongsTo(RelatedResource {
-                resource: "users",
-                keys: RelationshipKeys {
-                    related: "id",
-                    own: "author_id",
-                },
-            }),
-        ),
-        (
+            Related::to("users")
+                .pointing_own("author_id")
+                .to_related("id"),
+        )
+        .has_many(
             "comments",
-            Relationship::HasMany(RelatedResource {
-                resource: "comments",
-                keys: RelationshipKeys {
-                    related: "post_id",
-                    own: "id",
-                },
-            }),
-        ),
-    ],
-    text_index: false,
-};
+            Related::to("comments")
+                .pointing_related("post_id")
+                .to_own("id"),
+        )
+}
 
-static COMMENTS_SCHEMA: TableSchema = TableSchema {
-    name: "comments",
-    primary_key: PrimaryKey {
-        name: "id",
-        kind: IdentifierType::Integer,
-    },
-    attributes: &[("content", AttributeType::Text)],
-    foreign_keys: &[
-        ("post_id", AttributeType::Integer),
-        ("author_id", AttributeType::Integer),
-        ("parent_id", AttributeType::Integer),
-    ],
-    relationships: &[
-        (
+fn comments_schema() -> SchemaBuilder<'static> {
+    SchemaBuilder::table("comments")
+        .attribute("content", AttributeType::Text)
+        .foreign_key("post_id", AttributeType::Integer)
+        .foreign_key("author_id", AttributeType::Integer)
+        .foreign_key("parent_id", AttributeType::Integer)
+        .belongs_to(
             "post",
-            Relationship::BelongsTo(RelatedResource {
-                resource: "posts",
-                keys: RelationshipKeys {
-                    related: "id",
-                    own: "post_id",
-                },
-            }),
-        ),
-        (
+            Related::to("posts")
+                .pointing_own("post_id")
+                .to_related("id"),
+        )
+        .belongs_to(
             "author",
-            Relationship::BelongsTo(RelatedResource {
-                resource: "users",
-                keys: RelationshipKeys {
-                    related: "id",
-                    own: "author_id",
-                },
-            }),
-        ),
-        (
+            Related::to("users")
+                .pointing_own("author_id")
+                .to_related("id"),
+        )
+        .belongs_to(
             "parent",
-            Relationship::BelongsTo(RelatedResource {
-                resource: "comments",
-                keys: RelationshipKeys {
-                    related: "id",
-                    own: "parent_id",
-                },
-            }),
-        ),
-        (
+            Related::to("comments")
+                .pointing_own("parent_id")
+                .to_related("id"),
+        )
+        .has_many(
             "replies",
-            Relationship::HasMany(RelatedResource {
-                resource: "comments",
-                keys: RelationshipKeys {
-                    related: "parent_id",
-                    own: "id",
-                },
-            }),
-        ),
-    ],
-    text_index: false,
-};
+            Related::to("comments")
+                .pointing_related("parent_id")
+                .to_own("id"),
+        )
+}
 
-static TAGS_SCHEMA: TableSchema = TableSchema {
-    name: "tags",
-    primary_key: PrimaryKey {
-        name: "id",
-        kind: IdentifierType::Integer,
-    },
-    attributes: &[("name", AttributeType::Text)],
-    foreign_keys: &[],
-    relationships: &[],
-    text_index: false,
-};
+fn tags_schema() -> SchemaBuilder<'static> {
+    SchemaBuilder::table("tags").attribute("name", AttributeType::Text)
+}
 
-static SCHEMAS: [&TableSchema; 5] = [
-    &USERS_SCHEMA,
-    &PROFILES_SCHEMA,
-    &POSTS_SCHEMA,
-    &COMMENTS_SCHEMA,
-    &TAGS_SCHEMA,
-];
+fn schemas() -> [SchemaBuilder<'static>; 5] {
+    [
+        users_schema(),
+        profiles_schema(),
+        posts_schema(),
+        comments_schema(),
+        tags_schema(),
+    ]
+}
+
+fn schema<'sch>(registry: &'sch Registry<SqliteAdapter>, name: &str) -> &'sch TableSchema<'sch> {
+    registry.schema(name).expect("schema is registered")
+}
 
 fn with_database<F>(func: F) -> Result<(), Box<dyn Error>>
 where
     F: FnOnce(&Registry<SqliteAdapter>) -> Result<(), Box<dyn Error>>,
 {
-    let registry = Registry::<SqliteAdapter>::try_new(Pool::memory()?, &SCHEMAS)?;
+    let registry = Registry::<SqliteAdapter>::try_new(Pool::memory()?, schemas())?;
 
     registry.acquire()?.execute_batch(
         "
@@ -277,7 +199,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
                 ),
                 ("email".to_string(), Attribute::Text(email.to_string())),
             ]),
-            &QueryParameters::new(&USERS_SCHEMA),
+            &QueryParameters::new(schema(registry, "users")),
         )?;
     }
 
@@ -298,7 +220,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
                     Attribute::Text(avatar.to_string()),
                 ),
             ]),
-            &QueryParameters::new(&PROFILES_SCHEMA),
+            &QueryParameters::new(schema(registry, "profiles")),
         )?;
     }
 
@@ -331,7 +253,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
                 ("content".to_string(), Attribute::Text(content.to_string())),
                 ("published".to_string(), Attribute::Boolean(published)),
             ]),
-            &QueryParameters::new(&POSTS_SCHEMA),
+            &QueryParameters::new(schema(registry, "posts")),
         )?;
     }
 
@@ -385,7 +307,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
                 ("parent_id".to_string(), parent_id),
                 ("content".to_string(), Attribute::Text(content.to_string())),
             ]),
-            &QueryParameters::new(&COMMENTS_SCHEMA),
+            &QueryParameters::new(schema(registry, "comments")),
         )?;
     }
 
@@ -397,7 +319,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
                 ("id".to_string(), Attribute::Integer(id)),
                 ("name".to_string(), Attribute::Text(name.to_string())),
             ]),
-            &QueryParameters::new(&TAGS_SCHEMA),
+            &QueryParameters::new(schema(registry, "tags")),
         )?;
     }
 
