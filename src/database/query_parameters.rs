@@ -160,7 +160,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
     pub fn parse<Adapter: AdapterInterface>(
         uri: &'req Uri,
         schema: &'sch TableSchema<'sch>,
-        registry: &Registry<'sch, Adapter>,
+        registry: &'sch Registry<'sch, Adapter>,
     ) -> Result<QueryParameters<'sch, 'req>, Error> {
         let mut query_parameters = Self {
             schema,
@@ -179,7 +179,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
     pub fn derive<Adapter: AdapterInterface>(
         &self,
         relationship: &str,
-        registry: &Registry<'sch, Adapter>,
+        registry: &'sch Registry<'sch, Adapter>,
     ) -> Result<Self, Error> {
         let include =
             self.include
@@ -396,7 +396,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
         include: &str,
         models: &mut HashMap<&'sch str, &'sch TableSchema<'sch>>,
         schema: &'sch TableSchema<'sch>,
-        registry: &Registry<'sch, Adapter>,
+        registry: &'sch Registry<'sch, Adapter>,
     ) -> Result<(), Error> {
         if !include.is_empty() {
             for include in include.split(",") {
@@ -511,7 +511,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
         &mut self,
         query: &'req str,
         schema: &'sch TableSchema<'sch>,
-        registry: &Registry<'sch, Adapter>,
+        registry: &'sch Registry<'sch, Adapter>,
     ) -> Result<(), Error> {
         let mut models_to_serialise = HashMap::from_iter([(schema.name(), schema)]);
 
@@ -557,95 +557,61 @@ mod tests {
     use crate::database::adapters::SqliteAdapter;
     use crate::database::adapters::sqlite::Pool;
     use crate::database::registry::Registry as DatabaseRegistry;
-    use crate::database::schema::{IdentifierType, PrimaryKey, RelatedResource, RelationshipKeys};
+    use crate::database::schema::{Related, SchemaBuilder};
 
     type Registry = DatabaseRegistry<'static, SqliteAdapter>;
 
-    static ARTICLES: TableSchema = TableSchema {
-        name: "articles",
-        primary_key: PrimaryKey {
-            name: "id",
-            kind: IdentifierType::Integer,
-        },
-        attributes: &[
-            ("title", AttributeType::Text),
-            ("views", AttributeType::Integer),
-            ("published", AttributeType::Boolean),
-            ("rating", AttributeType::Float),
-            ("created_at", AttributeType::DateTime),
-        ],
-        foreign_keys: &[("author_id", AttributeType::Integer)],
-        relationships: &[
-            (
+    fn articles() -> SchemaBuilder<'static> {
+        SchemaBuilder::table("articles")
+            .attribute("title", AttributeType::Text)
+            .attribute("views", AttributeType::Integer)
+            .attribute("published", AttributeType::Boolean)
+            .attribute("rating", AttributeType::Float)
+            .attribute("created_at", AttributeType::DateTime)
+            .foreign_key("author_id", AttributeType::Integer)
+            .belongs_to(
                 "author",
-                Relationship::BelongsTo(RelatedResource {
-                    resource: "users",
-                    keys: RelationshipKeys {
-                        own: "author_id",
-                        related: "id",
-                    },
-                }),
-            ),
-            (
+                Related::to("users")
+                    .pointing_own("author_id")
+                    .to_related("id"),
+            )
+            .has_many(
                 "comments",
-                Relationship::HasMany(RelatedResource {
-                    resource: "comments",
-                    keys: RelationshipKeys {
-                        own: "id",
-                        related: "article_id",
-                    },
-                }),
-            ),
-        ],
-        text_index: false,
-    };
+                Related::to("comments")
+                    .pointing_related("article_id")
+                    .to_own("id"),
+            )
+    }
 
-    static USERS: TableSchema = TableSchema {
-        name: "users",
-        primary_key: PrimaryKey {
-            name: "id",
-            kind: IdentifierType::Integer,
-        },
-        attributes: &[("name", AttributeType::Text)],
-        foreign_keys: &[],
-        relationships: &[(
-            "articles",
-            Relationship::HasMany(RelatedResource {
-                resource: "articles",
-                keys: RelationshipKeys {
-                    own: "id",
-                    related: "author_id",
-                },
-            }),
-        )],
-        text_index: false,
-    };
+    fn users() -> SchemaBuilder<'static> {
+        SchemaBuilder::table("users")
+            .attribute("name", AttributeType::Text)
+            .has_many(
+                "articles",
+                Related::to("articles")
+                    .pointing_related("author_id")
+                    .to_own("id"),
+            )
+    }
 
-    static COMMENTS: TableSchema = TableSchema {
-        name: "comments",
-        primary_key: PrimaryKey {
-            name: "id",
-            kind: IdentifierType::Integer,
-        },
-        attributes: &[("body", AttributeType::Text)],
-        foreign_keys: &[("article_id", AttributeType::Integer)],
-        relationships: &[(
-            "article",
-            Relationship::BelongsTo(RelatedResource {
-                resource: "articles",
-                keys: RelationshipKeys {
-                    own: "article_id",
-                    related: "id",
-                },
-            }),
-        )],
-        text_index: false,
-    };
-
-    static SCHEMAS: [&TableSchema; 3] = [&ARTICLES, &USERS, &COMMENTS];
+    fn comments() -> SchemaBuilder<'static> {
+        SchemaBuilder::table("comments")
+            .attribute("body", AttributeType::Text)
+            .foreign_key("article_id", AttributeType::Integer)
+            .belongs_to(
+                "article",
+                Related::to("articles")
+                    .pointing_own("article_id")
+                    .to_related("id"),
+            )
+    }
 
     fn registry() -> Registry {
-        DatabaseRegistry::try_new(Pool::memory().unwrap(), &SCHEMAS).unwrap()
+        DatabaseRegistry::try_new(
+            Pool::memory().expect("in-memory pool is available"),
+            [articles(), users(), comments()],
+        )
+        .expect("schema set is consistent")
     }
 
     fn mock_uri(query: &str) -> Uri {
@@ -654,26 +620,36 @@ mod tests {
             .unwrap()
     }
 
-    fn parse<'req>(registry: &Registry, uri: &'req Uri) -> QueryParameters<'static, 'req> {
-        QueryParameters::parse(uri, &ARTICLES, registry).unwrap()
+    fn parse<'sch, 'req>(registry: &'sch Registry, uri: &'req Uri) -> QueryParameters<'sch, 'req> {
+        let articles = registry
+            .schema("articles")
+            .expect("articles schema is registered");
+        QueryParameters::parse(uri, articles, registry).expect("query parses")
     }
 
     fn parse_err(query: &str) -> Error {
         let registry = registry();
         let uri = mock_uri(query);
-        QueryParameters::parse(&uri, &ARTICLES, &registry).expect_err("expected parsing to fail")
+        let articles = registry
+            .schema("articles")
+            .expect("articles schema is registered");
+        QueryParameters::parse(&uri, articles, &registry).expect_err("expected parsing to fail")
     }
 
     // --- Construction ---
 
     #[test]
     fn test_new() {
-        let params = QueryParameters::new(&ARTICLES);
+        let registry = registry();
+        let articles = registry
+            .schema("articles")
+            .expect("articles schema is registered");
+        let params = QueryParameters::new(articles);
 
-        assert_eq!(params.schema, &ARTICLES);
+        assert_eq!(params.schema, articles);
         assert_eq!(
             params.fields["articles"],
-            ARTICLES.fields().collect::<IndexSet<_>>()
+            articles.fields().collect::<IndexSet<_>>()
         );
         assert!(params.include.is_empty());
         assert!(params.filter.is_none());
@@ -685,12 +661,17 @@ mod tests {
     #[test]
     fn test_parse_empty_query() {
         let registry = registry();
-        let uri = "http://localhost:8000/articles".parse::<Uri>().unwrap();
-        let params = QueryParameters::parse(&uri, &ARTICLES, &registry).unwrap();
+        let articles = registry
+            .schema("articles")
+            .expect("articles schema is registered");
+        let uri = "http://localhost:8000/articles"
+            .parse::<Uri>()
+            .expect("valid uri");
+        let params = QueryParameters::parse(&uri, articles, &registry).expect("query parses");
 
         assert_eq!(
             params.fields["articles"],
-            ARTICLES.fields().collect::<IndexSet<_>>()
+            articles.fields().collect::<IndexSet<_>>()
         );
         assert!(params.include.is_empty());
         assert!(params.filter.is_none());
@@ -753,12 +734,15 @@ mod tests {
     #[test]
     fn test_parse_fields_empty_value_defaults_to_all() {
         let registry = registry();
+        let articles = registry
+            .schema("articles")
+            .expect("articles schema is registered");
         let uri = mock_uri("fields[articles]=");
         let params = parse(&registry, &uri);
 
         assert_eq!(
             params.fields["articles"],
-            ARTICLES.fields().collect::<IndexSet<_>>()
+            articles.fields().collect::<IndexSet<_>>()
         );
     }
 
