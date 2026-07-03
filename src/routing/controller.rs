@@ -4,88 +4,154 @@ use crate::{
         adapters::Adapter as AdapterInterface,
         attributes::Identifier,
         composite::Composite,
+        error::Error as DatabaseError,
+        query_parameters::QueryParameters,
+        record::Record,
         schema::{IdentifierType, TableSchema},
+        store::Store,
     },
+    http_wrappers::Uri,
     routing::{Context, DefaultUriGenerator, Error, Result, responder::*},
 };
 use http::StatusCode;
 
-pub trait ReadOnlyResourceController<'sch, Adapter: AdapterInterface + 'sch> {
-    fn resource_schema() -> &'sch TableSchema<'sch>;
+/// A request narrowed to a single resource: the resource's schema paired with the
+/// routing context. It lends the context's request operations already bound to that
+/// schema, so controller handlers never thread the schema through by hand.
+pub struct ResourceContext<'sch, 'req, Adapter: AdapterInterface + 'sch> {
+    schema: &'sch TableSchema<'sch>,
+    context: Context<'sch, 'req, Adapter>,
+}
 
-    fn index<'req>(context: Context<'sch, 'req, Adapter>) -> Result {
-        serve_index(Self::resource_schema(), context)
+impl<'sch, 'req, Adapter: AdapterInterface + 'sch> ResourceContext<'sch, 'req, Adapter> {
+    pub fn new(schema: &'sch TableSchema<'sch>, context: Context<'sch, 'req, Adapter>) -> Self {
+        Self { schema, context }
     }
 
-    fn show<'req>(context: Context<'sch, 'req, Adapter>) -> Result {
-        serve_show(Self::resource_schema(), context)
+    pub fn schema(&self) -> &'sch TableSchema<'sch> {
+        self.schema
+    }
+
+    pub fn uri(&self) -> &'req Uri {
+        self.context.uri
+    }
+
+    /// Parses the request body into a record validated against the resource schema.
+    pub fn require_record(&mut self) -> std::result::Result<Record<'sch>, Error> {
+        self.context.require_record(self.schema)
+    }
+
+    /// Lazily parses the query string against the resource schema.
+    pub fn query_parameters(
+        &self,
+    ) -> std::result::Result<&QueryParameters<'sch, 'req>, DatabaseError> {
+        self.context.query_parameters(self.schema)
+    }
+
+    pub fn store(&self) -> std::result::Result<Store<'sch, '_, Adapter>, DatabaseError> {
+        self.context.store()
+    }
+
+    /// Resolves the endpoint's `:id` route parameter into a typed primary key.
+    pub fn require_id(&self) -> std::result::Result<Identifier, Error> {
+        let parameters = self.context.route_parameters();
+        let identifier = match self.schema.primary_key().kind {
+            IdentifierType::Text => Identifier::Text(parameters.require_as("id")?),
+            IdentifierType::Integer => Identifier::Integer(parameters.require_as("id")?),
+        };
+
+        Ok(identifier)
+    }
+}
+
+pub trait ReadOnlyResourceController<'sch, Adapter: AdapterInterface + 'sch> {
+    fn index<'req>(context: ResourceContext<'sch, 'req, Adapter>) -> Result
+    where
+        'sch: 'req,
+    {
+        serve_index(context)
+    }
+
+    fn show<'req>(context: ResourceContext<'sch, 'req, Adapter>) -> Result
+    where
+        'sch: 'req,
+    {
+        serve_show(context)
     }
 }
 
 pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
-    fn resource_schema() -> &'sch TableSchema<'sch>;
-
-    fn index<'req>(context: Context<'sch, 'req, Adapter>) -> Result {
-        serve_index(Self::resource_schema(), context)
+    fn index<'req>(context: ResourceContext<'sch, 'req, Adapter>) -> Result
+    where
+        'sch: 'req,
+    {
+        serve_index(context)
     }
 
-    fn show<'req>(context: Context<'sch, 'req, Adapter>) -> Result {
-        serve_show(Self::resource_schema(), context)
+    fn show<'req>(context: ResourceContext<'sch, 'req, Adapter>) -> Result
+    where
+        'sch: 'req,
+    {
+        serve_show(context)
     }
 
-    fn create<'req>(mut context: Context<'sch, 'req, Adapter>) -> Result {
-        let schema = Self::resource_schema();
-        let new_record = context.require_record(schema)?;
-        let store = context.store()?;
-
-        let parameters = context.query_parameters(schema)?;
-        let Composite { content, included } = store.create_record(new_record, parameters)?;
+    fn create<'req>(mut context: ResourceContext<'sch, 'req, Adapter>) -> Result
+    where
+        'sch: 'req,
+    {
+        let new_record = context.require_record()?;
+        let parameters = context.query_parameters()?;
+        let Composite { content, included } =
+            context.store()?.create_record(new_record, parameters)?;
         let document = to_document(
             &content,
             included,
-            context.uri,
+            context.uri(),
             &DefaultUriGenerator::default(),
         )?;
 
         respond_with(StatusCode::CREATED, Some(document))
     }
 
-    fn update<'req>(mut context: Context<'sch, 'req, Adapter>) -> Result {
-        let schema = Self::resource_schema();
-        let record = context.require_record(schema)?;
-        let store = context.store()?;
-        let parameters = context.query_parameters(schema)?;
-
-        let Composite { content, included } = store.update_record(record, parameters)?;
+    fn update<'req>(mut context: ResourceContext<'sch, 'req, Adapter>) -> Result
+    where
+        'sch: 'req,
+    {
+        let record = context.require_record()?;
+        let parameters = context.query_parameters()?;
+        let Composite { content, included } = context.store()?.update_record(record, parameters)?;
         let document = to_document(
             &content,
             included,
-            context.uri,
+            context.uri(),
             &DefaultUriGenerator::default(),
         )?;
 
         respond(Some(document))
     }
 
-    fn delete<'req>(context: Context<'sch, 'req, Adapter>) -> Result {
-        let schema = Self::resource_schema();
-        let id = require_id(schema, &context)?;
-        context.store()?.delete_record(schema, id)?;
+    fn delete<'req>(context: ResourceContext<'sch, 'req, Adapter>) -> Result
+    where
+        'sch: 'req,
+    {
+        let id = context.require_id()?;
+        context.store()?.delete_record(context.schema(), id)?;
 
         no_content()
     }
 }
 
 fn serve_index<'sch, 'req, Adapter: AdapterInterface + 'sch>(
-    schema: &'sch TableSchema<'sch>,
-    context: Context<'sch, 'req, Adapter>,
+    context: ResourceContext<'sch, 'req, Adapter>,
 ) -> Result {
-    let parameters = context.query_parameters(schema)?;
-    let Composite { content, included } = context.store()?.fetch_collection(schema, parameters)?;
+    let parameters = context.query_parameters()?;
+    let Composite { content, included } = context
+        .store()?
+        .fetch_collection(context.schema(), parameters)?;
     let document = to_document(
         &content,
         included,
-        context.uri,
+        context.uri(),
         &DefaultUriGenerator::default(),
     )?;
 
@@ -93,31 +159,20 @@ fn serve_index<'sch, 'req, Adapter: AdapterInterface + 'sch>(
 }
 
 fn serve_show<'sch, 'req, Adapter: AdapterInterface + 'sch>(
-    schema: &'sch TableSchema<'sch>,
-    context: Context<'sch, 'req, Adapter>,
+    context: ResourceContext<'sch, 'req, Adapter>,
 ) -> Result {
-    let parameters = context.query_parameters(schema)?;
-    let id = require_id(schema, &context)?;
-    let Composite { content, included } = context.store()?.fetch_record(schema, id, parameters)?;
+    let parameters = context.query_parameters()?;
+    let id = context.require_id()?;
+    let Composite { content, included } =
+        context
+            .store()?
+            .fetch_record(context.schema(), id, parameters)?;
     let document = to_document(
         &content,
         included,
-        context.uri,
+        context.uri(),
         &DefaultUriGenerator::default(),
     )?;
 
     respond(Some(document))
-}
-
-fn require_id<'sch, 'req, Adapter: AdapterInterface + 'sch>(
-    schema: &'sch TableSchema<'sch>,
-    context: &Context<'sch, 'req, Adapter>,
-) -> std::result::Result<Identifier, Error> {
-    let parameters = context.route_parameters();
-    let identifier = match schema.primary_key().kind {
-        IdentifierType::Text => Identifier::Text(parameters.require_as("id")?),
-        IdentifierType::Integer => Identifier::Integer(parameters.require_as("id")?),
-    };
-
-    Ok(identifier)
 }

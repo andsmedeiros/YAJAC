@@ -1,11 +1,11 @@
 use super::{
     Context, DefaultUriGenerator, Error, Request, Result, RouteParameters,
-    controller::{ReadOnlyResourceController, ResourceController},
+    controller::{ReadOnlyResourceController, ResourceContext, ResourceController},
     default_response, respond_with,
 };
 use crate::{
     core::factories::to_document,
-    database::{adapters::Adapter as AdapterInterface, registry::Registry},
+    database::{adapters::Adapter as AdapterInterface, registry::Registry, schema::TableSchema},
     http_wrappers::{StatusCode, Uri},
     json_api::{document::Document, error::Error as JsonApiError},
 };
@@ -207,27 +207,49 @@ impl<'sch, Adapter: AdapterInterface> RouterBuilder<'sch, Adapter> {
         self
     }
 
-    pub fn read_only_resource<T>(&mut self, scope: &str) -> &mut Self
+    pub fn read_only_resource<T>(
+        &mut self,
+        scope: &str,
+        schema: &'sch TableSchema<'sch>,
+    ) -> &mut Self
     where
         T: ReadOnlyResourceController<'sch, Adapter> + 'sch,
     {
-        self.scope(scope, |route| {
-            route.get("/", T::index).get("/:id", T::show);
+        self.scope(scope, move |route| {
+            route
+                .get("/", move |context| {
+                    T::index(ResourceContext::new(schema, context))
+                })
+                .get("/:id", move |context| {
+                    T::show(ResourceContext::new(schema, context))
+                });
         })
     }
 
-    pub fn resource<T>(&mut self, scope: &str) -> &mut Self
+    pub fn resource<T>(&mut self, scope: &str, schema: &'sch TableSchema<'sch>) -> &mut Self
     where
         T: ResourceController<'sch, Adapter> + 'sch,
     {
-        self.scope(scope, |route| {
+        self.scope(scope, move |route| {
             route
-                .get("/", T::index)
-                .get("/:id", T::show)
-                .post("/", T::create)
-                .put("/:id", T::update)
-                .patch("/:id", T::update)
-                .delete("/:id", T::delete);
+                .get("/", move |context| {
+                    T::index(ResourceContext::new(schema, context))
+                })
+                .get("/:id", move |context| {
+                    T::show(ResourceContext::new(schema, context))
+                })
+                .post("/", move |context| {
+                    T::create(ResourceContext::new(schema, context))
+                })
+                .put("/:id", move |context| {
+                    T::update(ResourceContext::new(schema, context))
+                })
+                .patch("/:id", move |context| {
+                    T::update(ResourceContext::new(schema, context))
+                })
+                .delete("/:id", move |context| {
+                    T::delete(ResourceContext::new(schema, context))
+                });
         })
     }
 }
