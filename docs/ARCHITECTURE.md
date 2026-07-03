@@ -25,15 +25,19 @@ The crate root (`src/lib.rs`) exposes five top-level modules, layered from the w
 The embedder-facing layer.
 
 - **`router`** — `Router` / `RouterBuilder`. Routes are `(Method, path segments, handler)`; a segment
-  prefixed `:` captures a `RouteParameters` entry. `RouterBuilder::resource::<T>(scope)` wires the full
-  CRUD set (`index`/`show`/`create`/`update` on both PUT and PATCH/`delete`);
-  `read_only_resource::<T>` wires only `index`/`show`. `Router::handle` is the single request→response
-  boundary (see *Request lifecycle*).
-- **`controller`** — `ResourceController` / `ReadOnlyResourceController` traits an embedder implements
-  per resource.
-- **`context`** — `Context<'sch, 'req, Adapter>`, the per-request bundle handed to a handler
-  (registry, uri, route params, parsed request). Where request identifiers are materialised against
-  the schema.
+  prefixed `:` captures a `RouteParameters` entry. `RouterBuilder::resource::<T>(scope, schema)` wires
+  the full CRUD set (`index`/`show`/`create`/`update` on both PUT and PATCH/`delete`);
+  `read_only_resource::<T>(scope, schema)` wires only `index`/`show`. The `schema` — obtained from the
+  registry at wiring — is captured into each handler, which builds a per-request `ResourceContext` from
+  it. `Router::handle` is the single request→response boundary (see *Request lifecycle*).
+- **`controller`** — `ResourceController` / `ReadOnlyResourceController`, traits an embedder implements
+  per resource as a **stateless marker type**. Their default handler methods receive a
+  `ResourceContext<'sch, 'req, Adapter>` — the resource's schema paired with the request `Context` — and
+  reach record parsing, query parameters, the store and id resolution through it, already bound to the
+  schema. Overriding a method customises one action.
+- **`context`** — `Context<'sch, 'req, Adapter>`, the per-request bundle (registry, uri, route params,
+  parsed request), wrapped by a `ResourceContext` before it reaches a handler. Where request
+  identifiers are materialised against the schema.
 - **`request` / `responder` / `result` / `route_parameters` / `uri_generator` / `error`** — the
   request wrapper, response builders, the routing `Result`/`Error`, captured path params, link
   generation, and the routing error type.
@@ -49,11 +53,18 @@ beyond serde.
 The engine. Schema-driven and adapter-generic.
 
 - **`schema`** — `TableSchema<'sch>` and its parts (`PrimaryKey`, `AttributeType`, `Relationship`,
-  `RelatedResource`, `RelationshipKeys`). Currently flat borrowed tuple-slices with linear lookups
-  (see *Known rework*).
-- **`registry`** — `Registry<'sch, Adapter>`: validates the schema set at construction, owns the
-  connection pool, hands out request-scoped `Table`s. Must be `Send + Sync` (asserted in
-  `adapters::tests`) so the borrowing request path can run on any worker thread.
+  `RelatedResource`, `RelationshipKeys`). Owned `IndexMap` containers keyed by borrowed `&'sch str`:
+  O(1) lookup with **definition order preserved** (that order is observable in generated SQL). Built by
+  an ergonomic **`SchemaBuilder`** (`schema::builder`) — the public, intended way to define a schema —
+  which collects inert `SchemaParts` that the registry validates and mints into `TableSchema`s
+  (`TableSchema::new` is `pub(crate)`).
+- **`registry`** — `Registry<'sch, Adapter>`: takes `SchemaBuilder`s and a pool and **owns** the
+  resulting schemas, validating-and-minting them in one fallible `try_build` step (per-schema
+  consistency + cross-schema relationship checks; a duplicate or inconsistent set is rejected at
+  construction). Owns the connection pool and hands out request-scoped `Table`s. Must be `Send + Sync`
+  (asserted in `adapters::tests`) so the borrowing request path can run on any worker thread. *(A
+  planned split will strip the pool into a `ConnectionManager`, leaving `Registry` a pure schema
+  collection — see* Known rework*.)*
 - **`store`** — record/collection create/update/delete, including relationship persistence.
 - **`record` / `attributes` / `relationships` / `composite`** — materialised rows and their
   field/relationship data.
@@ -135,10 +146,13 @@ Declared in `Cargo.toml`:
 
 The near-term plan reshapes parts of this document; treat the following as in-flux:
 
-- The **schema model** (`schema.rs`) will move from flat tuple-slices with O(n) lookups to a richer,
-  indexed model built by an ergonomic builder.
 - The **key-bearing signatures** (`Attributes`, `ForeignKeys`, `Relationships`, `QueryParameters`)
   will move from owned `String`s to schema-borrowed identifiers under a "parse, don't validate"
   validation layer.
+- The **registry** will shed the connection pool into a new `ConnectionManager` (a registry reference
+  plus the pool), leaving `Registry` a pure schema collection. A temporary `Pool`/`SqliteAdapter`
+  coupling in `attributes.rs`'s unit tests is to be undone then.
+- The **controller model** will grow: `ResourceContext` becomes a user-extensible per-request
+  controller (`new(schema, context)` + user fields), and `Context` is renamed `RoutingContext`.
 - **Relationship endpoints** (`/:type/:id/relationships/:rel`) are not yet implemented; only resource
   endpoints exist.
