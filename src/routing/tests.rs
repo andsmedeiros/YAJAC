@@ -1,10 +1,7 @@
 use crate::database::adapters::SqliteAdapter;
 use crate::database::adapters::sqlite::Pool;
 use crate::database::registry::Registry as DatabaseRegistry;
-use crate::database::schema::{
-    AttributeType, IdentifierType, PrimaryKey, RelatedResource, Relationship, RelationshipKeys,
-    TableSchema,
-};
+use crate::database::schema::{AttributeType, Related, SchemaBuilder};
 use crate::json_api::document::Document;
 use crate::routing::RouterBuilder;
 use crate::routing::controller::{ReadOnlyResourceController, ResourceController};
@@ -16,148 +13,90 @@ type Registry = DatabaseRegistry<'static, SqliteAdapter>;
 
 type TestResult = Result<(), Box<dyn StdError>>;
 
-static ARTICLES: TableSchema = TableSchema {
-    name: "articles",
-    primary_key: PrimaryKey {
-        name: "id",
-        kind: IdentifierType::Integer,
-    },
-    attributes: &[
-        ("title", AttributeType::Text),
-        ("body", AttributeType::Text),
-    ],
-    foreign_keys: &[],
-    relationships: &[
-        (
+fn articles_schema() -> SchemaBuilder<'static> {
+    SchemaBuilder::table("articles")
+        .attribute("title", AttributeType::Text)
+        .attribute("body", AttributeType::Text)
+        .has_many(
             "comments",
-            Relationship::HasMany(RelatedResource {
-                resource: "comments",
-                keys: RelationshipKeys {
-                    own: "id",
-                    related: "article_id",
-                },
-            }),
-        ),
-        (
+            Related::to("comments")
+                .pointing_related("article_id")
+                .to_own("id"),
+        )
+        .has_many(
             "drafts",
-            Relationship::HasMany(RelatedResource {
-                resource: "drafts",
-                keys: RelationshipKeys {
-                    own: "id",
-                    related: "article_id",
-                },
-            }),
-        ),
-        (
+            Related::to("drafts")
+                .pointing_related("article_id")
+                .to_own("id"),
+        )
+        .has_one(
             "summary",
-            Relationship::HasOne(RelatedResource {
-                resource: "summaries",
-                keys: RelationshipKeys {
-                    own: "id",
-                    related: "article_id",
-                },
-            }),
-        ),
-    ],
-    text_index: false,
-};
+            Related::to("summaries")
+                .pointing_related("article_id")
+                .to_own("id"),
+        )
+}
 
-static COMMENTS: TableSchema = TableSchema {
-    name: "comments",
-    primary_key: PrimaryKey {
-        name: "id",
-        kind: IdentifierType::Integer,
-    },
-    attributes: &[("content", AttributeType::Text)],
-    foreign_keys: &[("article_id", AttributeType::Integer)],
-    relationships: &[(
-        "article",
-        Relationship::BelongsTo(RelatedResource {
-            resource: "articles",
-            keys: RelationshipKeys {
-                own: "article_id",
-                related: "id",
-            },
-        }),
-    )],
-    text_index: false,
-};
+fn comments_schema() -> SchemaBuilder<'static> {
+    SchemaBuilder::table("comments")
+        .attribute("content", AttributeType::Text)
+        .foreign_key("article_id", AttributeType::Integer)
+        .belongs_to(
+            "article",
+            Related::to("articles")
+                .pointing_own("article_id")
+                .to_related("id"),
+        )
+}
 
-static DRAFTS: TableSchema = TableSchema {
-    name: "drafts",
-    primary_key: PrimaryKey {
-        name: "id",
-        kind: IdentifierType::Integer,
-    },
-    attributes: &[("title", AttributeType::Text)],
-    foreign_keys: &[("article_id", AttributeType::Integer)],
-    relationships: &[(
-        "article",
-        Relationship::BelongsTo(RelatedResource {
-            resource: "articles",
-            keys: RelationshipKeys {
-                own: "article_id",
-                related: "id",
-            },
-        }),
-    )],
-    text_index: false,
-};
+fn drafts_schema() -> SchemaBuilder<'static> {
+    SchemaBuilder::table("drafts")
+        .attribute("title", AttributeType::Text)
+        .foreign_key("article_id", AttributeType::Integer)
+        .belongs_to(
+            "article",
+            Related::to("articles")
+                .pointing_own("article_id")
+                .to_related("id"),
+        )
+}
 
-static SUMMARIES: TableSchema = TableSchema {
-    name: "summaries",
-    primary_key: PrimaryKey {
-        name: "id",
-        kind: IdentifierType::Integer,
-    },
-    attributes: &[("abstract", AttributeType::Text)],
-    foreign_keys: &[("article_id", AttributeType::Integer)],
-    relationships: &[(
-        "article",
-        Relationship::BelongsTo(RelatedResource {
-            resource: "articles",
-            keys: RelationshipKeys {
-                own: "article_id",
-                related: "id",
-            },
-        }),
-    )],
-    text_index: false,
-};
+fn summaries_schema() -> SchemaBuilder<'static> {
+    SchemaBuilder::table("summaries")
+        .attribute("abstract", AttributeType::Text)
+        .foreign_key("article_id", AttributeType::Integer)
+        .belongs_to(
+            "article",
+            Related::to("articles")
+                .pointing_own("article_id")
+                .to_related("id"),
+        )
+}
 
-static SCHEMAS: [&TableSchema; 4] = [&ARTICLES, &COMMENTS, &DRAFTS, &SUMMARIES];
+fn schemas() -> [SchemaBuilder<'static>; 4] {
+    [
+        articles_schema(),
+        comments_schema(),
+        drafts_schema(),
+        summaries_schema(),
+    ]
+}
 
 struct Articles;
 struct Comments;
 struct Drafts;
 struct Summaries;
 
-impl<'sch> ResourceController<'sch, SqliteAdapter> for Articles {
-    fn resource_schema() -> &'sch TableSchema<'sch> {
-        &ARTICLES
-    }
-}
+impl<'sch> ResourceController<'sch, SqliteAdapter> for Articles {}
 
-impl<'sch> ResourceController<'sch, SqliteAdapter> for Comments {
-    fn resource_schema() -> &'sch TableSchema<'sch> {
-        &COMMENTS
-    }
-}
+impl<'sch> ResourceController<'sch, SqliteAdapter> for Comments {}
 
-impl<'sch> ResourceController<'sch, SqliteAdapter> for Drafts {
-    fn resource_schema() -> &'sch TableSchema<'sch> {
-        &DRAFTS
-    }
-}
+impl<'sch> ResourceController<'sch, SqliteAdapter> for Drafts {}
 
-impl<'sch> ReadOnlyResourceController<'sch, SqliteAdapter> for Summaries {
-    fn resource_schema() -> &'sch TableSchema<'sch> {
-        &SUMMARIES
-    }
-}
+impl<'sch> ReadOnlyResourceController<'sch, SqliteAdapter> for Summaries {}
 
 fn registry() -> Result<Registry, Box<dyn StdError>> {
-    let registry = Registry::try_new(Pool::memory()?, &SCHEMAS)?;
+    let registry = Registry::try_new(Pool::memory()?, schemas())?;
 
     registry.acquire()?.execute_batch(
         "CREATE TABLE articles (id INTEGER PRIMARY KEY, title TEXT NOT NULL, body TEXT); \
@@ -200,9 +139,9 @@ fn serve(
 ) -> Result<http::Response<Option<Document>>, Box<dyn StdError>> {
     let mut builder = RouterBuilder::new();
     builder
-        .resource::<Articles>("articles")
-        .resource::<Comments>("comments")
-        .resource::<Drafts>("drafts");
+        .resource::<Articles>("articles", registry.schema("articles")?)
+        .resource::<Comments>("comments", registry.schema("comments")?)
+        .resource::<Drafts>("drafts", registry.schema("drafts")?);
     let router = builder.build();
 
     let request = http::Request::builder()
@@ -220,7 +159,7 @@ fn serve_read_only(
     body: Value,
 ) -> Result<http::Response<Option<Document>>, Box<dyn StdError>> {
     let mut builder = RouterBuilder::new();
-    builder.read_only_resource::<Summaries>("summaries");
+    builder.read_only_resource::<Summaries>("summaries", registry.schema("summaries")?);
     let router = builder.build();
 
     let request = http::Request::builder()
