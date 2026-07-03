@@ -90,7 +90,9 @@ Before every commit, run a tidy-up pass and fix (not just report) what it finds:
 1. `cargo fmt` clean,
 2. `cargo build` warning-free (modulo the sanctioned scaffolding),
 3. `cargo test` green,
-4. no stray debug artifacts, leftover comments, or typos.
+4. no stray debug artifacts, leftover comments, or typos,
+5. `docs/` (`ARCHITECTURE.md`, `CONVENTIONS.md`) updated in the same commit (or an adjacent one) when
+   the change altered documented structure or conventions — the docs track reality, they do not lag it.
 
 Commits are **granular** — one or few files, logically ordered; never lump a whole feature into one
 commit. Commit messages state motivation (when relevant) and describe the changes across files; they
