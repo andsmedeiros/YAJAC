@@ -86,8 +86,8 @@ impl<'sch> TryFrom<(JsonApiIdentifier, &'sch TableSchema<'sch>)> for Identifier 
 
         let id = match identifier {
             JsonApiIdentifier::New { kind, .. } => Err(Error::MissingRecordId { schema: kind })?,
-            JsonApiIdentifier::Existing { kind, id } if kind == schema.name => {
-                match schema.primary_key.kind {
+            JsonApiIdentifier::Existing { kind, id } if kind == schema.name() => {
+                match schema.primary_key().kind {
                     IdentifierType::Integer => {
                         Identifier::Integer(id.parse().map_err(|_error| {
                             Error::InvalidAttributeConversion {
@@ -100,8 +100,8 @@ impl<'sch> TryFrom<(JsonApiIdentifier, &'sch TableSchema<'sch>)> for Identifier 
             }
 
             _ => Err(Error::ResourceValidationFailure {
-                schema: schema.name.to_string(),
-                attribute: schema.primary_key.name.to_string(),
+                schema: schema.name().to_string(),
+                attribute: schema.primary_key().name.to_string(),
                 message: "Resource identifier contains a mismatching schema".to_string(),
             })?,
         };
@@ -479,7 +479,7 @@ fn attribute_from_value(
 }
 
 pub fn from_value(schema: &TableSchema, value: Value) -> Result<Attributes, Error> {
-    let schema_name = schema.name;
+    let schema_name = schema.name();
     let entries = match value {
         Value::Object(object) => object.into_iter().map(|(attribute, value)| {
             match schema.attribute(attribute.as_str()) {
@@ -504,9 +504,33 @@ pub fn from_value(schema: &TableSchema, value: Value) -> Result<Attributes, Erro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::schema::{AttributeType, IdentifierType, PrimaryKey, TableSchema};
+    use crate::database::adapters::SqliteAdapter;
+    use crate::database::adapters::sqlite::Pool;
+    use crate::database::registry::Registry as DatabaseRegistry;
+    use crate::database::schema::{AttributeType, SchemaBuilder};
     use chrono::Utc;
     use serde_json::json;
+
+    type Registry = DatabaseRegistry<'static, SqliteAdapter>;
+
+    // Temporary: these pure `from_value` conversion tests only need a `&TableSchema`,
+    // but the registry still owns the pool, so obtaining one couples them to the
+    // sqlite adapter. Reverts once the pool moves to a ConnectionManager.
+    fn registry() -> Registry {
+        DatabaseRegistry::try_new(
+            Pool::memory().expect("in-memory pool is available"),
+            [
+                SchemaBuilder::table("typed")
+                    .attribute("name", AttributeType::Text)
+                    .attribute("age", AttributeType::Integer)
+                    .attribute("score", AttributeType::Float)
+                    .attribute("active", AttributeType::Boolean),
+                SchemaBuilder::table("temporal").attribute("timestamp", AttributeType::DateTime),
+                SchemaBuilder::table("flagged").attribute("flag", AttributeType::Boolean),
+            ],
+        )
+        .expect("schema set is consistent")
+    }
 
     #[test]
     fn test_attribute_conversions() {
@@ -543,22 +567,10 @@ mod tests {
 
     #[test]
     fn test_from_value_success_and_failures() {
-        let schema = TableSchema {
-            name: "test",
-            primary_key: PrimaryKey {
-                name: "id",
-                kind: IdentifierType::Integer,
-            },
-            attributes: &[
-                ("name", AttributeType::Text),
-                ("age", AttributeType::Integer),
-                ("score", AttributeType::Float),
-                ("active", AttributeType::Boolean),
-            ],
-            foreign_keys: &[],
-            relationships: &[],
-            text_index: false,
-        };
+        let registry = registry();
+        let schema = registry
+            .schema("typed")
+            .expect("typed schema is registered");
 
         // Test successful conversion
         let json = json!({
@@ -567,7 +579,7 @@ mod tests {
             "score": 85.5,
             "active": true
         });
-        let attributes = from_value(&schema, json).unwrap();
+        let attributes = from_value(schema, json).expect("conversion succeeds");
         assert_eq!(attributes.len(), 4);
         assert_eq!(attributes["name"].as_string().unwrap(), "John");
         assert_eq!(*attributes["age"].as_i64().unwrap(), 30);
@@ -576,78 +588,64 @@ mod tests {
 
         // Test failures
         let json_unknown = json!({"unknown_field": "value"});
-        assert!(from_value(&schema, json_unknown).is_err());
+        assert!(from_value(schema, json_unknown).is_err());
 
         let json_wrong_type = json!({"age": "not_a_number"});
-        assert!(from_value(&schema, json_wrong_type).is_err());
+        assert!(from_value(schema, json_wrong_type).is_err());
 
         let json_not_object = json!("just a string");
-        assert!(from_value(&schema, json_not_object).is_err());
+        assert!(from_value(schema, json_not_object).is_err());
     }
 
     #[test]
     fn test_datetime_conversions() {
-        let schema = TableSchema {
-            name: "test",
-            primary_key: PrimaryKey {
-                name: "id",
-                kind: IdentifierType::Integer,
-            },
-            attributes: &[("timestamp", AttributeType::DateTime)],
-            foreign_keys: &[],
-            relationships: &[],
-            text_index: false,
-        };
+        let registry = registry();
+        let schema = registry
+            .schema("temporal")
+            .expect("temporal schema is registered");
 
         // Test milliseconds timestamp
         let json_millis = json!({"timestamp": 1609459200000i64});
-        assert!(from_value(&schema, json_millis).is_ok());
+        assert!(from_value(schema, json_millis).is_ok());
 
         // Test ISO string
         let json_iso = json!({"timestamp": "2021-01-01T00:00:00Z"});
-        assert!(from_value(&schema, json_iso).is_ok());
+        assert!(from_value(schema, json_iso).is_ok());
 
         // Test invalid datetime
         let json_invalid = json!({"timestamp": "invalid-date"});
-        assert!(from_value(&schema, json_invalid).is_err());
+        assert!(from_value(schema, json_invalid).is_err());
     }
 
     #[test]
     fn test_boolean_conversions() {
-        let schema = TableSchema {
-            name: "test",
-            primary_key: PrimaryKey {
-                name: "id",
-                kind: IdentifierType::Integer,
-            },
-            attributes: &[("flag", AttributeType::Boolean)],
-            foreign_keys: &[],
-            relationships: &[],
-            text_index: false,
-        };
+        let registry = registry();
+        let schema = registry
+            .schema("flagged")
+            .expect("flagged schema is registered");
 
         // Test string conversions
         let json_true = json!({"flag": "true"});
-        let attributes = from_value(&schema, json_true).unwrap();
+        let attributes = from_value(schema, json_true).expect("conversion succeeds");
         assert!(*attributes["flag"].as_bool().unwrap());
 
         let json_false = json!({"flag": "FALSE"});
-        let attributes = from_value(&schema, json_false).unwrap();
+        let attributes = from_value(schema, json_false).expect("conversion succeeds");
         assert!(!(*attributes["flag"].as_bool().unwrap()));
 
         let json_invalid_str = json!({"flag": "maybe"});
-        assert!(from_value(&schema, json_invalid_str).is_err());
+        assert!(from_value(schema, json_invalid_str).is_err());
 
         // Test number conversions
         let json_one = json!({"flag": 1});
-        let attributes = from_value(&schema, json_one).unwrap();
+        let attributes = from_value(schema, json_one).expect("conversion succeeds");
         assert!(*attributes["flag"].as_bool().unwrap());
 
         let json_zero = json!({"flag": 0});
-        let attributes = from_value(&schema, json_zero).unwrap();
+        let attributes = from_value(schema, json_zero).expect("conversion succeeds");
         assert!(!(*attributes["flag"].as_bool().unwrap()));
 
         let json_invalid_num = json!({"flag": 2});
-        assert!(from_value(&schema, json_invalid_num).is_err());
+        assert!(from_value(schema, json_invalid_num).is_err());
     }
 }

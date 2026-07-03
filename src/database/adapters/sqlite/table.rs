@@ -36,7 +36,7 @@ mod tests {
         error::Error,
         query_parameters::{FilterParameters, FilterValue, QueryParameters},
         registry::Registry as DatabaseRegistry,
-        schema::{AttributeType, IdentifierType, PrimaryKey, TableSchema},
+        schema::{AttributeType, SchemaBuilder, TableSchema},
         table::Table,
     };
     use crate::http_wrappers::Uri;
@@ -44,30 +44,28 @@ mod tests {
 
     type Registry = DatabaseRegistry<'static, SqliteAdapter>;
 
-    static MY_SCHEMA: TableSchema = TableSchema {
-        name: "my_table",
-        primary_key: PrimaryKey {
-            name: "id",
-            kind: IdentifierType::Integer,
-        },
-        attributes: &[
-            ("col1", AttributeType::Text),
-            ("col2", AttributeType::Text),
-            ("col3", AttributeType::Integer),
-        ],
-        foreign_keys: &[],
-        relationships: &[],
-        text_index: true,
-    };
+    fn my_schema() -> SchemaBuilder<'static> {
+        SchemaBuilder::table("my_table")
+            .attribute("col1", AttributeType::Text)
+            .attribute("col2", AttributeType::Text)
+            .attribute("col3", AttributeType::Integer)
+            .text_index()
+    }
 
-    static SCHEMAS: [&TableSchema; 1] = [&MY_SCHEMA];
+    fn schema(registry: &Registry) -> &TableSchema<'_> {
+        registry.schema("my_table").expect("my_table is registered")
+    }
 
     fn registry() -> Registry {
-        let registry = Registry::try_new(Pool::memory().unwrap(), &SCHEMAS).unwrap();
+        let registry = Registry::try_new(
+            Pool::memory().expect("in-memory pool is available"),
+            [my_schema()],
+        )
+        .expect("schema set is consistent");
 
         registry
             .acquire()
-            .unwrap()
+            .expect("connection is available")
             .execute_batch(
                 "\
                 CREATE TABLE my_table (id INTEGER PRIMARY KEY, col1 TEXT, col2 TEXT, col3 NUMBER); \
@@ -83,7 +81,7 @@ mod tests {
                 END; \
                 ",
             )
-            .unwrap();
+            .expect("schema creation succeeds");
 
         registry
     }
@@ -106,7 +104,7 @@ mod tests {
                         ("col2".to_string(), Attribute::Text(col2.to_string())),
                         ("col3".to_string(), Attribute::Integer(col3)),
                     ]),
-                    &QueryParameters::new(&MY_SCHEMA),
+                    &QueryParameters::new(schema(&registry)),
                 )?;
             }
         }
@@ -127,7 +125,7 @@ mod tests {
         let result = registry
             .table("my_table", &connection)
             .unwrap()
-            .query(&QueryParameters::new(&MY_SCHEMA));
+            .query(&QueryParameters::new(schema(&registry)));
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
@@ -140,7 +138,7 @@ mod tests {
         let result = registry
             .table("my_table", &connection)
             .unwrap()
-            .first(&QueryParameters::new(&MY_SCHEMA));
+            .first(&QueryParameters::new(schema(&registry)));
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
@@ -150,10 +148,10 @@ mod tests {
     fn test_find_without_records() {
         let registry = registry();
         let connection = registry.acquire().unwrap();
-        let result = registry
-            .table("my_table", &connection)
-            .unwrap()
-            .find(Identifier::Integer(1), &QueryParameters::new(&MY_SCHEMA));
+        let result = registry.table("my_table", &connection).unwrap().find(
+            Identifier::Integer(1),
+            &QueryParameters::new(schema(&registry)),
+        );
 
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::RecordNotFound));
@@ -165,11 +163,15 @@ mod tests {
         let connection = registry.acquire()?;
         let table = registry.table("my_table", &connection)?;
 
-        let default_result = table.query(&QueryParameters::new(&MY_SCHEMA))?;
+        let default_result = table.query(&QueryParameters::new(schema(&registry)))?;
         assert_eq!(default_result.len(), 3);
 
         let single_uri = mock_uri("filter[col1]=eq:The%20quick%20brown%20fox&filter[col3]=eq:42");
-        let single = table.query(&QueryParameters::parse(&single_uri, &MY_SCHEMA, &registry)?)?;
+        let single = table.query(&QueryParameters::parse(
+            &single_uri,
+            schema(&registry),
+            &registry,
+        )?)?;
         assert_eq!(single.len(), 1);
         assert_eq!(
             single[0].get("col1").unwrap(),
@@ -177,17 +179,29 @@ mod tests {
         );
 
         let many_uri = mock_uri("filter[col2]=like:jump");
-        let many = table.query(&QueryParameters::parse(&many_uri, &MY_SCHEMA, &registry)?)?;
+        let many = table.query(&QueryParameters::parse(
+            &many_uri,
+            schema(&registry),
+            &registry,
+        )?)?;
         assert_eq!(many.len(), 2);
         assert_eq!(many[0].get("col3").unwrap(), &Attribute::Integer(42));
         assert_eq!(many[1].get("col3").unwrap(), &Attribute::Integer(1000));
 
         let none_uri = mock_uri("filter[col3]=lt:50&filter[col1]=like:I%20am%20not%20here");
-        let none = table.query(&QueryParameters::parse(&none_uri, &MY_SCHEMA, &registry)?)?;
+        let none = table.query(&QueryParameters::parse(
+            &none_uri,
+            schema(&registry),
+            &registry,
+        )?)?;
         assert_eq!(none.len(), 0);
 
         let search_uri = mock_uri("search=five,box");
-        let search = table.query(&QueryParameters::parse(&search_uri, &MY_SCHEMA, &registry)?)?;
+        let search = table.query(&QueryParameters::parse(
+            &search_uri,
+            schema(&registry),
+            &registry,
+        )?)?;
         assert_eq!(search.len(), 2);
         assert_eq!(search[0].get("col3").unwrap(), &Attribute::Integer(1000));
         assert_eq!(search[1].get("col3").unwrap(), &Attribute::Integer(-1000));
@@ -201,7 +215,7 @@ mod tests {
         let connection = registry.acquire()?;
         let result = registry
             .table("my_table", &connection)?
-            .first(&QueryParameters::new(&MY_SCHEMA))?;
+            .first(&QueryParameters::new(schema(&registry)))?;
 
         assert!(result.is_some());
         assert_eq!(
@@ -216,10 +230,10 @@ mod tests {
     fn test_find() {
         let registry = registry();
         let connection = registry.acquire().unwrap();
-        let result = registry
-            .table("my_table", &connection)
-            .unwrap()
-            .find(Identifier::Integer(1), &QueryParameters::new(&MY_SCHEMA));
+        let result = registry.table("my_table", &connection).unwrap().find(
+            Identifier::Integer(1),
+            &QueryParameters::new(schema(&registry)),
+        );
 
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::RecordNotFound));
@@ -231,7 +245,7 @@ mod tests {
         let connection = registry.acquire()?;
         let result = registry.table("my_table", &connection)?.insert(
             Row::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]),
-            &QueryParameters::new(&MY_SCHEMA),
+            &QueryParameters::new(schema(&registry)),
         )?;
 
         assert_eq!(
@@ -250,13 +264,13 @@ mod tests {
 
         table.insert(
             Row::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]),
-            &QueryParameters::new(&MY_SCHEMA),
+            &QueryParameters::new(schema(&registry)),
         )?;
 
         let result = table.update(
             Identifier::Integer(1),
             Row::from_iter([("col1".to_string(), Attribute::Text("new_value".to_string()))]),
-            &QueryParameters::new(&MY_SCHEMA),
+            &QueryParameters::new(schema(&registry)),
         )?;
 
         assert_eq!(
@@ -275,12 +289,15 @@ mod tests {
 
         table.insert(
             Row::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]),
-            &QueryParameters::new(&MY_SCHEMA),
+            &QueryParameters::new(schema(&registry)),
         )?;
 
         table.delete(Identifier::Integer(1))?;
 
-        let result = table.find(Identifier::Integer(1), &QueryParameters::new(&MY_SCHEMA));
+        let result = table.find(
+            Identifier::Integer(1),
+            &QueryParameters::new(schema(&registry)),
+        );
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::RecordNotFound));
 
@@ -297,10 +314,13 @@ mod tests {
             Row::from_iter([("col1".to_string(), Attribute::Text("a".to_string()))]),
             Row::from_iter([("col1".to_string(), Attribute::Text("b".to_string()))]),
         ];
-        let inserted = table.insert_batch(rows, &QueryParameters::new(&MY_SCHEMA))?;
+        let inserted = table.insert_batch(rows, &QueryParameters::new(schema(&registry)))?;
 
         assert_eq!(inserted.len(), 2);
-        assert_eq!(table.query(&QueryParameters::new(&MY_SCHEMA))?.len(), 2);
+        assert_eq!(
+            table.query(&QueryParameters::new(schema(&registry)))?.len(),
+            2
+        );
 
         Ok(())
     }
@@ -311,10 +331,14 @@ mod tests {
         let connection = registry.acquire()?;
         let table = registry.table("my_table", &connection)?;
 
-        let inserted = table.insert_batch(Vec::new(), &QueryParameters::new(&MY_SCHEMA))?;
+        let inserted = table.insert_batch(Vec::new(), &QueryParameters::new(schema(&registry)))?;
 
         assert!(inserted.is_empty());
-        assert!(table.query(&QueryParameters::new(&MY_SCHEMA))?.is_empty());
+        assert!(
+            table
+                .query(&QueryParameters::new(schema(&registry)))?
+                .is_empty()
+        );
 
         Ok(())
     }
@@ -325,14 +349,17 @@ mod tests {
         let connection = registry.acquire()?;
         let table = registry.table("my_table", &connection)?;
 
-        let mut parameters = QueryParameters::new(&MY_SCHEMA);
+        let mut parameters = QueryParameters::new(schema(&registry));
         parameters.filter = Some(FilterParameters::from([(
             "col3",
             vec![FilterValue::LessThan(Attribute::Integer(0))],
         )]));
         table.delete_batch(&parameters)?;
 
-        assert_eq!(table.query(&QueryParameters::new(&MY_SCHEMA))?.len(), 2);
+        assert_eq!(
+            table.query(&QueryParameters::new(schema(&registry)))?.len(),
+            2
+        );
 
         Ok(())
     }
@@ -343,9 +370,13 @@ mod tests {
         let connection = registry.acquire()?;
         let table = registry.table("my_table", &connection)?;
 
-        table.delete_batch(&QueryParameters::new(&MY_SCHEMA))?;
+        table.delete_batch(&QueryParameters::new(schema(&registry)))?;
 
-        assert!(table.query(&QueryParameters::new(&MY_SCHEMA))?.is_empty());
+        assert!(
+            table
+                .query(&QueryParameters::new(schema(&registry)))?
+                .is_empty()
+        );
 
         Ok(())
     }
@@ -355,7 +386,7 @@ mod tests {
         let registry = registry();
         let connection = registry.acquire()?;
         let table = registry.table("my_table", &connection)?;
-        let parameters = QueryParameters::new(&MY_SCHEMA);
+        let parameters = QueryParameters::new(schema(&registry));
 
         let result: Result<(), Error> = connection.transaction(|| {
             table.insert(

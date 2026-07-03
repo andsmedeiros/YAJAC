@@ -54,7 +54,7 @@ impl<'sch> QueryBuilder<'sch> {
         let mut rows = rows.into_iter();
         let Some(first) = rows.next() else {
             return Err(Error::InvalidOperation {
-                schema: self.schema.name.to_string(),
+                schema: self.schema.name().to_string(),
                 operation: "INSERT".to_string(),
                 message: "cannot insert without any records".to_string(),
             });
@@ -79,7 +79,7 @@ impl<'sch> QueryBuilder<'sch> {
 
         query.extend([
             "INSERT INTO".to_string(),
-            format!("{}({})", self.schema.name, columns.join(", ")),
+            format!("{}({})", self.schema.name(), columns.join(", ")),
             format!("VALUES {}", tuples.join(", ")),
         ]);
 
@@ -88,7 +88,7 @@ impl<'sch> QueryBuilder<'sch> {
 
     fn uniform_columns_error(&self) -> Error {
         Error::InvalidOperation {
-            schema: self.schema.name.to_string(),
+            schema: self.schema.name().to_string(),
             operation: "INSERT".to_string(),
             message: "every record in a batch must declare the same attributes".to_string(),
         }
@@ -101,7 +101,7 @@ impl<'sch> QueryBuilder<'sch> {
         bindings: &mut Bindings,
     ) {
         let attributes = self.extract_attributes(attributes);
-        query.extend(["UPDATE".to_string(), self.schema.name.to_string()]);
+        query.extend(["UPDATE".to_string(), self.schema.name().to_string()]);
 
         if attributes.fields.is_empty() {
             return;
@@ -117,7 +117,7 @@ impl<'sch> QueryBuilder<'sch> {
     }
 
     fn build_from_clause(&self, query: &mut Vec<String>) {
-        query.extend(["FROM".to_string(), self.schema.name.to_string()]);
+        query.extend(["FROM".to_string(), self.schema.name().to_string()]);
     }
 
     fn build_join_clause(
@@ -129,9 +129,9 @@ impl<'sch> QueryBuilder<'sch> {
             return Ok(());
         }
 
-        if !self.schema.text_index {
+        if !self.schema.text_index() {
             return Err(Error::QueryValidationFailure {
-                schema: self.schema.name.to_string(),
+                schema: self.schema.name().to_string(),
                 attribute: "search".to_string(),
                 message: "This resource does not support full-text search".to_string(),
             });
@@ -139,7 +139,8 @@ impl<'sch> QueryBuilder<'sch> {
 
         query.push(format!(
             "JOIN {}_fts fts ON {}.id = fts.rowid",
-            self.schema.name, self.schema.name
+            self.schema.name(),
+            self.schema.name()
         ));
 
         Ok(())
@@ -166,7 +167,7 @@ impl<'sch> QueryBuilder<'sch> {
             for value in values {
                 filter_query.push(format!(
                     "{}_fts MATCH {}",
-                    self.schema.name,
+                    self.schema.name(),
                     bindings.bind(Attribute::Text(value.to_string()))
                 ));
             }
@@ -174,7 +175,7 @@ impl<'sch> QueryBuilder<'sch> {
 
         if let Some(filter) = filter {
             for (field, filters) in filter {
-                let table = self.schema.name;
+                let table = self.schema.name();
                 let kind = self.schema.attribute_type(field)?;
 
                 for filter in filters {
@@ -195,7 +196,7 @@ impl<'sch> QueryBuilder<'sch> {
                                 Attribute::Text(format!("%{}%", value))
                             } else {
                                 return Err(Error::QueryValidationFailure {
-                                    schema: self.schema.name.to_string(),
+                                    schema: self.schema.name().to_string(),
                                     attribute: field.to_string(),
                                     message:
                                         "The 'LIKE' operator can only be applied to text attributes"
@@ -244,7 +245,7 @@ impl<'sch> QueryBuilder<'sch> {
                     SortDirection::Ascending => "ASC",
                     SortDirection::Descending => "DESC",
                 };
-                sort_query.push(format!("{}.{} {}", self.schema.name, field, direction));
+                sort_query.push(format!("{}.{} {}", self.schema.name(), field, direction));
             }
 
             query.push(sort_query.join(", ").to_string());
@@ -271,7 +272,7 @@ impl<'sch> QueryBuilder<'sch> {
     /// `qualified` is set, each column is prefixed with the table name.
     fn fields_for_model(&self, fields: &FieldsParameters, qualified: bool) -> String {
         let fields = fields
-            .get(self.schema.name)
+            .get(self.schema.name())
             .expect("Columns for all requested models should have been pre-loaded by the query parameters parser")
             .iter()
             .map(|field| if self.schema.has_attribute(field) || self.schema.has_foreign_key(field) {
@@ -289,11 +290,11 @@ impl<'sch> QueryBuilder<'sch> {
                     .keys.own
             });
 
-        let columns = || [self.schema.primary_key.name].into_iter().chain(fields);
+        let columns = || [self.schema.primary_key().name].into_iter().chain(fields);
 
         if qualified {
             columns()
-                .map(|column| format!("{}.{}", self.schema.name, column))
+                .map(|column| format!("{}.{}", self.schema.name(), column))
                 .join(", ")
         } else {
             columns().join(", ")
@@ -414,13 +415,13 @@ impl<'sch> QueryBuilderInterface<'sch> for QueryBuilder<'sch> {
 
     fn delete(&self, id: Identifier) -> (String, Bindings) {
         (
-            format!("DELETE FROM {} WHERE id = ?1", self.schema.name),
+            format!("DELETE FROM {} WHERE id = ?1", self.schema.name()),
             [Attribute::from(id)].into(),
         )
     }
 
     fn delete_batch(&self, parameters: &QueryParameters) -> Result<(String, Bindings), Error> {
-        let mut query = vec!["DELETE FROM".to_string(), self.schema.name.to_string()];
+        let mut query = vec!["DELETE FROM".to_string(), self.schema.name().to_string()];
         let mut bindings = Bindings::new();
 
         self.build_where_clause(&parameters.filter, &None, &mut query, &mut bindings)?;
@@ -435,38 +436,35 @@ mod tests {
     use crate::database::adapters::SqliteAdapter;
     use crate::database::adapters::sqlite::Pool;
     use crate::database::registry::Registry as DatabaseRegistry;
-    use crate::database::schema::{IdentifierType, PrimaryKey};
+    use crate::database::schema::SchemaBuilder;
     use crate::http_wrappers::Uri;
     use indexmap::IndexSet;
 
     type Registry = DatabaseRegistry<'static, SqliteAdapter>;
 
-    static MY_SCHEMA: TableSchema = my_schema(true);
-    static MY_SCHEMA_NO_FTS: TableSchema = my_schema(false);
+    fn my_schema(text_index: bool) -> SchemaBuilder<'static> {
+        let builder = SchemaBuilder::table("my_table")
+            .attribute("col1", AttributeType::Text)
+            .attribute("col2", AttributeType::Text)
+            .attribute("col3", AttributeType::Integer);
 
-    const fn my_schema(text_index: bool) -> TableSchema<'static> {
-        TableSchema {
-            name: "my_table",
-            primary_key: PrimaryKey {
-                name: "id",
-                kind: IdentifierType::Integer,
-            },
-            attributes: &[
-                ("col1", AttributeType::Text),
-                ("col2", AttributeType::Text),
-                ("col3", AttributeType::Integer),
-            ],
-            foreign_keys: &[],
-            relationships: &[],
-            text_index,
+        if text_index {
+            builder.text_index()
+        } else {
+            builder
         }
     }
 
-    static FTS_SCHEMAS: [&TableSchema; 1] = [&MY_SCHEMA];
-    static PLAIN_SCHEMAS: [&TableSchema; 1] = [&MY_SCHEMA_NO_FTS];
+    fn registry(text_index: bool) -> Registry {
+        DatabaseRegistry::try_new(
+            Pool::memory().expect("in-memory pool is available"),
+            [my_schema(text_index)],
+        )
+        .expect("schema set is consistent")
+    }
 
-    fn registry(schemas: &'static [&'static TableSchema]) -> Registry {
-        DatabaseRegistry::try_new(Pool::memory().unwrap(), schemas).unwrap()
+    fn schema(registry: &Registry) -> &TableSchema<'_> {
+        registry.schema("my_table").expect("my_table is registered")
     }
 
     fn mock_uri(query: &str) -> Uri {
@@ -475,15 +473,15 @@ mod tests {
             .unwrap()
     }
 
-    fn parse<'req>(registry: &Registry, uri: &'req Uri) -> QueryParameters<'static, 'req> {
-        QueryParameters::parse(uri, &MY_SCHEMA, registry).unwrap()
+    fn parse<'sch, 'req>(registry: &'sch Registry, uri: &'req Uri) -> QueryParameters<'sch, 'req> {
+        QueryParameters::parse(uri, schema(registry), registry).expect("query parses")
     }
 
     #[test]
     fn test_select_all_fields() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("");
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .query(&parse(&registry, &uri))
             .unwrap();
 
@@ -496,9 +494,9 @@ mod tests {
 
     #[test]
     fn test_select_specific_fields() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("fields[my_table]=col1,col2");
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .query(&parse(&registry, &uri))
             .unwrap();
 
@@ -511,9 +509,9 @@ mod tests {
 
     #[test]
     fn test_filter_single_condition() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("filter[col1]=eq:value1");
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .query(&parse(&registry, &uri))
             .unwrap();
 
@@ -526,9 +524,9 @@ mod tests {
 
     #[test]
     fn test_filter_multiple_conditions() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("filter[col1]=eq:value1&filter[col2]=neq:value2");
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .query(&parse(&registry, &uri))
             .unwrap();
 
@@ -547,9 +545,9 @@ mod tests {
 
     #[test]
     fn test_filter_with_like_operator() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("filter[col1]=like:keyword");
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .query(&parse(&registry, &uri))
             .unwrap();
 
@@ -562,9 +560,9 @@ mod tests {
 
     #[test]
     fn test_sort_single_field() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("sort=-col1");
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .query(&parse(&registry, &uri))
             .unwrap();
 
@@ -577,9 +575,9 @@ mod tests {
 
     #[test]
     fn test_sort_multiple_fields() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("sort=-col1,col2");
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .query(&parse(&registry, &uri))
             .unwrap();
 
@@ -592,9 +590,9 @@ mod tests {
 
     #[test]
     fn test_pagination() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("page[number]=2&page[size]=10");
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .query(&parse(&registry, &uri))
             .unwrap();
 
@@ -607,7 +605,7 @@ mod tests {
 
     #[test]
     fn test_complex_query_with_all_features() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri(
             "\
             fields[my_table]=col1,col2&\
@@ -618,7 +616,7 @@ mod tests {
             search=find-me\
             ",
         );
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .query(&parse(&registry, &uri))
             .unwrap();
 
@@ -643,9 +641,9 @@ mod tests {
 
     #[test]
     fn test_find_with_all_fields() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("");
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .find(Identifier::Integer(1), &parse(&registry, &uri))
             .unwrap();
 
@@ -658,9 +656,9 @@ mod tests {
 
     #[test]
     fn test_find_with_specific_fields() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("fields[my_table]=col1,col2");
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .find(Identifier::Integer(1), &parse(&registry, &uri))
             .unwrap();
 
@@ -673,11 +671,11 @@ mod tests {
 
     #[test]
     fn test_insert_single_field() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("");
         let attributes =
             Attributes::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]);
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .insert(attributes, &parse(&registry, &uri))
             .unwrap();
 
@@ -690,13 +688,13 @@ mod tests {
 
     #[test]
     fn test_insert_multiple_fields() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("");
         let attributes = Attributes::from_iter([
             ("col1".to_string(), Attribute::Text("value1".to_string())),
             ("col2".to_string(), Attribute::Integer(42)),
         ]);
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .insert(attributes, &parse(&registry, &uri))
             .unwrap();
 
@@ -715,11 +713,11 @@ mod tests {
 
     #[test]
     fn test_insert_with_returning_fields() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("fields[my_table]=col1");
         let attributes =
             Attributes::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]);
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .insert(attributes, &parse(&registry, &uri))
             .unwrap();
 
@@ -732,9 +730,9 @@ mod tests {
 
     #[test]
     fn test_insert_with_empty_attributes() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("");
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .insert(Attributes::new(), &parse(&registry, &uri))
             .unwrap();
 
@@ -745,12 +743,13 @@ mod tests {
         assert!(bindings.is_empty());
     }
 
-    fn scoped_to_id<'req>(
-        registry: &Registry,
+    fn scoped_to_id<'sch, 'req>(
+        registry: &'sch Registry,
         uri: &'req Uri,
         id: i64,
-    ) -> QueryParameters<'static, 'req> {
-        let mut parameters = QueryParameters::parse(uri, &MY_SCHEMA, registry).unwrap();
+    ) -> QueryParameters<'sch, 'req> {
+        let mut parameters =
+            QueryParameters::parse(uri, schema(registry), registry).expect("query parses");
         parameters.filter = Some(FilterParameters::from([(
             "id",
             vec![FilterValue::Equal(Attribute::Integer(id))],
@@ -760,11 +759,11 @@ mod tests {
 
     #[test]
     fn test_update_single_field() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("");
         let attributes =
             Attributes::from_iter([("col1".to_string(), Attribute::Text("new_value".to_string()))]);
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .update(Identifier::Integer(1), attributes, &parse(&registry, &uri))
             .unwrap();
 
@@ -783,13 +782,13 @@ mod tests {
 
     #[test]
     fn test_update_multiple_fields() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("");
         let attributes = Attributes::from_iter([
             ("col1".to_string(), Attribute::Text("new_value".to_string())),
             ("col2".to_string(), Attribute::Integer(42)),
         ]);
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .update(Identifier::Integer(1), attributes, &parse(&registry, &uri))
             .unwrap();
 
@@ -809,11 +808,11 @@ mod tests {
 
     #[test]
     fn test_update_with_returning_fields() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("fields[my_table]=col1");
         let attributes =
             Attributes::from_iter([("col1".to_string(), Attribute::Text("new_value".to_string()))]);
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .update(Identifier::Integer(1), attributes, &parse(&registry, &uri))
             .unwrap();
 
@@ -832,9 +831,9 @@ mod tests {
 
     #[test]
     fn test_update_with_empty_attributes() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("");
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .update(
                 Identifier::Integer(1),
                 Attributes::new(),
@@ -851,10 +850,10 @@ mod tests {
 
     #[test]
     fn test_update_batch_scopes_by_filter() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("");
         let attributes = Attributes::from_iter([("col1".to_string(), Attribute::Null)]);
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .update_batch(attributes, &scoped_to_id(&registry, &uri, 5))
             .unwrap();
 
@@ -867,7 +866,7 @@ mod tests {
 
     #[test]
     fn test_update_batch_with_in_filter() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("");
         let mut parameters = parse(&registry, &uri);
         parameters.filter = Some(FilterParameters::from([(
@@ -878,7 +877,7 @@ mod tests {
             ]))],
         )]));
         let attributes = Attributes::from_iter([("col1".to_string(), Attribute::Integer(7))]);
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .update_batch(attributes, &parameters)
             .unwrap();
 
@@ -898,7 +897,8 @@ mod tests {
 
     #[test]
     fn test_delete() {
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA).delete(Identifier::Integer(1));
+        let registry = registry(true);
+        let (query, bindings) = QueryBuilder::new(schema(&registry)).delete(Identifier::Integer(1));
 
         assert_eq!(query, "DELETE FROM my_table WHERE id = ?1");
         assert_eq!(bindings, vec![Attribute::Integer(1)]);
@@ -906,7 +906,7 @@ mod tests {
 
     #[test]
     fn test_insert_batch_multiple_rows() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("");
         let rows = vec![
             Attributes::from_iter([
@@ -918,7 +918,7 @@ mod tests {
                 ("col2".to_string(), Attribute::Text("d".to_string())),
             ]),
         ];
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .insert_batch(rows, &parse(&registry, &uri))
             .unwrap();
 
@@ -939,22 +939,23 @@ mod tests {
 
     #[test]
     fn test_insert_batch_rejects_heterogeneous_columns() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("");
         let rows = vec![
             Attributes::from_iter([("col1".to_string(), Attribute::Text("a".to_string()))]),
             Attributes::from_iter([("col2".to_string(), Attribute::Text("b".to_string()))]),
         ];
-        let result = QueryBuilder::new(&MY_SCHEMA).insert_batch(rows, &parse(&registry, &uri));
+        let result =
+            QueryBuilder::new(schema(&registry)).insert_batch(rows, &parse(&registry, &uri));
 
         assert!(matches!(result, Err(Error::InvalidOperation { .. })));
     }
 
     #[test]
     fn test_delete_batch_scoped_by_filter() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("");
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .delete_batch(&scoped_to_id(&registry, &uri, 5))
             .unwrap();
 
@@ -964,9 +965,9 @@ mod tests {
 
     #[test]
     fn test_delete_batch_unscoped() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("");
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .delete_batch(&parse(&registry, &uri))
             .unwrap();
 
@@ -976,18 +977,18 @@ mod tests {
 
     #[test]
     fn test_filter_with_like_operator_on_non_text_attribute() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("filter[col3]=like:1");
-        let result = QueryBuilder::new(&MY_SCHEMA).query(&parse(&registry, &uri));
+        let result = QueryBuilder::new(schema(&registry)).query(&parse(&registry, &uri));
 
         assert!(result.is_err());
     }
 
     #[test]
     fn test_search_with_single_term() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("search=a-value-to-search");
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .query(&parse(&registry, &uri))
             .unwrap();
 
@@ -1007,9 +1008,9 @@ mod tests {
 
     #[test]
     fn test_search_with_multiple_terms() {
-        let registry = registry(&FTS_SCHEMAS);
+        let registry = registry(true);
         let uri = mock_uri("search=a-value,another-value");
-        let (query, bindings) = QueryBuilder::new(&MY_SCHEMA)
+        let (query, bindings) = QueryBuilder::new(schema(&registry))
             .query(&parse(&registry, &uri))
             .unwrap();
 
@@ -1032,10 +1033,11 @@ mod tests {
 
     #[test]
     fn test_search_on_table_without_text_index() {
-        let registry = registry(&PLAIN_SCHEMAS);
+        let registry = registry(false);
         let uri = mock_uri("search=a-value-to-search");
-        let parameters = QueryParameters::parse(&uri, &MY_SCHEMA_NO_FTS, &registry).unwrap();
-        let result = QueryBuilder::new(&MY_SCHEMA_NO_FTS).query(&parameters);
+        let parameters =
+            QueryParameters::parse(&uri, schema(&registry), &registry).expect("query parses");
+        let result = QueryBuilder::new(schema(&registry)).query(&parameters);
 
         assert!(result.is_err());
     }

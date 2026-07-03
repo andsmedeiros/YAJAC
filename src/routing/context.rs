@@ -102,11 +102,11 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
             ResourceIdentifier::New { kind, .. } => (kind.as_str(), None),
         };
 
-        if kind != schema.name {
+        if kind != schema.name() {
             return Err(RoutingError::new(
                 StatusCode::CONFLICT,
                 "ResourceTypeMismatch",
-                format!("expected resource type '{}', got '{kind}'", schema.name),
+                format!("expected resource type '{}', got '{kind}'", schema.name()),
             ));
         }
 
@@ -142,7 +142,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
             schema,
             id: match resource.identifier {
                 ResourceIdentifier::New { .. } => None,
-                identifier => Some(self.materialise_id(identifier, schema.name)?),
+                identifier => Some(self.materialise_id(identifier, schema.name())?),
             },
             attributes: resource
                 .attributes
@@ -155,7 +155,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
                             "UnknownAttribute",
                             format!(
                                 "Unknown attribute '{name}' for resource type '{}'",
-                                schema.name
+                                schema.name()
                             ),
                         ));
                     }
@@ -169,12 +169,11 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
                 .into_iter()
                 .filter_map(|(name, relationship)| {
                     (|| -> Result<Option<(_, _)>, RoutingError> {
-                        let &(name, ref descriptor) = schema
-                            .relationships
-                            .iter()
+                        let (name, descriptor) = schema
+                            .relationships()
                             .find(|(n, _)| *n == name.as_str())
                             .ok_or_else(|| Error::ResourceValidationFailure {
-                                schema: schema.name.to_string(),
+                                schema: schema.name().to_string(),
                                 attribute: name,
                                 message: "Attempted to attach unknown relationship".to_string(),
                             })?;
@@ -203,7 +202,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
 
                             (None | Some(Linkage::Empty), _) => Some(Relationship::Empty),
                             _ => Err(Error::ResourceValidationFailure {
-                                schema: schema.name.to_string(),
+                                schema: schema.name().to_string(),
                                 attribute: name.to_string(),
                                 message: "Attempted to attach relationship with wrong linkage"
                                     .to_string(),
@@ -232,7 +231,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
     ) -> Result<Identifier, RoutingError> {
         let schema = self.registry.schema(schema)?;
         let identifier = match identifier {
-            JsonApiIdentifier::Existing { kind, id } if kind.as_str() == schema.name => id,
+            JsonApiIdentifier::Existing { kind, id } if kind.as_str() == schema.name() => id,
             JsonApiIdentifier::New { .. } => {
                 return Err(RoutingError::new(
                     StatusCode::UNPROCESSABLE_ENTITY,
@@ -249,7 +248,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
             }
         };
 
-        match schema.primary_key.kind {
+        match schema.primary_key().kind {
             IdentifierType::Text => Ok(Identifier::Text(identifier)),
             IdentifierType::Integer => identifier.parse().map(Identifier::Integer).map_err(|_| {
                 RoutingError::new(

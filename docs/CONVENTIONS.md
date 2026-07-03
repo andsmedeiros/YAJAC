@@ -12,8 +12,8 @@ Rules the codebase already follows. Keep new code homogeneous with them. This co
 - **Capitalised.** All error messages start capitalised, uniformly.
 - **Single-purpose, source-classified variants.** Each `database::Error` variant carries one HTTP
   meaning, exposed exhaustively via `status()` / `code()` / `title()`. Query-param validation → 400
-  (`QueryValidationFailure`), resource/document validation → 422 (`ResourceValidationFailure`), static
-  schema faults → 500 (`InconsistentSchema`), generic bad accessor input → 500
+  (`QueryValidationFailure`), resource/document validation → 422 (`ResourceValidationFailure`),
+  schema-consistency faults → 500 (`InconsistentSchema`), generic bad accessor input → 500
   (`InvalidAttributeAccess`), and so on. Pick the variant by *who caused it and what it means*, not by
   the current call site.
 - **Lossless outward, redacted at the boundary.** `From<database::Error> for routing::Error` preserves
@@ -35,6 +35,18 @@ Rules the codebase already follows. Keep new code homogeneous with them. This co
 trusted, schema/binary-scoped strings (the only ones allowed into SQL text). `'req` = untrusted,
 request-scoped data (bindings only). Thread them consistently; a new structure that holds identifiers
 should key them at `'sch`.
+
+## Schema definition
+
+- Schemas are defined through **`SchemaBuilder`** (the public, intended API), never by constructing a
+  `TableSchema` directly (`TableSchema::new` is `pub(crate)`); the registry validates and mints them.
+  The relationship DSL reads directionally: `Related::to(resource).pointing_own(fk).to_related(pk)` when
+  the foreign key is on our table, `.pointing_related(fk).to_own(pk)` when it is on the related table.
+- **Tests build through the registry.** Fixtures construct `SchemaBuilder`s, pass them to
+  `Registry::try_new`, and take a `&TableSchema` via `registry.schema(name)` — they do not reach for
+  the `pub(crate)` constructor.
+- **Container order is observable.** Schema field/relationship order surfaces in generated SQL (column
+  lists, `RETURNING`) and is test-pinned; keep order-preserving containers (`IndexMap`).
 
 ## Comments
 
@@ -78,7 +90,9 @@ Before every commit, run a tidy-up pass and fix (not just report) what it finds:
 1. `cargo fmt` clean,
 2. `cargo build` warning-free (modulo the sanctioned scaffolding),
 3. `cargo test` green,
-4. no stray debug artifacts, leftover comments, or typos.
+4. no stray debug artifacts, leftover comments, or typos,
+5. `docs/` (`ARCHITECTURE.md`, `CONVENTIONS.md`) updated in the same commit (or an adjacent one) when
+   the change altered documented structure or conventions — the docs track reality, they do not lag it.
 
 Commits are **granular** — one or few files, logically ordered; never lump a whole feature into one
 commit. Commit messages state motivation (when relevant) and describe the changes across files; they

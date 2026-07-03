@@ -78,7 +78,7 @@ pub trait Table<
     fn require_columns(&self, row: &Row) -> Result<(), Error> {
         if row.is_empty() {
             return Err(Error::InvalidOperation {
-                schema: self.schema().name.to_string(),
+                schema: self.schema().name().to_string(),
                 operation: "UPDATE".to_string(),
                 message: "no attributes to update".to_string(),
             });

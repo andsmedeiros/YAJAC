@@ -1,5 +1,10 @@
 use crate::database::error::Error;
+use indexmap::IndexMap;
 use std::fmt::Display;
+
+pub mod builder;
+
+pub use builder::{PointingOwn, PointingRelated, Related, SchemaBuilder};
 
 pub type DateTime = chrono::DateTime<chrono::Utc>;
 
@@ -37,6 +42,13 @@ impl From<IdentifierType> for AttributeType {
             IdentifierType::Text => AttributeType::Text,
         }
     }
+}
+
+/// A stored column's metadata. The sole extension point for per-column facts;
+/// today it carries only its type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Column {
+    pub kind: AttributeType,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -92,36 +104,91 @@ impl Display for Relationship<'_> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct TableSchema<'sch> {
+/// The inert, unvalidated extract of a `SchemaBuilder`. The registry reads it to
+/// validate cross-schema, then mints a `TableSchema` from it; it is the only
+/// path to a schema.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SchemaParts<'sch> {
     pub name: &'sch str,
     pub primary_key: PrimaryKey<'sch>,
-    pub attributes: &'sch [(&'sch str, AttributeType)],
-    pub foreign_keys: &'sch [(&'sch str, AttributeType)],
-    pub relationships: &'sch [(&'sch str, Relationship<'sch>)],
+    pub attributes: IndexMap<&'sch str, Column>,
+    pub foreign_keys: IndexMap<&'sch str, Column>,
+    pub relationships: IndexMap<&'sch str, Relationship<'sch>>,
     pub text_index: bool,
 }
 
-fn find<'sch, 'req, T: 'sch>(
-    collection: &'sch [(&'sch str, T)],
-    name: &'req str,
-) -> Option<&'sch T> {
-    collection
-        .iter()
-        .find_map(|(key, value)| if *key == name { Some(value) } else { None })
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableSchema<'sch> {
+    name: &'sch str,
+    primary_key: PrimaryKey<'sch>,
+    attributes: IndexMap<&'sch str, Column>,
+    foreign_keys: IndexMap<&'sch str, Column>,
+    relationships: IndexMap<&'sch str, Relationship<'sch>>,
+    text_index: bool,
 }
 
 impl<'sch> TableSchema<'sch> {
+    /// Mints a validated schema from a builder's extract. Restricted to the
+    /// crate so construction always flows through the registry's validation.
+    pub(crate) fn new(parts: SchemaParts<'sch>) -> Self {
+        Self {
+            name: parts.name,
+            primary_key: parts.primary_key,
+            attributes: parts.attributes,
+            foreign_keys: parts.foreign_keys,
+            relationships: parts.relationships,
+            text_index: parts.text_index,
+        }
+    }
+
+    pub fn name(&self) -> &'sch str {
+        self.name
+    }
+
+    pub fn primary_key(&self) -> PrimaryKey<'sch> {
+        self.primary_key
+    }
+
+    pub fn text_index(&self) -> bool {
+        self.text_index
+    }
+
+    // The `&'sch self` receiver lends the borrowed values out of the owned maps
+    // for `'sch`; every caller holds the schema behind a `&'sch` reference.
+    pub fn attributes(&'sch self) -> impl Iterator<Item = (&'sch str, &'sch AttributeType)> {
+        self.attributes
+            .iter()
+            .map(|(name, column)| (*name, &column.kind))
+    }
+
+    pub fn foreign_keys(&'sch self) -> impl Iterator<Item = (&'sch str, &'sch AttributeType)> {
+        self.foreign_keys
+            .iter()
+            .map(|(name, column)| (*name, &column.kind))
+    }
+
+    pub fn relationships(
+        &'sch self,
+    ) -> impl Iterator<Item = (&'sch str, &'sch Relationship<'sch>)> {
+        self.relationships
+            .iter()
+            .map(|(name, relationship)| (*name, relationship))
+    }
+
     pub fn attribute(&self, attribute_name: &str) -> Option<AttributeType> {
-        find(self.attributes, attribute_name).copied()
+        self.attributes
+            .get(attribute_name)
+            .map(|column| column.kind)
     }
 
     pub fn foreign_key(&self, foreign_key_name: &str) -> Option<AttributeType> {
-        find(self.foreign_keys, foreign_key_name).copied()
+        self.foreign_keys
+            .get(foreign_key_name)
+            .map(|column| column.kind)
     }
 
     pub fn relationship(&self, relationship_name: &str) -> Option<&Relationship<'sch>> {
-        find(self.relationships, relationship_name)
+        self.relationships.get(relationship_name)
     }
 
     pub fn is_primary_key(&self, attribute_name: &str) -> bool {
@@ -129,24 +196,20 @@ impl<'sch> TableSchema<'sch> {
     }
 
     pub fn has_attribute(&self, column_name: &str) -> bool {
-        self.attributes.iter().any(|(name, _)| *name == column_name)
+        self.attributes.contains_key(column_name)
     }
 
     pub fn has_foreign_key(&self, foreign_key_name: &str) -> bool {
-        self.foreign_keys
-            .iter()
-            .any(|(name, _)| *name == foreign_key_name)
+        self.foreign_keys.contains_key(foreign_key_name)
     }
 
     pub fn has_relationship(&self, relationship_name: &str) -> bool {
-        self.relationships
-            .iter()
-            .any(|(name, _)| *name == relationship_name)
+        self.relationships.contains_key(relationship_name)
     }
 
     pub fn fields(&self) -> impl Iterator<Item = &'sch str> {
-        let columns = self.attributes.iter().map(|(name, _)| *name);
-        let relationships = self.relationships.iter().map(|(name, _)| *name);
+        let columns = self.attributes.keys().copied();
+        let relationships = self.relationships.keys().copied();
 
         columns.chain(relationships)
     }
@@ -163,6 +226,34 @@ impl<'sch> TableSchema<'sch> {
                 })
         }
     }
+}
+
+/// Shared fixture: a `products` schema exercising every builder facility.
+#[cfg(test)]
+pub(crate) fn products() -> SchemaBuilder<'static> {
+    SchemaBuilder::table("products")
+        .attribute("name", AttributeType::Text)
+        .attribute("price", AttributeType::Float)
+        .foreign_key("category_id", AttributeType::Integer)
+        .belongs_to(
+            "category",
+            Related::to("categories")
+                .pointing_own("category_id")
+                .to_related("id"),
+        )
+        .has_many(
+            "variants",
+            Related::to("variants")
+                .pointing_related("product_id")
+                .to_own("id"),
+        )
+        .has_one(
+            "position",
+            Related::to("display_positions")
+                .pointing_related("product_id")
+                .to_own("id"),
+        )
+        .text_index()
 }
 
 #[cfg(test)]
@@ -182,48 +273,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_table_schema_column_operations() {
-        let schema = TableSchema {
-            name: "products",
-            primary_key: PrimaryKey {
-                name: "id",
-                kind: IdentifierType::Integer,
-            },
-            attributes: &[("name", Text), ("price", Float)],
-            foreign_keys: &[("category_id", Integer)],
-            relationships: &[
-                (
-                    "category",
-                    Relationship::BelongsTo(RelatedResource {
-                        resource: "categories",
-                        keys: RelationshipKeys {
-                            own: "category_id",
-                            related: "id",
-                        },
-                    }),
-                ),
-                (
-                    "variants",
-                    Relationship::HasMany(RelatedResource {
-                        resource: "variants",
-                        keys: RelationshipKeys {
-                            own: "id",
-                            related: "product_id",
-                        },
-                    }),
-                ),
-                (
-                    "position",
-                    Relationship::HasOne(RelatedResource {
-                        resource: "display_positions",
-                        keys: RelationshipKeys {
-                            own: "id",
-                            related: "product_id",
-                        },
-                    }),
-                ),
-            ],
-            text_index: true,
-        };
+        let schema = TableSchema::new(products().into_parts());
 
         assert_eq!(schema.attribute("name"), Some(Text));
         assert_eq!(schema.attribute("price"), Some(Float));
