@@ -463,7 +463,7 @@ mod tests {
         .expect("schema set is consistent")
     }
 
-    fn schema(registry: &Registry) -> &TableSchema {
+    fn schema(registry: &Registry) -> &TableSchema<'_> {
         registry.schema("my_table").expect("my_table is registered")
     }
 
