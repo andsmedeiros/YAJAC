@@ -3,7 +3,6 @@
 //! supported construction method.
 
 use super::error::Error;
-use crate::database::adapters::Adapter as AdapterInterface;
 use crate::database::attributes::Attribute;
 use crate::database::error::Error::{
     InvalidEncodingFailure, ParseParameterFailure, QueryValidationFailure,
@@ -157,10 +156,10 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
     /// Attempts to extract supported parameters from the provided URI.
     /// Any parsing errors (encoding errors, failed validations etc.) will cause the function to
     /// return an `Err`.
-    pub fn parse<Adapter: AdapterInterface>(
+    pub fn parse(
         uri: &'req Uri,
         schema: &'sch TableSchema<'sch>,
-        registry: &'sch Registry<'sch, Adapter>,
+        registry: &'sch Registry<'sch>,
     ) -> Result<QueryParameters<'sch, 'req>, Error> {
         let mut query_parameters = Self {
             schema,
@@ -176,10 +175,10 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
         Ok(query_parameters)
     }
 
-    pub fn derive<Adapter: AdapterInterface>(
+    pub fn derive(
         &self,
         relationship: &str,
-        registry: &'sch Registry<'sch, Adapter>,
+        registry: &'sch Registry<'sch>,
     ) -> Result<Self, Error> {
         let include =
             self.include
@@ -262,11 +261,11 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
         }
     }
 
-    fn parse_fields<Adapter: AdapterInterface>(
+    fn parse_fields(
         &mut self,
         model: &'req str,
         fields: &'req str,
-        registry: &Registry<'sch, Adapter>,
+        registry: &Registry<'sch>,
     ) -> Result<(), Error> {
         if fields.is_empty() {
             return Ok(());
@@ -391,12 +390,12 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
         Ok(())
     }
 
-    fn parse_include<Adapter: AdapterInterface>(
+    fn parse_include(
         &mut self,
         include: &str,
         models: &mut HashMap<&'sch str, &'sch TableSchema<'sch>>,
         schema: &'sch TableSchema<'sch>,
-        registry: &'sch Registry<'sch, Adapter>,
+        registry: &'sch Registry<'sch>,
     ) -> Result<(), Error> {
         if !include.is_empty() {
             for include in include.split(",") {
@@ -507,11 +506,11 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
         Ok(())
     }
 
-    fn parse_query<Adapter: AdapterInterface>(
+    fn parse_query(
         &mut self,
         query: &'req str,
         schema: &'sch TableSchema<'sch>,
-        registry: &'sch Registry<'sch, Adapter>,
+        registry: &'sch Registry<'sch>,
     ) -> Result<(), Error> {
         let mut models_to_serialise = HashMap::from_iter([(schema.name(), schema)]);
 
@@ -554,12 +553,10 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::adapters::SqliteAdapter;
-    use crate::database::adapters::sqlite::Pool;
     use crate::database::registry::Registry as DatabaseRegistry;
     use crate::database::schema::{Related, SchemaBuilder};
 
-    type Registry = DatabaseRegistry<'static, SqliteAdapter>;
+    type Registry = DatabaseRegistry<'static>;
 
     fn articles() -> SchemaBuilder<'static> {
         SchemaBuilder::table("articles")
@@ -607,11 +604,8 @@ mod tests {
     }
 
     fn registry() -> Registry {
-        DatabaseRegistry::try_new(
-            Pool::memory().expect("in-memory pool is available"),
-            [articles(), users(), comments()],
-        )
-        .expect("schema set is consistent")
+        DatabaseRegistry::try_new([articles(), users(), comments()])
+            .expect("schema set is consistent")
     }
 
     fn mock_uri(query: &str) -> Uri {
