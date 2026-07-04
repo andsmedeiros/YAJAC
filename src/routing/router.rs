@@ -5,7 +5,10 @@ use super::{
 };
 use crate::{
     core::factories::to_document,
-    database::{adapters::Adapter as AdapterInterface, registry::Registry, schema::TableSchema},
+    database::{
+        adapters::Adapter as AdapterInterface, connection_manager::ConnectionManager,
+        schema::TableSchema,
+    },
     http_wrappers::{StatusCode, Uri},
     json_api::{document::Document, error::Error as JsonApiError},
 };
@@ -62,7 +65,7 @@ pub struct Router<'sch, Adapter: AdapterInterface> {
 impl<'sch, Adapter: AdapterInterface> Router<'sch, Adapter> {
     pub fn handle(
         &self,
-        database: &'sch Registry<'sch, Adapter>,
+        database: &'sch ConnectionManager<'sch, Adapter>,
         request: http::Request<Vec<u8>>,
     ) -> Response<Option<Document>> {
         let uri: Uri = request.uri().clone().into();
