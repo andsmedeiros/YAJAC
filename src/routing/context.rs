@@ -9,8 +9,8 @@ use crate::json_api::relationship::Linkage;
 use crate::{
     database::{
         adapters::Adapter as AdapterInterface, connection::Connection as ConnectionInterface,
-        pool::Pool as PoolInterface, query_parameters::QueryParameters, registry::Registry,
-        store::Store,
+        connection_manager::ConnectionManager, pool::Pool as PoolInterface,
+        query_parameters::QueryParameters, store::Store,
     },
     http_wrappers::{StatusCode, Uri},
     json_api::{
@@ -29,7 +29,7 @@ pub struct Context<'sch, 'req, Adapter: AdapterInterface>
 where
     'sch: 'req,
 {
-    pub registry: &'sch Registry<'sch, Adapter>,
+    pub manager: &'sch ConnectionManager<'sch, Adapter>,
     pub uri: &'req Uri,
     body: Option<Document>,
     headers: HeaderMap,
@@ -42,7 +42,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
     /// Builds a context from the request, harvesting its owned body and headers and discarding the
     /// rest; `uri` is lent separately so the borrowing query parameters can reference it.
     pub fn from_request(
-        registry: &'sch Registry<'sch, Adapter>,
+        manager: &'sch ConnectionManager<'sch, Adapter>,
         uri: &'req Uri,
         route: RouteParameters,
         request: Request,
@@ -50,7 +50,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
         let (parts, body) = request.into_parts();
 
         Self {
-            registry,
+            manager,
             uri,
             body,
             headers: parts.headers,
@@ -65,18 +65,18 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
         match self.connection.get() {
             Some(handle) => Ok(handle),
             None => {
-                let handle = self.registry.acquire()?;
+                let handle = self.manager.acquire()?;
                 Ok(self.connection.get_or_init(|| handle))
             }
         }
     }
 
     pub fn table(&self, name: &str) -> Result<Adapter::Table<'sch, '_>, Error> {
-        self.registry.table(name, self.connection()?)
+        self.manager.table(name, self.connection()?)
     }
 
     pub fn store(&self) -> Result<Store<'sch, '_, Adapter>, Error> {
-        Ok(Store::new(self.registry, self.connection()?))
+        Ok(Store::new(self.manager, self.connection()?))
     }
 
     pub fn require_resource(&mut self, schema: &TableSchema) -> Result<Resource, RoutingError> {
@@ -229,7 +229,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
         identifier: JsonApiIdentifier,
         schema: &str,
     ) -> Result<Identifier, RoutingError> {
-        let schema = self.registry.schema(schema)?;
+        let schema = self.manager.registry().schema(schema)?;
         let identifier = match identifier {
             JsonApiIdentifier::Existing { kind, id } if kind.as_str() == schema.name() => id,
             JsonApiIdentifier::New { .. } => {
@@ -287,7 +287,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
         match self.query.get() {
             Some(parameters) => Ok(parameters),
             None => {
-                let parameters = QueryParameters::parse(self.uri, schema, self.registry)?;
+                let parameters = QueryParameters::parse(self.uri, schema, self.manager.registry())?;
                 Ok(self.query.get_or_init(|| parameters))
             }
         }

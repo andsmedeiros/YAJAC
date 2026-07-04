@@ -433,14 +433,12 @@ impl<'sch> QueryBuilderInterface<'sch> for QueryBuilder<'sch> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::adapters::SqliteAdapter;
-    use crate::database::adapters::sqlite::Pool;
     use crate::database::registry::Registry as DatabaseRegistry;
     use crate::database::schema::SchemaBuilder;
     use crate::http_wrappers::Uri;
     use indexmap::IndexSet;
 
-    type Registry = DatabaseRegistry<'static, SqliteAdapter>;
+    type Registry = DatabaseRegistry<'static>;
 
     fn my_schema(text_index: bool) -> SchemaBuilder<'static> {
         let builder = SchemaBuilder::table("my_table")
@@ -456,11 +454,7 @@ mod tests {
     }
 
     fn registry(text_index: bool) -> Registry {
-        DatabaseRegistry::try_new(
-            Pool::memory().expect("in-memory pool is available"),
-            [my_schema(text_index)],
-        )
-        .expect("schema set is consistent")
+        DatabaseRegistry::try_new([my_schema(text_index)]).expect("schema set is consistent")
     }
 
     fn schema(registry: &Registry) -> &TableSchema<'_> {

@@ -28,16 +28,17 @@ The embedder-facing layer.
   prefixed `:` captures a `RouteParameters` entry. `RouterBuilder::resource::<T>(scope, schema)` wires
   the full CRUD set (`index`/`show`/`create`/`update` on both PUT and PATCH/`delete`);
   `read_only_resource::<T>(scope, schema)` wires only `index`/`show`. The `schema` — obtained from the
-  registry at wiring — is captured into each handler, which builds a per-request `ResourceContext` from
-  it. `Router::handle` is the single request→response boundary (see *Request lifecycle*).
+  connection manager's registry at wiring — is captured into each handler, which builds a per-request
+  `ResourceContext` from it. `Router::handle` is the single request→response boundary (see *Request
+  lifecycle*).
 - **`controller`** — `ResourceController` / `ReadOnlyResourceController`, traits an embedder implements
   per resource as a **stateless marker type**. Their default handler methods receive a
   `ResourceContext<'sch, 'req, Adapter>` — the resource's schema paired with the request `Context` — and
   reach record parsing, query parameters, the store and id resolution through it, already bound to the
   schema. Overriding a method customises one action.
-- **`context`** — `Context<'sch, 'req, Adapter>`, the per-request bundle (registry, uri, route params,
-  parsed request), wrapped by a `ResourceContext` before it reaches a handler. Where request
-  identifiers are materialised against the schema.
+- **`context`** — `Context<'sch, 'req, Adapter>`, the per-request bundle (connection manager, uri,
+  route params, parsed request), wrapped by a `ResourceContext` before it reaches a handler. Where
+  request identifiers are materialised against the schema.
 - **`request` / `responder` / `result` / `route_parameters` / `uri_generator` / `error`** — the
   request wrapper, response builders, the routing `Result`/`Error`, captured path params, link
   generation, and the routing error type.
@@ -58,13 +59,14 @@ The engine. Schema-driven and adapter-generic.
   an ergonomic **`SchemaBuilder`** (`schema::builder`) — the public, intended way to define a schema —
   which collects inert `SchemaParts` that the registry validates and mints into `TableSchema`s
   (`TableSchema::new` is `pub(crate)`).
-- **`registry`** — `Registry<'sch, Adapter>`: takes `SchemaBuilder`s and a pool and **owns** the
-  resulting schemas, validating-and-minting them in one fallible `try_build` step (per-schema
-  consistency + cross-schema relationship checks; a duplicate or inconsistent set is rejected at
-  construction). Owns the connection pool and hands out request-scoped `Table`s. Must be `Send + Sync`
-  (asserted in `adapters::tests`) so the borrowing request path can run on any worker thread. *(A
-  planned split will strip the pool into a `ConnectionManager`, leaving `Registry` a pure schema
-  collection — see* Known rework*.)*
+- **`registry`** — `Registry<'sch>`: takes `SchemaBuilder`s and **owns** the resulting schemas,
+  validating-and-minting them in one fallible `try_build` step (per-schema consistency + cross-schema
+  relationship checks; a duplicate or inconsistent set is rejected at construction). A pure schema
+  collection — it holds no storage.
+- **`connection_manager`** — `ConnectionManager<'sch, Adapter>`: binds a validated `Registry` (moved
+  in, pre-built) to a connection pool. The request path's single handle: it lends schemas (through
+  `registry()`) and hands out request-scoped connections and `Table`s. Must be `Send + Sync` (asserted
+  in `adapters::tests`) so the borrowing request path can run on any worker thread.
 - **`store`** — record/collection create/update/delete, including relationship persistence.
 - **`record` / `attributes` / `relationships` / `composite`** — materialised rows and their
   field/relationship data.
@@ -95,7 +97,7 @@ feature. `type Migrator` is intentionally commented out — migrations are not y
 
 ## Request lifecycle
 
-`Router::handle(&self, database: &'sch Registry<'sch, Adapter>, request: http::Request<Vec<u8>>)`:
+`Router::handle(&self, database: &'sch ConnectionManager<'sch, Adapter>, request: http::Request<Vec<u8>>)`:
 
 1. Extract `uri`, `method`, and non-empty path segments.
 2. Find the first `Route` matching method + arity, capturing `:param` segments into `RouteParameters`.
@@ -149,9 +151,6 @@ The near-term plan reshapes parts of this document; treat the following as in-fl
 - The **key-bearing signatures** (`Attributes`, `ForeignKeys`, `Relationships`, `QueryParameters`)
   will move from owned `String`s to schema-borrowed identifiers under a "parse, don't validate"
   validation layer.
-- The **registry** will shed the connection pool into a new `ConnectionManager` (a registry reference
-  plus the pool), leaving `Registry` a pure schema collection. A temporary `Pool`/`SqliteAdapter`
-  coupling in `attributes.rs`'s unit tests is to be undone then.
 - The **controller model** will grow: `ResourceContext` becomes a user-extensible per-request
   controller (`new(schema, context)` + user fields), and `Context` is renamed `RoutingContext`.
 - **Relationship endpoints** (`/:type/:id/relationships/:rel`) are not yet implemented; only resource

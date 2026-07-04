@@ -31,14 +31,14 @@ impl Adapter for SqliteAdapter {
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::SqliteAdapter;
-    use crate::database::registry::Registry;
+    use crate::database::connection_manager::ConnectionManager;
 
     fn assert_send_sync<T: Send + Sync>() {}
 
-    /// A registry over a real pool must be shareable across threads, so the request-handling path
-    /// that borrows it can run on whichever worker thread owns it.
+    /// The connection manager over a real pool must be shareable across threads, so the
+    /// request-handling path that borrows it can run on whichever worker thread owns it.
     #[test]
-    fn sqlite_registry_is_send_and_sync() {
-        assert_send_sync::<Registry<'static, SqliteAdapter>>();
+    fn sqlite_connection_manager_is_send_and_sync() {
+        assert_send_sync::<ConnectionManager<'static, SqliteAdapter>>();
     }
 }

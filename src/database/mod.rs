@@ -2,6 +2,7 @@ pub mod adapters;
 pub mod attributes;
 pub mod composite;
 pub mod connection;
+pub mod connection_manager;
 pub mod data_loader;
 pub mod error;
 pub mod migrator;
