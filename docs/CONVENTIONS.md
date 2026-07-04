@@ -44,7 +44,9 @@ should key them at `'sch`.
   the foreign key is on our table, `.pointing_related(fk).to_own(pk)` when it is on the related table.
 - **Tests build through the registry.** Fixtures construct `SchemaBuilder`s, pass them to
   `Registry::try_new`, and take a `&TableSchema` via `registry.schema(name)` — they do not reach for
-  the `pub(crate)` constructor.
+  the `pub(crate)` constructor. Pure schema-only tests build a bare pool-free `Registry`; tests that
+  touch the database wrap it in a `ConnectionManager` (`ConnectionManager::new(registry, pool)`) and
+  reach schemas through `manager.registry()`.
 - **Container order is observable.** Schema field/relationship order surfaces in generated SQL (column
   lists, `RETURNING`) and is test-pinned; keep order-preserving containers (`IndexMap`).
 
@@ -80,8 +82,8 @@ should key them at `'sch`.
 - Backends are feature-gated (`#[cfg(feature = "sqlite")]`) and implement `database::adapters::Adapter`.
   `default = ["sqlite"]`.
 - `builtin_migrations` stays **off** in dev/test.
-- A `Registry` over a real pool must stay `Send + Sync` (asserted in `adapters::tests`); don't
-  introduce non-shareable state into the request-handling path.
+- A `ConnectionManager` (registry + pool) must stay `Send + Sync` (asserted in `adapters::tests`);
+  don't introduce non-shareable state into the request-handling path.
 
 ## Pre-commit gate
 
