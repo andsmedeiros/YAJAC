@@ -1,27 +1,22 @@
 use super::{
-    adapters::Adapter as AdapterInterface,
     error::Error,
-    pool::Pool as PoolInterface,
     schema::{
         AttributeType, RelatedResource, Relationship, SchemaBuilder, SchemaParts, TableSchema,
     },
-    table::Table as TableInterface,
 };
 use std::collections::HashMap;
 
-pub struct Registry<'sch, Adapter: AdapterInterface> {
+/// An immutable, validated collection of schemas keyed by resource type. Holds no
+/// storage: binding a registry to a connection pool is `ConnectionManager`'s job.
+pub struct Registry<'sch> {
     schemas: HashMap<&'sch str, TableSchema<'sch>>,
-    pool: Adapter::Pool,
 }
 
-impl<'sch, Adapter: AdapterInterface> Registry<'sch, Adapter> {
+impl<'sch> Registry<'sch> {
     /// Builds the registry from schema builders: decomposes them into their raw
     /// parts and hands them to `try_build`, which validates the set and mints the
     /// schemas — the sole path by which a `TableSchema` comes into being.
-    pub fn try_new(
-        pool: Adapter::Pool,
-        builders: impl IntoIterator<Item = SchemaBuilder<'sch>>,
-    ) -> Result<Self, Error> {
+    pub fn try_new(builders: impl IntoIterator<Item = SchemaBuilder<'sch>>) -> Result<Self, Error> {
         let parts = builders
             .into_iter()
             .map(SchemaBuilder::into_parts)
@@ -29,7 +24,6 @@ impl<'sch, Adapter: AdapterInterface> Registry<'sch, Adapter> {
 
         Ok(Self {
             schemas: try_build(parts)?,
-            pool,
         })
     }
 
@@ -38,21 +32,6 @@ impl<'sch, Adapter: AdapterInterface> Registry<'sch, Adapter> {
             schema: name.to_string(),
             message: "The requested table is not registered".to_string(),
         })
-    }
-
-    /// Acquires a connection from the pool, held for the request.
-    pub fn acquire(&self) -> Result<<Adapter::Pool as PoolInterface>::Handle<'_>, Error> {
-        self.pool.acquire()
-    }
-
-    /// Builds a request-scoped table bound to `connection`. The schema reference
-    /// is lent from the registry, so the table lives no longer than this borrow.
-    pub fn table<'req>(
-        &self,
-        name: &str,
-        connection: &'req Adapter::Connection,
-    ) -> Result<Adapter::Table<'_, 'req>, Error> {
-        Ok(Adapter::Table::new(self.schema(name)?, connection))
     }
 }
 
