@@ -3,6 +3,7 @@ use yajac::database::QueryParameters;
 use yajac::database::adapters::SqliteAdapter;
 use yajac::database::adapters::sqlite::Pool as SqlitePool;
 use yajac::database::attributes::{Attribute, Row};
+use yajac::database::connection_manager::ConnectionManager;
 use yajac::database::data_loader::DataLoader;
 use yajac::database::record::Record;
 use yajac::database::registry::Registry;
@@ -115,11 +116,12 @@ fn schemas() -> [SchemaBuilder<'static>; 5] {
 
 fn with_database<F>(func: F) -> Result<(), Box<dyn Error>>
 where
-    F: FnOnce(&Registry<SqliteAdapter>) -> Result<(), Box<dyn Error>>,
+    F: FnOnce(&ConnectionManager<SqliteAdapter>) -> Result<(), Box<dyn Error>>,
 {
-    let registry = Registry::<SqliteAdapter>::try_new(SqlitePool::memory()?, schemas())?;
+    let manager: ConnectionManager<SqliteAdapter> =
+        ConnectionManager::new(Registry::try_new(schemas())?, SqlitePool::memory()?);
 
-    registry.acquire()?.execute_batch(
+    manager.acquire()?.execute_batch(
         "
         CREATE TABLE users (
             id INTEGER PRIMARY KEY,
@@ -162,18 +164,18 @@ where
         ",
     )?;
 
-    func(&registry)?;
+    func(&manager)?;
 
     Ok(())
 }
 
-fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error>> {
+fn seed_database(manager: &ConnectionManager<SqliteAdapter>) -> Result<(), Box<dyn Error>> {
     use Attribute::{Integer, Null};
 
-    let connection = registry.acquire()?;
+    let connection = manager.acquire()?;
 
     // Create users
-    let users_table = registry.table("users", &connection)?;
+    let users_table = manager.table("users", &connection)?;
     for (i, (username, email)) in [
         ("alice", "alice@example.com"),
         ("bob", "bob@example.com"),
@@ -196,7 +198,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
     }
 
     // Create profiles
-    let profiles_table = registry.table("profiles", &connection)?;
+    let profiles_table = manager.table("profiles", &connection)?;
     for (id, user_id, bio, avatar) in [
         (1, 1, "Alice's bio", "https://example.com/alice.jpg"),
         (2, 2, "Bob's bio", "https://example.com/bob.jpg"),
@@ -217,7 +219,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
     }
 
     // Create posts
-    let posts_table = registry.table("posts", &connection)?;
+    let posts_table = manager.table("posts", &connection)?;
     for (id, author_id, title, content, published) in [
         (
             1,
@@ -250,7 +252,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
     }
 
     // Create comments (including nested replies for 4-level depth)
-    let comments_table = registry.table("comments", &connection)?;
+    let comments_table = manager.table("comments", &connection)?;
     for (id, post_id, author_id, parent_id, content) in [
         // Post 1 comments - 4 levels deep
         (1, 1, 2, Null, "Bob commenting on Alice's first post"),
@@ -304,7 +306,7 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
     }
 
     // Create tags
-    let tags_table = registry.table("tags", &connection)?;
+    let tags_table = manager.table("tags", &connection)?;
     for (id, name) in [(1, "rust"), (2, "programming"), (3, "web"), (4, "database")] {
         tags_table.insert(
             Row::from_iter([
@@ -321,21 +323,21 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     colog::init();
 
-    with_database(|registry| {
-        seed_database(registry)?;
+    with_database(|manager| {
+        seed_database(manager)?;
 
         let uri: Uri = "/users?include=posts.comments.replies.replies".parse()?;
-        let schema = registry.schema("users")?;
-        let query_params = QueryParameters::parse(&uri, schema, registry)?;
+        let schema = manager.registry().schema("users")?;
+        let query_params = QueryParameters::parse(&uri, schema, manager.registry())?;
 
-        let connection = registry.acquire()?;
-        let mut collection = registry
+        let connection = manager.acquire()?;
+        let mut collection = manager
             .table("users", &connection)?
             .query(&query_params)?
             .into_iter()
             .map(|row| Record::try_from_row(schema, row))
             .collect::<Result<Vec<_>, _>>()?;
-        let included = DataLoader::new(registry, &connection)
+        let included = DataLoader::new(manager, &connection)
             .load_for_collection(&mut collection, &query_params)?;
         let document = to_document(&collection, included, &uri, &DefaultUriGenerator::default())?;
         println!("{}", serde_json::to_string_pretty(&document)?);
