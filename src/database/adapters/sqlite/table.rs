@@ -33,16 +33,17 @@ mod tests {
     use crate::database::{
         adapters::SqliteAdapter,
         attributes::{Attribute, Identifier, Row},
+        connection_manager::ConnectionManager,
         error::Error,
         query_parameters::{FilterParameters, FilterValue, QueryParameters},
-        registry::Registry as DatabaseRegistry,
+        registry::Registry,
         schema::{AttributeType, SchemaBuilder, TableSchema},
         table::Table,
     };
     use crate::http_wrappers::Uri;
     use std::error::Error as StdError;
 
-    type Registry = DatabaseRegistry<'static, SqliteAdapter>;
+    type Manager = ConnectionManager<'static, SqliteAdapter>;
 
     fn my_schema() -> SchemaBuilder<'static> {
         SchemaBuilder::table("my_table")
@@ -52,18 +53,20 @@ mod tests {
             .text_index()
     }
 
-    fn schema(registry: &Registry) -> &TableSchema<'_> {
-        registry.schema("my_table").expect("my_table is registered")
+    fn schema(manager: &Manager) -> &TableSchema<'_> {
+        manager
+            .registry()
+            .schema("my_table")
+            .expect("my_table is registered")
     }
 
-    fn registry() -> Registry {
-        let registry = Registry::try_new(
+    fn manager() -> Manager {
+        let manager: Manager = ConnectionManager::new(
+            Registry::try_new([my_schema()]).expect("schema set is consistent"),
             Pool::memory().expect("in-memory pool is available"),
-            [my_schema()],
-        )
-        .expect("schema set is consistent");
+        );
 
-        registry
+        manager
             .acquire()
             .expect("connection is available")
             .execute_batch(
@@ -83,15 +86,15 @@ mod tests {
             )
             .expect("schema creation succeeds");
 
-        registry
+        manager
     }
 
-    fn seeded_registry() -> Result<Registry, Box<dyn StdError>> {
-        let registry = registry();
+    fn seeded_manager() -> Result<Manager, Box<dyn StdError>> {
+        let manager = manager();
 
         {
-            let connection = registry.acquire()?;
-            let table = registry.table("my_table", &connection)?;
+            let connection = manager.acquire()?;
+            let table = manager.table("my_table", &connection)?;
 
             for (col1, col2, col3) in [
                 ("The quick brown fox", "jumps over the lazy dog", 42),
@@ -104,12 +107,12 @@ mod tests {
                         ("col2".to_string(), Attribute::Text(col2.to_string())),
                         ("col3".to_string(), Attribute::Integer(col3)),
                     ]),
-                    &QueryParameters::new(schema(&registry)),
+                    &QueryParameters::new(schema(&manager)),
                 )?;
             }
         }
 
-        Ok(registry)
+        Ok(manager)
     }
 
     fn mock_uri(query: &str) -> Uri {
@@ -120,12 +123,12 @@ mod tests {
 
     #[test]
     fn test_query_without_records() {
-        let registry = registry();
-        let connection = registry.acquire().unwrap();
-        let result = registry
+        let manager = manager();
+        let connection = manager.acquire().unwrap();
+        let result = manager
             .table("my_table", &connection)
             .unwrap()
-            .query(&QueryParameters::new(schema(&registry)));
+            .query(&QueryParameters::new(schema(&manager)));
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
@@ -133,12 +136,12 @@ mod tests {
 
     #[test]
     fn test_first_without_records() {
-        let registry = registry();
-        let connection = registry.acquire().unwrap();
-        let result = registry
+        let manager = manager();
+        let connection = manager.acquire().unwrap();
+        let result = manager
             .table("my_table", &connection)
             .unwrap()
-            .first(&QueryParameters::new(schema(&registry)));
+            .first(&QueryParameters::new(schema(&manager)));
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
@@ -146,11 +149,11 @@ mod tests {
 
     #[test]
     fn test_find_without_records() {
-        let registry = registry();
-        let connection = registry.acquire().unwrap();
-        let result = registry.table("my_table", &connection).unwrap().find(
+        let manager = manager();
+        let connection = manager.acquire().unwrap();
+        let result = manager.table("my_table", &connection).unwrap().find(
             Identifier::Integer(1),
-            &QueryParameters::new(schema(&registry)),
+            &QueryParameters::new(schema(&manager)),
         );
 
         assert!(result.is_err());
@@ -159,18 +162,18 @@ mod tests {
 
     #[test]
     fn test_query() -> Result<(), Box<dyn StdError>> {
-        let registry = seeded_registry()?;
-        let connection = registry.acquire()?;
-        let table = registry.table("my_table", &connection)?;
+        let manager = seeded_manager()?;
+        let connection = manager.acquire()?;
+        let table = manager.table("my_table", &connection)?;
 
-        let default_result = table.query(&QueryParameters::new(schema(&registry)))?;
+        let default_result = table.query(&QueryParameters::new(schema(&manager)))?;
         assert_eq!(default_result.len(), 3);
 
         let single_uri = mock_uri("filter[col1]=eq:The%20quick%20brown%20fox&filter[col3]=eq:42");
         let single = table.query(&QueryParameters::parse(
             &single_uri,
-            schema(&registry),
-            &registry,
+            schema(&manager),
+            manager.registry(),
         )?)?;
         assert_eq!(single.len(), 1);
         assert_eq!(
@@ -181,8 +184,8 @@ mod tests {
         let many_uri = mock_uri("filter[col2]=like:jump");
         let many = table.query(&QueryParameters::parse(
             &many_uri,
-            schema(&registry),
-            &registry,
+            schema(&manager),
+            manager.registry(),
         )?)?;
         assert_eq!(many.len(), 2);
         assert_eq!(many[0].get("col3").unwrap(), &Attribute::Integer(42));
@@ -191,16 +194,16 @@ mod tests {
         let none_uri = mock_uri("filter[col3]=lt:50&filter[col1]=like:I%20am%20not%20here");
         let none = table.query(&QueryParameters::parse(
             &none_uri,
-            schema(&registry),
-            &registry,
+            schema(&manager),
+            manager.registry(),
         )?)?;
         assert_eq!(none.len(), 0);
 
         let search_uri = mock_uri("search=five,box");
         let search = table.query(&QueryParameters::parse(
             &search_uri,
-            schema(&registry),
-            &registry,
+            schema(&manager),
+            manager.registry(),
         )?)?;
         assert_eq!(search.len(), 2);
         assert_eq!(search[0].get("col3").unwrap(), &Attribute::Integer(1000));
@@ -211,11 +214,11 @@ mod tests {
 
     #[test]
     fn test_first() -> Result<(), Box<dyn StdError>> {
-        let registry = seeded_registry()?;
-        let connection = registry.acquire()?;
-        let result = registry
+        let manager = seeded_manager()?;
+        let connection = manager.acquire()?;
+        let result = manager
             .table("my_table", &connection)?
-            .first(&QueryParameters::new(schema(&registry)))?;
+            .first(&QueryParameters::new(schema(&manager)))?;
 
         assert!(result.is_some());
         assert_eq!(
@@ -228,11 +231,11 @@ mod tests {
 
     #[test]
     fn test_find() {
-        let registry = registry();
-        let connection = registry.acquire().unwrap();
-        let result = registry.table("my_table", &connection).unwrap().find(
+        let manager = manager();
+        let connection = manager.acquire().unwrap();
+        let result = manager.table("my_table", &connection).unwrap().find(
             Identifier::Integer(1),
-            &QueryParameters::new(schema(&registry)),
+            &QueryParameters::new(schema(&manager)),
         );
 
         assert!(result.is_err());
@@ -241,11 +244,11 @@ mod tests {
 
     #[test]
     fn test_insert() -> Result<(), Box<dyn StdError>> {
-        let registry = registry();
-        let connection = registry.acquire()?;
-        let result = registry.table("my_table", &connection)?.insert(
+        let manager = manager();
+        let connection = manager.acquire()?;
+        let result = manager.table("my_table", &connection)?.insert(
             Row::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]),
-            &QueryParameters::new(schema(&registry)),
+            &QueryParameters::new(schema(&manager)),
         )?;
 
         assert_eq!(
@@ -258,19 +261,19 @@ mod tests {
 
     #[test]
     fn test_update() -> Result<(), Box<dyn StdError>> {
-        let registry = registry();
-        let connection = registry.acquire()?;
-        let table = registry.table("my_table", &connection)?;
+        let manager = manager();
+        let connection = manager.acquire()?;
+        let table = manager.table("my_table", &connection)?;
 
         table.insert(
             Row::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]),
-            &QueryParameters::new(schema(&registry)),
+            &QueryParameters::new(schema(&manager)),
         )?;
 
         let result = table.update(
             Identifier::Integer(1),
             Row::from_iter([("col1".to_string(), Attribute::Text("new_value".to_string()))]),
-            &QueryParameters::new(schema(&registry)),
+            &QueryParameters::new(schema(&manager)),
         )?;
 
         assert_eq!(
@@ -283,20 +286,20 @@ mod tests {
 
     #[test]
     fn test_delete() -> Result<(), Box<dyn StdError>> {
-        let registry = registry();
-        let connection = registry.acquire()?;
-        let table = registry.table("my_table", &connection)?;
+        let manager = manager();
+        let connection = manager.acquire()?;
+        let table = manager.table("my_table", &connection)?;
 
         table.insert(
             Row::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]),
-            &QueryParameters::new(schema(&registry)),
+            &QueryParameters::new(schema(&manager)),
         )?;
 
         table.delete(Identifier::Integer(1))?;
 
         let result = table.find(
             Identifier::Integer(1),
-            &QueryParameters::new(schema(&registry)),
+            &QueryParameters::new(schema(&manager)),
         );
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::RecordNotFound));
@@ -306,19 +309,19 @@ mod tests {
 
     #[test]
     fn test_insert_batch() -> Result<(), Box<dyn StdError>> {
-        let registry = registry();
-        let connection = registry.acquire()?;
-        let table = registry.table("my_table", &connection)?;
+        let manager = manager();
+        let connection = manager.acquire()?;
+        let table = manager.table("my_table", &connection)?;
 
         let rows = vec![
             Row::from_iter([("col1".to_string(), Attribute::Text("a".to_string()))]),
             Row::from_iter([("col1".to_string(), Attribute::Text("b".to_string()))]),
         ];
-        let inserted = table.insert_batch(rows, &QueryParameters::new(schema(&registry)))?;
+        let inserted = table.insert_batch(rows, &QueryParameters::new(schema(&manager)))?;
 
         assert_eq!(inserted.len(), 2);
         assert_eq!(
-            table.query(&QueryParameters::new(schema(&registry)))?.len(),
+            table.query(&QueryParameters::new(schema(&manager)))?.len(),
             2
         );
 
@@ -327,16 +330,16 @@ mod tests {
 
     #[test]
     fn test_insert_batch_empty_is_a_noop() -> Result<(), Box<dyn StdError>> {
-        let registry = registry();
-        let connection = registry.acquire()?;
-        let table = registry.table("my_table", &connection)?;
+        let manager = manager();
+        let connection = manager.acquire()?;
+        let table = manager.table("my_table", &connection)?;
 
-        let inserted = table.insert_batch(Vec::new(), &QueryParameters::new(schema(&registry)))?;
+        let inserted = table.insert_batch(Vec::new(), &QueryParameters::new(schema(&manager)))?;
 
         assert!(inserted.is_empty());
         assert!(
             table
-                .query(&QueryParameters::new(schema(&registry)))?
+                .query(&QueryParameters::new(schema(&manager)))?
                 .is_empty()
         );
 
@@ -345,11 +348,11 @@ mod tests {
 
     #[test]
     fn test_delete_batch_scoped_by_filter() -> Result<(), Box<dyn StdError>> {
-        let registry = seeded_registry()?;
-        let connection = registry.acquire()?;
-        let table = registry.table("my_table", &connection)?;
+        let manager = seeded_manager()?;
+        let connection = manager.acquire()?;
+        let table = manager.table("my_table", &connection)?;
 
-        let mut parameters = QueryParameters::new(schema(&registry));
+        let mut parameters = QueryParameters::new(schema(&manager));
         parameters.filter = Some(FilterParameters::from([(
             "col3",
             vec![FilterValue::LessThan(Attribute::Integer(0))],
@@ -357,7 +360,7 @@ mod tests {
         table.delete_batch(&parameters)?;
 
         assert_eq!(
-            table.query(&QueryParameters::new(schema(&registry)))?.len(),
+            table.query(&QueryParameters::new(schema(&manager)))?.len(),
             2
         );
 
@@ -366,15 +369,15 @@ mod tests {
 
     #[test]
     fn test_delete_batch_unscoped_clears_table() -> Result<(), Box<dyn StdError>> {
-        let registry = seeded_registry()?;
-        let connection = registry.acquire()?;
-        let table = registry.table("my_table", &connection)?;
+        let manager = seeded_manager()?;
+        let connection = manager.acquire()?;
+        let table = manager.table("my_table", &connection)?;
 
-        table.delete_batch(&QueryParameters::new(schema(&registry)))?;
+        table.delete_batch(&QueryParameters::new(schema(&manager)))?;
 
         assert!(
             table
-                .query(&QueryParameters::new(schema(&registry)))?
+                .query(&QueryParameters::new(schema(&manager)))?
                 .is_empty()
         );
 
@@ -383,10 +386,10 @@ mod tests {
 
     #[test]
     fn test_transaction_rolls_back_on_error() -> Result<(), Box<dyn StdError>> {
-        let registry = registry();
-        let connection = registry.acquire()?;
-        let table = registry.table("my_table", &connection)?;
-        let parameters = QueryParameters::new(schema(&registry));
+        let manager = manager();
+        let connection = manager.acquire()?;
+        let table = manager.table("my_table", &connection)?;
+        let parameters = QueryParameters::new(schema(&manager));
 
         let result: Result<(), Error> = connection.transaction(|| {
             table.insert(
