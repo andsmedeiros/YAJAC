@@ -5,11 +5,11 @@ use crate::database::adapters::Adapter as AdapterInterface;
 use crate::database::attributes::{Attribute, Identifier, Row};
 use crate::database::composite::{Composite, CompositeCollection, CompositeRecord};
 use crate::database::connection::Connection as ConnectionInterface;
+use crate::database::connection_manager::ConnectionManager;
 use crate::database::data_loader::DataLoader;
 use crate::database::error::Error;
 use crate::database::query_parameters::{FilterParameters, FilterValue, QueryParameters};
 use crate::database::record::{Indexable, Record, RecordPatch, Refreshable};
-use crate::database::registry::Registry;
 use crate::database::relationships::Relationship as DatabaseRelationship;
 use crate::database::schema::{Relationship as SchemaRelationship, TableSchema};
 use crate::database::table::Table as TableInterface;
@@ -17,17 +17,17 @@ use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 
 pub struct Store<'sch, 'req, Adapter: AdapterInterface> {
-    registry: &'sch Registry<'sch, Adapter>,
+    manager: &'sch ConnectionManager<'sch, Adapter>,
     connection: &'req Adapter::Connection,
 }
 
 impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
     pub fn new(
-        registry: &'sch Registry<'sch, Adapter>,
+        manager: &'sch ConnectionManager<'sch, Adapter>,
         connection: &'req Adapter::Connection,
     ) -> Self {
         Store {
-            registry,
+            manager,
             connection,
         }
     }
@@ -89,7 +89,8 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                 if let SchemaRelationship::BelongsTo(descriptor) = descriptor {
                     match linkage {
                         DatabaseRelationship::BelongsTo(id) => {
-                            let related_table = self.registry.schema(descriptor.resource)?;
+                            let related_table =
+                                self.manager.registry().schema(descriptor.resource)?;
                             if related_table.is_primary_key(descriptor.keys.related) {
                                 record
                                     .foreign_keys
@@ -244,7 +245,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
         });
 
         for (name, patches) in queries {
-            let schema = self.registry.schema(name)?;
+            let schema = self.manager.registry().schema(name)?;
             let table = self.table(schema)?;
             for (patch, ids) in &patches {
                 table.update_batch(
@@ -288,7 +289,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
 
         if replace {
             for (schema, columns) in full_detachments {
-                let schema = self.registry.schema(schema)?;
+                let schema = self.manager.registry().schema(schema)?;
                 let table = self.table(schema)?;
 
                 for (column, values) in columns {
@@ -438,11 +439,11 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
     }
 
     fn table(&self, schema: &'sch TableSchema<'sch>) -> Result<Adapter::Table<'sch, 'req>, Error> {
-        self.registry.table(schema.name(), self.connection)
+        self.manager.table(schema.name(), self.connection)
     }
 
     fn loader(&self) -> DataLoader<'sch, 'req, Adapter> {
-        DataLoader::new(self.registry, self.connection)
+        DataLoader::new(self.manager, self.connection)
     }
 }
 
@@ -454,6 +455,7 @@ mod tests {
     use crate::database::adapters::SqliteAdapter;
     use crate::database::adapters::sqlite::{Connection, Pool};
     use crate::database::attributes::{Attribute, Attributes, Identifier, Row};
+    use crate::database::connection_manager::ConnectionManager;
     use crate::database::error::Error;
     use crate::database::query_parameters::{FilterParameters, FilterValue, QueryParameters};
     use crate::database::record::{Builder, Record, RecordPatch};
@@ -508,22 +510,25 @@ mod tests {
     }
 
     fn schema<'sch>(
-        registry: &'sch Registry<SqliteAdapter>,
+        manager: &'sch ConnectionManager<SqliteAdapter>,
         name: &str,
     ) -> &'sch TableSchema<'sch> {
-        registry.schema(name).expect("schema is registered")
+        manager
+            .registry()
+            .schema(name)
+            .expect("schema is registered")
     }
 
-    fn with_registry<F>(func: F) -> Result<(), Box<dyn StdError>>
+    fn with_manager<F>(func: F) -> Result<(), Box<dyn StdError>>
     where
-        F: FnOnce(&Registry<SqliteAdapter>) -> Result<(), Box<dyn StdError>>,
+        F: FnOnce(&ConnectionManager<SqliteAdapter>) -> Result<(), Box<dyn StdError>>,
     {
-        let registry = Registry::<SqliteAdapter>::try_new(
+        let manager: ConnectionManager<SqliteAdapter> = ConnectionManager::new(
+            Registry::try_new([users_schema(), posts_schema(), profiles_schema()])?,
             Pool::memory()?,
-            [users_schema(), posts_schema(), profiles_schema()],
-        )?;
+        );
 
-        registry.acquire()?.execute_batch(
+        manager.acquire()?.execute_batch(
             "
             CREATE TABLE users (
                 id INTEGER PRIMARY KEY,
@@ -546,71 +551,71 @@ mod tests {
             ",
         )?;
 
-        func(&registry)
+        func(&manager)
     }
 
     fn seed_user(
-        registry: &Registry<SqliteAdapter>,
+        manager: &ConnectionManager<SqliteAdapter>,
         connection: &Connection,
         id: i64,
         name: &str,
     ) -> Result<(), Error> {
-        registry.table("users", connection)?.insert(
+        manager.table("users", connection)?.insert(
             Row::from_iter([
                 ("id".to_string(), Attribute::Integer(id)),
                 ("name".to_string(), Attribute::Text(name.to_string())),
             ]),
-            &QueryParameters::new(schema(registry, "users")),
+            &QueryParameters::new(schema(manager, "users")),
         )?;
 
         Ok(())
     }
 
     fn seed_post(
-        registry: &Registry<SqliteAdapter>,
+        manager: &ConnectionManager<SqliteAdapter>,
         connection: &Connection,
         id: i64,
         author_id: i64,
         title: &str,
     ) -> Result<(), Error> {
-        registry.table("posts", connection)?.insert(
+        manager.table("posts", connection)?.insert(
             Row::from_iter([
                 ("id".to_string(), Attribute::Integer(id)),
                 ("author_id".to_string(), Attribute::Integer(author_id)),
                 ("title".to_string(), Attribute::Text(title.to_string())),
             ]),
-            &QueryParameters::new(schema(registry, "posts")),
+            &QueryParameters::new(schema(manager, "posts")),
         )?;
 
         Ok(())
     }
 
     fn seed_profile(
-        registry: &Registry<SqliteAdapter>,
+        manager: &ConnectionManager<SqliteAdapter>,
         connection: &Connection,
         id: i64,
         user_id: i64,
         bio: &str,
     ) -> Result<(), Error> {
-        registry.table("profiles", connection)?.insert(
+        manager.table("profiles", connection)?.insert(
             Row::from_iter([
                 ("id".to_string(), Attribute::Integer(id)),
                 ("user_id".to_string(), Attribute::Integer(user_id)),
                 ("bio".to_string(), Attribute::Text(bio.to_string())),
             ]),
-            &QueryParameters::new(schema(registry, "profiles")),
+            &QueryParameters::new(schema(manager, "profiles")),
         )?;
 
         Ok(())
     }
 
     fn new_post<'sch>(
-        registry: &'sch Registry<SqliteAdapter>,
+        manager: &'sch ConnectionManager<SqliteAdapter>,
         title: &str,
         author: i64,
     ) -> Record<'sch> {
         Record::from((
-            schema(registry, "posts"),
+            schema(manager, "posts"),
             Attributes::from_iter([("title".to_string(), Attribute::Text(title.to_string()))]),
             Relationships::from_iter([(
                 "author",
@@ -623,15 +628,15 @@ mod tests {
 
     #[test]
     fn test_fetch_record_returns_content() -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            seed_user(registry, &connection, 1, "alice")?;
-            seed_post(registry, &connection, 1, 1, "hello")?;
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_post(manager, &connection, 1, 1, "hello")?;
 
-            let store = Store::new(registry, &connection);
-            let parameters = QueryParameters::new(schema(registry, "posts"));
+            let store = Store::new(manager, &connection);
+            let parameters = QueryParameters::new(schema(manager, "posts"));
             let fetched = store.fetch_record(
-                schema(registry, "posts"),
+                schema(manager, "posts"),
                 Identifier::Integer(1),
                 &parameters,
             )?;
@@ -650,16 +655,17 @@ mod tests {
 
     #[test]
     fn test_fetch_record_loads_includes() -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            seed_user(registry, &connection, 1, "alice")?;
-            seed_post(registry, &connection, 1, 1, "hello")?;
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_post(manager, &connection, 1, 1, "hello")?;
 
-            let store = Store::new(registry, &connection);
+            let store = Store::new(manager, &connection);
             let uri: Uri = "/posts/1?include=author".parse()?;
-            let parameters = QueryParameters::parse(&uri, schema(registry, "posts"), registry)?;
+            let parameters =
+                QueryParameters::parse(&uri, schema(manager, "posts"), manager.registry())?;
             let fetched = store.fetch_record(
-                schema(registry, "posts"),
+                schema(manager, "posts"),
                 Identifier::Integer(1),
                 &parameters,
             )?;
@@ -674,13 +680,13 @@ mod tests {
 
     #[test]
     fn test_fetch_record_missing_is_not_found() -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            let store = Store::new(registry, &connection);
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            let store = Store::new(manager, &connection);
 
-            let parameters = QueryParameters::new(schema(registry, "posts"));
+            let parameters = QueryParameters::new(schema(manager, "posts"));
             let result = store.fetch_record(
-                schema(registry, "posts"),
+                schema(manager, "posts"),
                 Identifier::Integer(999),
                 &parameters,
             );
@@ -695,16 +701,16 @@ mod tests {
 
     #[test]
     fn test_fetch_collection_returns_all_records() -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            seed_user(registry, &connection, 1, "alice")?;
-            seed_post(registry, &connection, 1, 1, "one")?;
-            seed_post(registry, &connection, 2, 1, "two")?;
-            seed_post(registry, &connection, 3, 1, "three")?;
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_post(manager, &connection, 1, 1, "one")?;
+            seed_post(manager, &connection, 2, 1, "two")?;
+            seed_post(manager, &connection, 3, 1, "three")?;
 
-            let store = Store::new(registry, &connection);
-            let parameters = QueryParameters::new(schema(registry, "posts"));
-            let fetched = store.fetch_collection(schema(registry, "posts"), &parameters)?;
+            let store = Store::new(manager, &connection);
+            let parameters = QueryParameters::new(schema(manager, "posts"));
+            let fetched = store.fetch_collection(schema(manager, "posts"), &parameters)?;
 
             assert_eq!(fetched.content.len(), 3);
 
@@ -714,24 +720,24 @@ mod tests {
 
     #[test]
     fn test_fetch_collection_scoped_by_filter() -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            seed_user(registry, &connection, 1, "alice")?;
-            seed_user(registry, &connection, 2, "bob")?;
-            seed_post(registry, &connection, 1, 1, "alice-one")?;
-            seed_post(registry, &connection, 2, 1, "alice-two")?;
-            seed_post(registry, &connection, 3, 2, "bob-one")?;
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_user(manager, &connection, 2, "bob")?;
+            seed_post(manager, &connection, 1, 1, "alice-one")?;
+            seed_post(manager, &connection, 2, 1, "alice-two")?;
+            seed_post(manager, &connection, 3, 2, "bob-one")?;
 
-            let store = Store::new(registry, &connection);
+            let store = Store::new(manager, &connection);
             let parameters = QueryParameters {
                 filter: Some(FilterParameters::from([(
                     "author_id",
                     vec![FilterValue::Equal(Attribute::Integer(1))],
                 )])),
-                ..QueryParameters::new(schema(registry, "posts"))
+                ..QueryParameters::new(schema(manager, "posts"))
             };
 
-            let fetched = store.fetch_collection(schema(registry, "posts"), &parameters)?;
+            let fetched = store.fetch_collection(schema(manager, "posts"), &parameters)?;
 
             assert_eq!(fetched.content.len(), 2);
             for record in &fetched.content {
@@ -747,17 +753,18 @@ mod tests {
 
     #[test]
     fn test_fetch_collection_loads_includes() -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            seed_user(registry, &connection, 1, "alice")?;
-            seed_user(registry, &connection, 2, "bob")?;
-            seed_post(registry, &connection, 1, 1, "alice-one")?;
-            seed_post(registry, &connection, 2, 2, "bob-one")?;
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_user(manager, &connection, 2, "bob")?;
+            seed_post(manager, &connection, 1, 1, "alice-one")?;
+            seed_post(manager, &connection, 2, 2, "bob-one")?;
 
-            let store = Store::new(registry, &connection);
+            let store = Store::new(manager, &connection);
             let uri: Uri = "/posts?include=author".parse()?;
-            let parameters = QueryParameters::parse(&uri, schema(registry, "posts"), registry)?;
-            let fetched = store.fetch_collection(schema(registry, "posts"), &parameters)?;
+            let parameters =
+                QueryParameters::parse(&uri, schema(manager, "posts"), manager.registry())?;
+            let fetched = store.fetch_collection(schema(manager, "posts"), &parameters)?;
 
             assert_eq!(fetched.content.len(), 2);
             assert_eq!(fetched.included.len(), 2);
@@ -776,13 +783,13 @@ mod tests {
 
     #[test]
     fn test_create_record_persists_attributes_and_belongs_to() -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            seed_user(registry, &connection, 1, "alice")?;
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
 
-            let store = Store::new(registry, &connection);
-            let parameters = QueryParameters::new(schema(registry, "posts"));
-            let created = store.create_record(new_post(registry, "Hello", 1), &parameters)?;
+            let store = Store::new(manager, &connection);
+            let parameters = QueryParameters::new(schema(manager, "posts"));
+            let created = store.create_record(new_post(manager, "Hello", 1), &parameters)?;
 
             assert_eq!(created.content.require("title")?.as_string()?, "Hello");
             assert_eq!(
@@ -790,9 +797,9 @@ mod tests {
                 &Relationship::BelongsTo(Identifier::Integer(1))
             );
 
-            let persisted = registry
+            let persisted = manager
                 .table("posts", &connection)?
-                .query(&QueryParameters::new(schema(registry, "posts")))?;
+                .query(&QueryParameters::new(schema(manager, "posts")))?;
             assert_eq!(persisted.len(), 1);
             assert_eq!(persisted[0]["author_id"], Attribute::Integer(1));
 
@@ -802,28 +809,28 @@ mod tests {
 
     #[test]
     fn test_create_record_links_has_many() -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            seed_user(registry, &connection, 1, "alice")?;
-            seed_post(registry, &connection, 1, 1, "one")?;
-            seed_post(registry, &connection, 2, 1, "two")?;
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_post(manager, &connection, 1, 1, "one")?;
+            seed_post(manager, &connection, 2, 1, "two")?;
 
-            let store = Store::new(registry, &connection);
+            let store = Store::new(manager, &connection);
             let attributes =
                 Attributes::from_iter([("name".to_string(), Attribute::Text("dave".to_string()))]);
             let relationships = Relationships::from_iter([(
                 "posts",
                 Relationship::HasMany(vec![Identifier::Integer(1), Identifier::Integer(2)]),
             )]);
-            let user = Record::from((schema(registry, "users"), attributes, relationships));
+            let user = Record::from((schema(manager, "users"), attributes, relationships));
 
-            let parameters = QueryParameters::new(schema(registry, "users"));
+            let parameters = QueryParameters::new(schema(manager, "users"));
             let created = store.create_record(user, &parameters)?;
             let new_id = *created.content.require_id()?.as_i64()?;
 
-            let posts = registry
+            let posts = manager
                 .table("posts", &connection)?
-                .query(&QueryParameters::new(schema(registry, "posts")))?;
+                .query(&QueryParameters::new(schema(manager, "posts")))?;
             assert_eq!(posts.len(), 2);
             for post in &posts {
                 assert_eq!(post["author_id"], Attribute::Integer(new_id));
@@ -837,14 +844,14 @@ mod tests {
 
     #[test]
     fn test_update_record_updates_attributes() -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            seed_user(registry, &connection, 1, "alice")?;
-            seed_post(registry, &connection, 1, 1, "before")?;
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_post(manager, &connection, 1, 1, "before")?;
 
-            let store = Store::new(registry, &connection);
+            let store = Store::new(manager, &connection);
             let record = Record::from_attributes(
-                schema(registry, "posts"),
+                schema(manager, "posts"),
                 Attributes::from_iter([(
                     "title".to_string(),
                     Attribute::Text("after".to_string()),
@@ -852,12 +859,12 @@ mod tests {
             )
             .with_id(Identifier::Integer(1).into());
 
-            let parameters = QueryParameters::new(schema(registry, "posts"));
+            let parameters = QueryParameters::new(schema(manager, "posts"));
             store.update_record(record, &parameters)?;
 
-            let posts = registry
+            let posts = manager
                 .table("posts", &connection)?
-                .query(&QueryParameters::new(schema(registry, "posts")))?;
+                .query(&QueryParameters::new(schema(manager, "posts")))?;
             assert_eq!(posts.len(), 1);
             assert_eq!(posts[0]["title"], Attribute::Text("after".to_string()));
 
@@ -867,30 +874,30 @@ mod tests {
 
     #[test]
     fn test_update_record_replaces_has_many() -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            seed_user(registry, &connection, 1, "alice")?;
-            seed_user(registry, &connection, 2, "bob")?;
-            seed_post(registry, &connection, 1, 1, "p1")?;
-            seed_post(registry, &connection, 2, 1, "p2")?;
-            seed_post(registry, &connection, 3, 2, "p3")?;
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_user(manager, &connection, 2, "bob")?;
+            seed_post(manager, &connection, 1, 1, "p1")?;
+            seed_post(manager, &connection, 2, 1, "p2")?;
+            seed_post(manager, &connection, 3, 2, "p3")?;
 
-            let store = Store::new(registry, &connection);
+            let store = Store::new(manager, &connection);
 
             // Reassign bob's posts to exactly {p1}: p1 is adopted, p3 (bob's) is detached.
             let record = Record::from_relationships(
-                schema(registry, "users"),
+                schema(manager, "users"),
                 Relationships::from([(
                     "posts",
                     Relationship::HasMany(vec![Identifier::Integer(1)]),
                 )]),
             )
             .with_id(Some(Identifier::Integer(2)));
-            store.update_record(record, &QueryParameters::new(schema(registry, "users")))?;
+            store.update_record(record, &QueryParameters::new(schema(manager, "users")))?;
 
-            let posts: HashMap<Attribute, Row> = registry
+            let posts: HashMap<Attribute, Row> = manager
                 .table("posts", &connection)?
-                .query(&QueryParameters::new(schema(registry, "posts")))?
+                .query(&QueryParameters::new(schema(manager, "posts")))?
                 .into_iter()
                 .map(|row| (row["id"].clone(), row))
                 .collect();
@@ -913,18 +920,18 @@ mod tests {
 
     #[test]
     fn test_delete_record_removes_row() -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            seed_user(registry, &connection, 1, "alice")?;
-            seed_post(registry, &connection, 1, 1, "doomed")?;
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_post(manager, &connection, 1, 1, "doomed")?;
 
-            let store = Store::new(registry, &connection);
-            store.delete_record(schema(registry, "posts"), Identifier::Integer(1))?;
+            let store = Store::new(manager, &connection);
+            store.delete_record(schema(manager, "posts"), Identifier::Integer(1))?;
 
             assert!(
-                registry
+                manager
                     .table("posts", &connection)?
-                    .query(&QueryParameters::new(schema(registry, "posts")))?
+                    .query(&QueryParameters::new(schema(manager, "posts")))?
                     .is_empty()
             );
 
@@ -936,17 +943,17 @@ mod tests {
 
     #[test]
     fn test_create_collection_inserts_records_with_belongs_to() -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            seed_user(registry, &connection, 1, "alice")?;
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
 
-            let store = Store::new(registry, &connection);
+            let store = Store::new(manager, &connection);
             let created = store.create_collection(
                 vec![
-                    new_post(registry, "First", 1),
-                    new_post(registry, "Second", 1),
+                    new_post(manager, "First", 1),
+                    new_post(manager, "Second", 1),
                 ],
-                &QueryParameters::new(schema(registry, "posts")),
+                &QueryParameters::new(schema(manager, "posts")),
             )?;
 
             assert_eq!(created.content.len(), 2);
@@ -966,9 +973,9 @@ mod tests {
             assert_eq!(titles, ["First", "Second"]);
 
             assert_eq!(
-                registry
+                manager
                     .table("posts", &connection)?
-                    .query(&QueryParameters::new(schema(registry, "posts")))?
+                    .query(&QueryParameters::new(schema(manager, "posts")))?
                     .len(),
                 2
             );
@@ -980,19 +987,19 @@ mod tests {
     #[test]
     fn test_create_collection_assigns_distinct_belongs_to_per_record()
     -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            seed_user(registry, &connection, 1, "alice")?;
-            seed_user(registry, &connection, 2, "bob")?;
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_user(manager, &connection, 2, "bob")?;
 
-            let store = Store::new(registry, &connection);
+            let store = Store::new(manager, &connection);
             let posts: HashMap<String, Record> = store
                 .create_collection(
                     vec![
-                        new_post(registry, "alice-post", 1),
-                        new_post(registry, "bob-post", 2),
+                        new_post(manager, "alice-post", 1),
+                        new_post(manager, "bob-post", 2),
                     ],
-                    &QueryParameters::new(schema(registry, "posts")),
+                    &QueryParameters::new(schema(manager, "posts")),
                 )?
                 .content
                 .into_iter()
@@ -1022,17 +1029,18 @@ mod tests {
 
     #[test]
     fn test_create_collection_loads_includes() -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            seed_user(registry, &connection, 1, "alice")?;
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
 
-            let store = Store::new(registry, &connection);
+            let store = Store::new(manager, &connection);
             let uri: Uri = "/posts?include=author".parse()?;
-            let parameters = QueryParameters::parse(&uri, schema(registry, "posts"), registry)?;
+            let parameters =
+                QueryParameters::parse(&uri, schema(manager, "posts"), manager.registry())?;
             let created = store.create_collection(
                 vec![
-                    new_post(registry, "First", 1),
-                    new_post(registry, "Second", 1),
+                    new_post(manager, "First", 1),
+                    new_post(manager, "Second", 1),
                 ],
                 &parameters,
             )?;
@@ -1047,19 +1055,19 @@ mod tests {
 
     #[test]
     fn test_create_collection_empty_is_a_noop() -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            let store = Store::new(registry, &connection);
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            let store = Store::new(manager, &connection);
 
-            let parameters = QueryParameters::new(schema(registry, "posts"));
+            let parameters = QueryParameters::new(schema(manager, "posts"));
             let created = store.create_collection(vec![], &parameters)?;
 
             assert!(created.content.is_empty());
             assert!(created.included.is_empty());
             assert!(
-                registry
+                manager
                     .table("posts", &connection)?
-                    .query(&QueryParameters::new(schema(registry, "posts")))?
+                    .query(&QueryParameters::new(schema(manager, "posts")))?
                     .is_empty()
             );
 
@@ -1069,15 +1077,15 @@ mod tests {
 
     #[test]
     fn test_create_collection_links_has_many() -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            seed_user(registry, &connection, 1, "alice")?;
-            seed_post(registry, &connection, 1, 1, "one")?;
-            seed_post(registry, &connection, 2, 1, "two")?;
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_post(manager, &connection, 1, 1, "one")?;
+            seed_post(manager, &connection, 2, 1, "two")?;
 
-            let store = Store::new(registry, &connection);
+            let store = Store::new(manager, &connection);
             let user = Record::from((
-                schema(registry, "users"),
+                schema(manager, "users"),
                 Attributes::from_iter([("name".to_string(), Attribute::Text("dave".to_string()))]),
                 Relationships::from_iter([(
                     "posts",
@@ -1085,12 +1093,12 @@ mod tests {
                 )]),
             ));
             let created = store
-                .create_collection(vec![user], &QueryParameters::new(schema(registry, "users")))?;
+                .create_collection(vec![user], &QueryParameters::new(schema(manager, "users")))?;
             let new_id = *created.content[0].require_id()?.as_i64()?;
 
-            let posts = registry
+            let posts = manager
                 .table("posts", &connection)?
-                .query(&QueryParameters::new(schema(registry, "posts")))?;
+                .query(&QueryParameters::new(schema(manager, "posts")))?;
             assert_eq!(posts.len(), 2);
             for post in &posts {
                 assert_eq!(post["author_id"], Attribute::Integer(new_id));
@@ -1102,14 +1110,14 @@ mod tests {
 
     #[test]
     fn test_create_collection_links_has_one() -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            seed_user(registry, &connection, 1, "alice")?;
-            seed_profile(registry, &connection, 1, 1, "alice's profile")?;
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_profile(manager, &connection, 1, 1, "alice's profile")?;
 
-            let store = Store::new(registry, &connection);
+            let store = Store::new(manager, &connection);
             let user = Record::from((
-                schema(registry, "users"),
+                schema(manager, "users"),
                 Attributes::from_iter([("name".to_string(), Attribute::Text("dave".to_string()))]),
                 Relationships::from_iter([(
                     "profile",
@@ -1117,12 +1125,12 @@ mod tests {
                 )]),
             ));
             let created = store
-                .create_collection(vec![user], &QueryParameters::new(schema(registry, "users")))?;
+                .create_collection(vec![user], &QueryParameters::new(schema(manager, "users")))?;
             let new_id = *created.content[0].require_id()?.as_i64()?;
 
-            let profile = registry.table("profiles", &connection)?.find(
+            let profile = manager.table("profiles", &connection)?.find(
                 Identifier::Integer(1),
-                &QueryParameters::new(schema(registry, "profiles")),
+                &QueryParameters::new(schema(manager, "profiles")),
             )?;
             assert_eq!(profile["user_id"], Attribute::Integer(new_id));
 
@@ -1135,18 +1143,18 @@ mod tests {
     #[test]
     fn test_update_collection_uniform_attribute_patch_scoped_by_filter()
     -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            seed_user(registry, &connection, 1, "alice")?;
-            seed_user(registry, &connection, 2, "bob")?;
-            seed_post(registry, &connection, 1, 1, "alice-one")?;
-            seed_post(registry, &connection, 2, 1, "alice-two")?;
-            seed_post(registry, &connection, 3, 2, "bob-one")?;
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_user(manager, &connection, 2, "bob")?;
+            seed_post(manager, &connection, 1, 1, "alice-one")?;
+            seed_post(manager, &connection, 2, 1, "alice-two")?;
+            seed_post(manager, &connection, 3, 2, "bob-one")?;
 
-            let store = Store::new(registry, &connection);
+            let store = Store::new(manager, &connection);
 
             let patch = RecordPatch::from_attributes(
-                schema(registry, "posts"),
+                schema(manager, "posts"),
                 Attributes::from_iter([(
                     "title".to_string(),
                     Attribute::Text("patched".to_string()),
@@ -1158,15 +1166,15 @@ mod tests {
                     "author_id",
                     vec![FilterValue::Equal(Attribute::Integer(1))],
                 )])),
-                ..QueryParameters::new(schema(registry, "posts"))
+                ..QueryParameters::new(schema(manager, "posts"))
             };
 
             let updated = store.update_collection(patch, &parameters)?;
             assert_eq!(updated.content.len(), 2);
 
-            let posts = registry
+            let posts = manager
                 .table("posts", &connection)?
-                .query(&QueryParameters::new(schema(registry, "posts")))?;
+                .query(&QueryParameters::new(schema(manager, "posts")))?;
             for post in &posts {
                 let expected = if post["author_id"] == Attribute::Integer(1) {
                     "patched"
@@ -1182,29 +1190,29 @@ mod tests {
 
     #[test]
     fn test_update_collection_bulk_reassigns_belongs_to() -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            seed_user(registry, &connection, 1, "alice")?;
-            seed_user(registry, &connection, 2, "bob")?;
-            seed_post(registry, &connection, 1, 1, "one")?;
-            seed_post(registry, &connection, 2, 1, "two")?;
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_user(manager, &connection, 2, "bob")?;
+            seed_post(manager, &connection, 1, 1, "one")?;
+            seed_post(manager, &connection, 2, 1, "two")?;
 
-            let store = Store::new(registry, &connection);
+            let store = Store::new(manager, &connection);
 
             let patch = RecordPatch::from_relationships(
-                schema(registry, "posts"),
+                schema(manager, "posts"),
                 Relationships::from_iter([(
                     "author",
                     Relationship::BelongsTo(Identifier::Integer(2)),
                 )]),
             );
 
-            let parameters = QueryParameters::new(schema(registry, "posts"));
+            let parameters = QueryParameters::new(schema(manager, "posts"));
             store.update_collection(patch, &parameters)?;
 
-            let posts = registry
+            let posts = manager
                 .table("posts", &connection)?
-                .query(&QueryParameters::new(schema(registry, "posts")))?;
+                .query(&QueryParameters::new(schema(manager, "posts")))?;
             assert_eq!(posts.len(), 2);
             for post in &posts {
                 assert_eq!(post["author_id"], Attribute::Integer(2));
@@ -1218,29 +1226,29 @@ mod tests {
 
     #[test]
     fn test_delete_collection_scoped_by_filter() -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            seed_user(registry, &connection, 1, "alice")?;
-            seed_user(registry, &connection, 2, "bob")?;
-            seed_post(registry, &connection, 1, 1, "alice-one")?;
-            seed_post(registry, &connection, 2, 1, "alice-two")?;
-            seed_post(registry, &connection, 3, 2, "bob-one")?;
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_user(manager, &connection, 2, "bob")?;
+            seed_post(manager, &connection, 1, 1, "alice-one")?;
+            seed_post(manager, &connection, 2, 1, "alice-two")?;
+            seed_post(manager, &connection, 3, 2, "bob-one")?;
 
-            let store = Store::new(registry, &connection);
+            let store = Store::new(manager, &connection);
 
             let parameters = QueryParameters {
                 filter: Some(FilterParameters::from([(
                     "author_id",
                     vec![FilterValue::Equal(Attribute::Integer(1))],
                 )])),
-                ..QueryParameters::new(schema(registry, "posts"))
+                ..QueryParameters::new(schema(manager, "posts"))
             };
 
-            store.delete_collection(schema(registry, "posts"), &parameters)?;
+            store.delete_collection(schema(manager, "posts"), &parameters)?;
 
-            let posts = registry
+            let posts = manager
                 .table("posts", &connection)?
-                .query(&QueryParameters::new(schema(registry, "posts")))?;
+                .query(&QueryParameters::new(schema(manager, "posts")))?;
             assert_eq!(posts.len(), 1);
             assert_eq!(posts[0]["title"], Attribute::Text("bob-one".to_string()));
 
@@ -1250,20 +1258,20 @@ mod tests {
 
     #[test]
     fn test_delete_collection_unscoped_clears_table() -> Result<(), Box<dyn StdError>> {
-        with_registry(|registry| {
-            let connection = registry.acquire()?;
-            seed_user(registry, &connection, 1, "alice")?;
-            seed_post(registry, &connection, 1, 1, "one")?;
-            seed_post(registry, &connection, 2, 1, "two")?;
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_post(manager, &connection, 1, 1, "one")?;
+            seed_post(manager, &connection, 2, 1, "two")?;
 
-            let store = Store::new(registry, &connection);
-            let parameters = QueryParameters::new(schema(registry, "posts"));
-            store.delete_collection(schema(registry, "posts"), &parameters)?;
+            let store = Store::new(manager, &connection);
+            let parameters = QueryParameters::new(schema(manager, "posts"));
+            store.delete_collection(schema(manager, "posts"), &parameters)?;
 
             assert!(
-                registry
+                manager
                     .table("posts", &connection)?
-                    .query(&QueryParameters::new(schema(registry, "posts")))?
+                    .query(&QueryParameters::new(schema(manager, "posts")))?
                     .is_empty()
             );
 

@@ -4,10 +4,10 @@ mod tests;
 use super::{
     adapters::Adapter as AdapterInterface,
     attributes::Attribute,
+    connection_manager::ConnectionManager,
     error::Error,
     query_parameters::{FilterValue::In, QueryParameters},
     record::Record,
-    registry::Registry,
     relationships::Relationship::*,
     schema::{RelatedResource, Relationship},
     table::Table,
@@ -25,7 +25,7 @@ type GlobalIdentifier<'sch> = (&'sch str, Identifier);
 type RecordCache<'sch> = HashMap<GlobalIdentifier<'sch>, Record<'sch>>;
 
 pub struct DataLoader<'sch, 'req, Adapter: AdapterInterface> {
-    registry: &'sch Registry<'sch, Adapter>,
+    manager: &'sch ConnectionManager<'sch, Adapter>,
     connection: &'req Adapter::Connection,
     cache: RecordCache<'sch>,
     included_identifiers: HashSet<GlobalIdentifier<'sch>>,
@@ -33,11 +33,11 @@ pub struct DataLoader<'sch, 'req, Adapter: AdapterInterface> {
 
 impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
     pub fn new(
-        registry: &'sch Registry<'sch, Adapter>,
+        manager: &'sch ConnectionManager<'sch, Adapter>,
         connection: &'req Adapter::Connection,
     ) -> Self {
         DataLoader {
-            registry,
+            manager,
             connection,
             cache: HashMap::new(),
             included_identifiers: HashSet::new(),
@@ -108,7 +108,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
         };
 
         if query_parameters.is_included(relationship) {
-            let derived_context = query_parameters.derive(relationship, self.registry)?;
+            let derived_context = query_parameters.derive(relationship, self.manager.registry())?;
             self.load_with_context(related_collection.as_mut_slice(), &derived_context)?;
 
             let related_identifiers = related_collection
@@ -145,7 +145,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
         collection: &mut [Record<'sch>],
         query_parameters: &QueryParameters<'sch, 'req>,
     ) -> Result<Vec<Record<'sch>>, Error> {
-        let related_schema = self.registry.schema(descriptor.resource)?;
+        let related_schema = self.manager.registry().schema(descriptor.resource)?;
         let joins_on_primary_key = related_schema.is_primary_key(descriptor.keys.related);
 
         let requested = query_parameters.is_requested(relationship);
@@ -153,7 +153,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
         let query_needed = included || (requested && !joins_on_primary_key);
 
         let related_collection = if query_needed {
-            let table = self.registry.table(descriptor.resource, self.connection)?;
+            let table = self.manager.table(descriptor.resource, self.connection)?;
             let own_attributes = Self::collection_attribute(collection, descriptor.keys.own);
             Self::load_collection_by(
                 &table,
@@ -220,7 +220,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
         collection: &mut [Record<'sch>],
         query_parameters: &QueryParameters<'sch, 'req>,
     ) -> Result<Vec<Record<'sch>>, Error> {
-        let table = self.registry.table(descriptor.resource, self.connection)?;
+        let table = self.manager.table(descriptor.resource, self.connection)?;
         let own_attributes = Self::collection_attribute(collection, descriptor.keys.own);
         let related_collection = Self::load_collection_by(
             &table,
@@ -256,7 +256,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
         collection: &mut [Record<'sch>],
         query_parameters: &QueryParameters<'sch, 'req>,
     ) -> Result<Vec<Record<'sch>>, Error> {
-        let table = self.registry.table(descriptor.resource, self.connection)?;
+        let table = self.manager.table(descriptor.resource, self.connection)?;
         let own_attributes = Self::collection_attribute(collection, descriptor.keys.own);
         let related_collection = Self::load_collection_by(
             &table,
