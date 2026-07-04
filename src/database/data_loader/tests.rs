@@ -3,6 +3,7 @@ use crate::database::{
     adapters::SqliteAdapter,
     adapters::sqlite::Pool,
     attributes::{Attribute, Row},
+    connection_manager::ConnectionManager,
     data_loader::DataLoader,
     query_parameters::QueryParameters,
     record::Record,
@@ -117,17 +118,24 @@ fn schemas() -> [SchemaBuilder<'static>; 5] {
     ]
 }
 
-fn schema<'sch>(registry: &'sch Registry<SqliteAdapter>, name: &str) -> &'sch TableSchema<'sch> {
-    registry.schema(name).expect("schema is registered")
+fn schema<'sch>(
+    manager: &'sch ConnectionManager<SqliteAdapter>,
+    name: &str,
+) -> &'sch TableSchema<'sch> {
+    manager
+        .registry()
+        .schema(name)
+        .expect("schema is registered")
 }
 
 fn with_database<F>(func: F) -> Result<(), Box<dyn Error>>
 where
-    F: FnOnce(&Registry<SqliteAdapter>) -> Result<(), Box<dyn Error>>,
+    F: FnOnce(&ConnectionManager<SqliteAdapter>) -> Result<(), Box<dyn Error>>,
 {
-    let registry = Registry::<SqliteAdapter>::try_new(Pool::memory()?, schemas())?;
+    let manager: ConnectionManager<SqliteAdapter> =
+        ConnectionManager::new(Registry::try_new(schemas())?, Pool::memory()?);
 
-    registry.acquire()?.execute_batch(
+    manager.acquire()?.execute_batch(
         "
         CREATE TABLE users (
             id INTEGER PRIMARY KEY,
@@ -170,18 +178,18 @@ where
         ",
     )?;
 
-    func(&registry)?;
+    func(&manager)?;
 
     Ok(())
 }
 
-fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error>> {
+fn seed_database(manager: &ConnectionManager<SqliteAdapter>) -> Result<(), Box<dyn Error>> {
     use Attribute::{Integer, Null};
 
-    let connection = registry.acquire()?;
+    let connection = manager.acquire()?;
 
     // Create users
-    let users_table = registry.table("users", &connection)?;
+    let users_table = manager.table("users", &connection)?;
     for (i, (username, email)) in [
         ("alice", "alice@example.com"),
         ("bob", "bob@example.com"),
@@ -199,12 +207,12 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
                 ),
                 ("email".to_string(), Attribute::Text(email.to_string())),
             ]),
-            &QueryParameters::new(schema(registry, "users")),
+            &QueryParameters::new(schema(manager, "users")),
         )?;
     }
 
     // Create profiles
-    let profiles_table = registry.table("profiles", &connection)?;
+    let profiles_table = manager.table("profiles", &connection)?;
     for (id, user_id, bio, avatar) in [
         (1, 1, "Alice's bio", "https://example.com/alice.jpg"),
         (2, 2, "Bob's bio", "https://example.com/bob.jpg"),
@@ -220,12 +228,12 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
                     Attribute::Text(avatar.to_string()),
                 ),
             ]),
-            &QueryParameters::new(schema(registry, "profiles")),
+            &QueryParameters::new(schema(manager, "profiles")),
         )?;
     }
 
     // Create posts
-    let posts_table = registry.table("posts", &connection)?;
+    let posts_table = manager.table("posts", &connection)?;
     for (id, author_id, title, content, published) in [
         (
             1,
@@ -253,12 +261,12 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
                 ("content".to_string(), Attribute::Text(content.to_string())),
                 ("published".to_string(), Attribute::Boolean(published)),
             ]),
-            &QueryParameters::new(schema(registry, "posts")),
+            &QueryParameters::new(schema(manager, "posts")),
         )?;
     }
 
     // Create comments (including nested replies for 4-level depth)
-    let comments_table = registry.table("comments", &connection)?;
+    let comments_table = manager.table("comments", &connection)?;
     for (id, post_id, author_id, parent_id, content) in [
         // Post 1 comments - 4 levels deep
         (1, 1, 2, Null, "Bob commenting on Alice's first post"),
@@ -307,19 +315,19 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
                 ("parent_id".to_string(), parent_id),
                 ("content".to_string(), Attribute::Text(content.to_string())),
             ]),
-            &QueryParameters::new(schema(registry, "comments")),
+            &QueryParameters::new(schema(manager, "comments")),
         )?;
     }
 
     // Create tags
-    let tags_table = registry.table("tags", &connection)?;
+    let tags_table = manager.table("tags", &connection)?;
     for (id, name) in [(1, "rust"), (2, "programming"), (3, "web"), (4, "database")] {
         tags_table.insert(
             Row::from_iter([
                 ("id".to_string(), Attribute::Integer(id)),
                 ("name".to_string(), Attribute::Text(name.to_string())),
             ]),
-            &QueryParameters::new(schema(registry, "tags")),
+            &QueryParameters::new(schema(manager, "tags")),
         )?;
     }
 
@@ -327,19 +335,19 @@ fn seed_database(registry: &Registry<SqliteAdapter>) -> Result<(), Box<dyn Error
 }
 
 fn record_document<'a: 'b, 'b>(
-    registry: &'b Registry<'a, SqliteAdapter>,
+    manager: &'b ConnectionManager<'a, SqliteAdapter>,
     model: &str,
     id: Identifier,
     uri_str: &str,
 ) -> Result<Value, Box<dyn Error>> {
     let uri: Uri = uri_str.parse()?;
 
-    let connection = registry.acquire()?;
-    let table = registry.table(model, &connection)?;
-    let query_parameters = QueryParameters::parse(&uri, table.schema(), registry)?;
+    let connection = manager.acquire()?;
+    let table = manager.table(model, &connection)?;
+    let query_parameters = QueryParameters::parse(&uri, table.schema(), manager.registry())?;
     let row = table.find(id, &query_parameters)?;
     let mut record = Record::try_from_row(table.schema(), row)?;
-    let loader = DataLoader::new(registry, &connection);
+    let loader = DataLoader::new(manager, &connection);
     let included = loader.load_for_record(&mut record, &query_parameters)?;
     let document = to_document(&record, included, &uri, &DefaultUriGenerator::default())?;
 
@@ -347,20 +355,20 @@ fn record_document<'a: 'b, 'b>(
 }
 
 fn collection_document<'a: 'b, 'b>(
-    registry: &'b Registry<'a, SqliteAdapter>,
+    manager: &'b ConnectionManager<'a, SqliteAdapter>,
     model: &str,
     uri_str: &str,
 ) -> Result<Value, Box<dyn Error>> {
     let uri: Uri = uri_str.parse()?;
-    let connection = registry.acquire()?;
-    let table = registry.table(model, &connection)?;
-    let query_parameters = QueryParameters::parse(&uri, table.schema(), registry)?;
+    let connection = manager.acquire()?;
+    let table = manager.table(model, &connection)?;
+    let query_parameters = QueryParameters::parse(&uri, table.schema(), manager.registry())?;
     let mut collection = table
         .query(&query_parameters)?
         .into_iter()
         .map(|row| Record::try_from_row(table.schema(), row))
         .collect::<Result<Vec<_>, _>>()?;
-    let loader = DataLoader::new(registry, &connection);
+    let loader = DataLoader::new(manager, &connection);
     let included = loader.load_for_collection(&mut collection, &query_parameters)?;
     let document = to_document(&collection, included, &uri, &DefaultUriGenerator::default())?;
 
@@ -369,11 +377,11 @@ fn collection_document<'a: 'b, 'b>(
 
 #[test]
 fn test_sparse_fieldset_only_username() -> Result<(), Box<dyn Error>> {
-    with_database(|registry| {
-        seed_database(registry)?;
+    with_database(|manager| {
+        seed_database(manager)?;
 
         let doc = record_document(
-            registry,
+            manager,
             "users",
             Identifier::Integer(1),
             "/users/1?fields[users]=username",
@@ -399,11 +407,11 @@ fn test_sparse_fieldset_only_username() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_single_level_include_posts() -> Result<(), Box<dyn Error>> {
-    with_database(|registry| {
-        seed_database(registry)?;
+    with_database(|manager| {
+        seed_database(manager)?;
 
         let doc = record_document(
-            registry,
+            manager,
             "users",
             Identifier::Integer(1),
             "/users/1?include=posts",
@@ -436,11 +444,11 @@ fn test_single_level_include_posts() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_multi_level_include_with_sparse_fieldsets() -> Result<(), Box<dyn Error>> {
-    with_database(|registry| {
-        seed_database(registry)?;
+    with_database(|manager| {
+        seed_database(manager)?;
 
         let doc = record_document(
-            registry,
+            manager,
             "users",
             Identifier::Integer(1),
             "/users/1?include=posts.comments&fields[users]=username&fields[posts]=title,comments",
@@ -484,11 +492,11 @@ fn test_multi_level_include_with_sparse_fieldsets() -> Result<(), Box<dyn Error>
 
 #[test]
 fn test_deep_four_level_include() -> Result<(), Box<dyn Error>> {
-    with_database(|registry| {
-        seed_database(registry)?;
+    with_database(|manager| {
+        seed_database(manager)?;
 
         let doc = record_document(
-            registry,
+            manager,
             "users",
             Identifier::Integer(1),
             "/users/1?include=posts.comments.replies.replies",
@@ -535,11 +543,11 @@ fn test_deep_four_level_include() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_multiple_relationships_same_level() -> Result<(), Box<dyn Error>> {
-    with_database(|registry| {
-        seed_database(registry)?;
+    with_database(|manager| {
+        seed_database(manager)?;
 
         let doc = record_document(
-            registry,
+            manager,
             "users",
             Identifier::Integer(1),
             "/users/1?include=posts,comments,profile",
@@ -572,11 +580,11 @@ fn test_multiple_relationships_same_level() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_self_referential_comment_replies() -> Result<(), Box<dyn Error>> {
-    with_database(|registry| {
-        seed_database(registry)?;
+    with_database(|manager| {
+        seed_database(manager)?;
 
         let doc = record_document(
-            registry,
+            manager,
             "comments",
             Identifier::Integer(1),
             "/comments/1?include=replies,replies.replies",
@@ -612,11 +620,11 @@ fn test_self_referential_comment_replies() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_belongs_to_with_author() -> Result<(), Box<dyn Error>> {
-    with_database(|registry| {
-        seed_database(registry)?;
+    with_database(|manager| {
+        seed_database(manager)?;
 
         let doc = record_document(
-            registry,
+            manager,
             "posts",
             Identifier::Integer(1),
             "/posts/1?fields[posts]=title,author&include=author",
@@ -644,11 +652,11 @@ fn test_belongs_to_with_author() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_collection_with_includes() -> Result<(), Box<dyn Error>> {
-    with_database(|registry| {
-        seed_database(registry)?;
+    with_database(|manager| {
+        seed_database(manager)?;
 
         let doc = collection_document(
-            registry,
+            manager,
             "posts",
             "/posts?include=author,comments&fields[posts]=title",
         )?;
@@ -684,11 +692,11 @@ fn test_collection_with_includes() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_has_one_relationship() -> Result<(), Box<dyn Error>> {
-    with_database(|registry| {
-        seed_database(registry)?;
+    with_database(|manager| {
+        seed_database(manager)?;
 
         let doc = record_document(
-            registry,
+            manager,
             "users",
             Identifier::Integer(2),
             "/users/2?include=profile&fields[users]=username",
@@ -714,11 +722,11 @@ fn test_has_one_relationship() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_belongs_to_relationship_in_included() -> Result<(), Box<dyn Error>> {
-    with_database(|registry| {
-        seed_database(registry)?;
+    with_database(|manager| {
+        seed_database(manager)?;
 
         let doc = record_document(
-            registry,
+            manager,
             "users",
             Identifier::Integer(1),
             "/users/1?include=posts.author",
@@ -747,11 +755,11 @@ fn test_belongs_to_relationship_in_included() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_nested_belongs_to_chain() -> Result<(), Box<dyn Error>> {
-    with_database(|registry| {
-        seed_database(registry)?;
+    with_database(|manager| {
+        seed_database(manager)?;
 
         let doc = record_document(
-            registry,
+            manager,
             "comments",
             Identifier::Integer(9),
             "/comments/9?include=post.author",
@@ -784,12 +792,12 @@ fn test_nested_belongs_to_chain() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_sparse_fieldset_excludes_relationships_not_requested() -> Result<(), Box<dyn Error>> {
-    with_database(|registry| {
-        seed_database(registry)?;
+    with_database(|manager| {
+        seed_database(manager)?;
 
         // Request only username, which means posts relationship should NOT appear
         let doc = record_document(
-            registry,
+            manager,
             "users",
             Identifier::Integer(1),
             "/users/1?fields[users]=username&include=posts",
@@ -813,12 +821,12 @@ fn test_sparse_fieldset_excludes_relationships_not_requested() -> Result<(), Box
 
 #[test]
 fn test_relationship_without_include() -> Result<(), Box<dyn Error>> {
-    with_database(|registry| {
-        seed_database(registry)?;
+    with_database(|manager| {
+        seed_database(manager)?;
 
         // Request posts relationship in fieldset but don't include it
         let doc = record_document(
-            registry,
+            manager,
             "users",
             Identifier::Integer(1),
             "/users/1?fields[users]=username,posts",

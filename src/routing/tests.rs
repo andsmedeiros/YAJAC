@@ -1,5 +1,6 @@
 use crate::database::adapters::SqliteAdapter;
 use crate::database::adapters::sqlite::Pool;
+use crate::database::connection_manager::ConnectionManager;
 use crate::database::registry::Registry as DatabaseRegistry;
 use crate::database::schema::{AttributeType, Related, SchemaBuilder};
 use crate::json_api::document::Document;
@@ -9,7 +10,7 @@ use http::StatusCode;
 use serde_json::{Value, json};
 use std::error::Error as StdError;
 
-type Registry = DatabaseRegistry<'static, SqliteAdapter>;
+type Manager = ConnectionManager<'static, SqliteAdapter>;
 
 type TestResult = Result<(), Box<dyn StdError>>;
 
@@ -95,10 +96,11 @@ impl<'sch> ResourceController<'sch, SqliteAdapter> for Drafts {}
 
 impl<'sch> ReadOnlyResourceController<'sch, SqliteAdapter> for Summaries {}
 
-fn registry() -> Result<Registry, Box<dyn StdError>> {
-    let registry = Registry::try_new(Pool::memory()?, schemas())?;
+fn manager() -> Result<Manager, Box<dyn StdError>> {
+    let manager: Manager =
+        ConnectionManager::new(DatabaseRegistry::try_new(schemas())?, Pool::memory()?);
 
-    registry.acquire()?.execute_batch(
+    manager.acquire()?.execute_batch(
         "CREATE TABLE articles (id INTEGER PRIMARY KEY, title TEXT NOT NULL, body TEXT); \
          CREATE TABLE comments ( \
            id INTEGER PRIMARY KEY, \
@@ -128,20 +130,20 @@ fn registry() -> Result<Registry, Box<dyn StdError>> {
            VALUES (1, 1, 'About first'), (2, 2, 'About second');",
     )?;
 
-    Ok(registry)
+    Ok(manager)
 }
 
 fn serve(
-    registry: &Registry,
+    manager: &Manager,
     method: &str,
     uri: &str,
     body: Value,
 ) -> Result<http::Response<Option<Document>>, Box<dyn StdError>> {
     let mut builder = RouterBuilder::new();
     builder
-        .resource::<Articles>("articles", registry.schema("articles")?)
-        .resource::<Comments>("comments", registry.schema("comments")?)
-        .resource::<Drafts>("drafts", registry.schema("drafts")?);
+        .resource::<Articles>("articles", manager.registry().schema("articles")?)
+        .resource::<Comments>("comments", manager.registry().schema("comments")?)
+        .resource::<Drafts>("drafts", manager.registry().schema("drafts")?);
     let router = builder.build();
 
     let request = http::Request::builder()
@@ -149,17 +151,17 @@ fn serve(
         .uri(uri)
         .body(serde_json::to_vec(&body)?)?;
 
-    Ok(router.handle(registry, request))
+    Ok(router.handle(manager, request))
 }
 
 fn serve_read_only(
-    registry: &Registry,
+    manager: &Manager,
     method: &str,
     uri: &str,
     body: Value,
 ) -> Result<http::Response<Option<Document>>, Box<dyn StdError>> {
     let mut builder = RouterBuilder::new();
-    builder.read_only_resource::<Summaries>("summaries", registry.schema("summaries")?);
+    builder.read_only_resource::<Summaries>("summaries", manager.registry().schema("summaries")?);
     let router = builder.build();
 
     let request = http::Request::builder()
@@ -167,7 +169,7 @@ fn serve_read_only(
         .uri(uri)
         .body(serde_json::to_vec(&body)?)?;
 
-    Ok(router.handle(registry, request))
+    Ok(router.handle(manager, request))
 }
 
 fn body(response: &http::Response<Option<Document>>) -> Value {
@@ -187,8 +189,8 @@ fn linkage_ids(response: &http::Response<Option<Document>>, relationship: &str) 
 
 #[test]
 fn test_index() -> TestResult {
-    let registry = registry()?;
-    let response = serve(&registry, "GET", "/articles", Value::Null)?;
+    let manager = manager()?;
+    let response = serve(&manager, "GET", "/articles", Value::Null)?;
 
     assert_eq!(response.status(), StatusCode::OK);
     let document = body(&response);
@@ -201,8 +203,8 @@ fn test_index() -> TestResult {
 
 #[test]
 fn test_show() -> TestResult {
-    let registry = registry()?;
-    let response = serve(&registry, "GET", "/articles/1", Value::Null)?;
+    let manager = manager()?;
+    let response = serve(&manager, "GET", "/articles/1", Value::Null)?;
 
     assert_eq!(response.status(), StatusCode::OK);
     let document = body(&response);
@@ -216,8 +218,8 @@ fn test_show() -> TestResult {
 
 #[test]
 fn test_show_missing_record() -> TestResult {
-    let registry = registry()?;
-    let response = serve(&registry, "GET", "/articles/999", Value::Null)?;
+    let manager = manager()?;
+    let response = serve(&manager, "GET", "/articles/999", Value::Null)?;
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
@@ -226,13 +228,8 @@ fn test_show_missing_record() -> TestResult {
 
 #[test]
 fn test_show_includes_to_many() -> TestResult {
-    let registry = registry()?;
-    let response = serve(
-        &registry,
-        "GET",
-        "/articles/1?include=comments",
-        Value::Null,
-    )?;
+    let manager = manager()?;
+    let response = serve(&manager, "GET", "/articles/1?include=comments", Value::Null)?;
 
     assert_eq!(response.status(), StatusCode::OK);
     let document = body(&response);
@@ -249,8 +246,8 @@ fn test_show_includes_to_many() -> TestResult {
 
 #[test]
 fn test_show_includes_to_one() -> TestResult {
-    let registry = registry()?;
-    let response = serve(&registry, "GET", "/comments/1?include=article", Value::Null)?;
+    let manager = manager()?;
+    let response = serve(&manager, "GET", "/comments/1?include=article", Value::Null)?;
 
     assert_eq!(response.status(), StatusCode::OK);
     let document = body(&response);
@@ -264,8 +261,8 @@ fn test_show_includes_to_one() -> TestResult {
 
 #[test]
 fn test_unknown_route() -> TestResult {
-    let registry = registry()?;
-    let response = serve(&registry, "GET", "/widgets", Value::Null)?;
+    let manager = manager()?;
+    let response = serve(&manager, "GET", "/widgets", Value::Null)?;
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
@@ -274,9 +271,9 @@ fn test_unknown_route() -> TestResult {
 
 #[test]
 fn test_invalid_query_field() -> TestResult {
-    let registry = registry()?;
+    let manager = manager()?;
     let response = serve(
-        &registry,
+        &manager,
         "GET",
         "/articles?fields[articles]=bogus",
         Value::Null,
@@ -289,12 +286,12 @@ fn test_invalid_query_field() -> TestResult {
 
 #[test]
 fn test_delete() -> TestResult {
-    let registry = registry()?;
+    let manager = manager()?;
 
-    let deleted = serve(&registry, "DELETE", "/comments/1", Value::Null)?;
+    let deleted = serve(&manager, "DELETE", "/comments/1", Value::Null)?;
     assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
 
-    let fetched = serve(&registry, "GET", "/comments/1", Value::Null)?;
+    let fetched = serve(&manager, "GET", "/comments/1", Value::Null)?;
     assert_eq!(fetched.status(), StatusCode::NOT_FOUND);
 
     Ok(())
@@ -302,10 +299,10 @@ fn test_delete() -> TestResult {
 
 #[test]
 fn test_create() -> TestResult {
-    let registry = registry()?;
+    let manager = manager()?;
 
     let response = serve(
-        &registry,
+        &manager,
         "POST",
         "/articles",
         json!({
@@ -322,7 +319,7 @@ fn test_create() -> TestResult {
         json!("Third")
     );
 
-    let fetched = serve(&registry, "GET", "/articles/3", Value::Null)?;
+    let fetched = serve(&manager, "GET", "/articles/3", Value::Null)?;
     assert_eq!(fetched.status(), StatusCode::OK);
     assert_eq!(
         body(&fetched)["data"]["attributes"]["title"],
@@ -334,10 +331,10 @@ fn test_create() -> TestResult {
 
 #[test]
 fn test_create_with_belongs_to_relationship() -> TestResult {
-    let registry = registry()?;
+    let manager = manager()?;
 
     let response = serve(
-        &registry,
+        &manager,
         "POST",
         "/comments",
         json!({
@@ -353,7 +350,7 @@ fn test_create_with_belongs_to_relationship() -> TestResult {
 
     assert_eq!(response.status(), StatusCode::CREATED);
 
-    let fetched = serve(&registry, "GET", "/comments/3", Value::Null)?;
+    let fetched = serve(&manager, "GET", "/comments/3", Value::Null)?;
     assert_eq!(linkage_id(&fetched, "article"), json!("2"));
 
     Ok(())
@@ -361,10 +358,10 @@ fn test_create_with_belongs_to_relationship() -> TestResult {
 
 #[test]
 fn test_create_with_to_many_relationship() -> TestResult {
-    let registry = registry()?;
+    let manager = manager()?;
 
     let response = serve(
-        &registry,
+        &manager,
         "POST",
         "/articles",
         json!({
@@ -380,7 +377,7 @@ fn test_create_with_to_many_relationship() -> TestResult {
 
     assert_eq!(response.status(), StatusCode::CREATED);
 
-    let comment = serve(&registry, "GET", "/comments/1", Value::Null)?;
+    let comment = serve(&manager, "GET", "/comments/1", Value::Null)?;
     assert_eq!(linkage_id(&comment, "article"), json!("3"));
 
     Ok(())
@@ -388,10 +385,10 @@ fn test_create_with_to_many_relationship() -> TestResult {
 
 #[test]
 fn test_create_rejects_type_mismatch() -> TestResult {
-    let registry = registry()?;
+    let manager = manager()?;
 
     let response = serve(
-        &registry,
+        &manager,
         "POST",
         "/articles",
         json!({ "data": { "type": "comments", "attributes": { "title": "Wrong" } } }),
@@ -404,10 +401,10 @@ fn test_create_rejects_type_mismatch() -> TestResult {
 
 #[test]
 fn test_create_rejects_unknown_attribute() -> TestResult {
-    let registry = registry()?;
+    let manager = manager()?;
 
     let response = serve(
-        &registry,
+        &manager,
         "POST",
         "/articles",
         json!({ "data": { "type": "articles", "attributes": { "bogus": "x" } } }),
@@ -420,9 +417,9 @@ fn test_create_rejects_unknown_attribute() -> TestResult {
 
 #[test]
 fn test_create_rejects_malformed_document() -> TestResult {
-    let registry = registry()?;
+    let manager = manager()?;
 
-    let response = serve(&registry, "POST", "/articles", json!({ "title": "Naked" }))?;
+    let response = serve(&manager, "POST", "/articles", json!({ "title": "Naked" }))?;
 
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
@@ -431,10 +428,10 @@ fn test_create_rejects_malformed_document() -> TestResult {
 
 #[test]
 fn test_update() -> TestResult {
-    let registry = registry()?;
+    let manager = manager()?;
 
     let response = serve(
-        &registry,
+        &manager,
         "PATCH",
         "/articles/1",
         json!({
@@ -457,10 +454,10 @@ fn test_update() -> TestResult {
 
 #[test]
 fn test_update_missing_record() -> TestResult {
-    let registry = registry()?;
+    let manager = manager()?;
 
     let response = serve(
-        &registry,
+        &manager,
         "PATCH",
         "/articles/999",
         json!({
@@ -475,10 +472,10 @@ fn test_update_missing_record() -> TestResult {
 
 #[test]
 fn test_patch_belongs_to_relationship() -> TestResult {
-    let registry = registry()?;
+    let manager = manager()?;
 
     let response = serve(
-        &registry,
+        &manager,
         "PATCH",
         "/comments/1",
         json!({
@@ -494,7 +491,7 @@ fn test_patch_belongs_to_relationship() -> TestResult {
 
     assert_eq!(response.status(), StatusCode::OK);
 
-    let fetched = serve(&registry, "GET", "/comments/1", Value::Null)?;
+    let fetched = serve(&manager, "GET", "/comments/1", Value::Null)?;
     assert_eq!(linkage_id(&fetched, "article"), json!("2"));
 
     Ok(())
@@ -502,10 +499,10 @@ fn test_patch_belongs_to_relationship() -> TestResult {
 
 #[test]
 fn test_patch_clears_nullable_belongs_to() -> TestResult {
-    let registry = registry()?;
+    let manager = manager()?;
 
     let response = serve(
-        &registry,
+        &manager,
         "PATCH",
         "/drafts/1",
         json!({
@@ -519,7 +516,7 @@ fn test_patch_clears_nullable_belongs_to() -> TestResult {
 
     assert_eq!(response.status(), StatusCode::OK);
 
-    let fetched = serve(&registry, "GET", "/drafts/1", Value::Null)?;
+    let fetched = serve(&manager, "GET", "/drafts/1", Value::Null)?;
     assert!(linkage_id(&fetched, "article").is_null());
 
     Ok(())
@@ -527,10 +524,10 @@ fn test_patch_clears_nullable_belongs_to() -> TestResult {
 
 #[test]
 fn test_patch_replaces_to_many_relationship() -> TestResult {
-    let registry = registry()?;
+    let manager = manager()?;
 
     let response = serve(
-        &registry,
+        &manager,
         "PATCH",
         "/articles/2",
         json!({
@@ -546,10 +543,10 @@ fn test_patch_replaces_to_many_relationship() -> TestResult {
 
     assert_eq!(response.status(), StatusCode::OK);
 
-    let moved = serve(&registry, "GET", "/comments/1", Value::Null)?;
+    let moved = serve(&manager, "GET", "/comments/1", Value::Null)?;
     assert_eq!(linkage_id(&moved, "article"), json!("2"));
 
-    let kept = serve(&registry, "GET", "/comments/2", Value::Null)?;
+    let kept = serve(&manager, "GET", "/comments/2", Value::Null)?;
     assert_eq!(linkage_id(&kept, "article"), json!("1"));
 
     Ok(())
@@ -557,10 +554,10 @@ fn test_patch_replaces_to_many_relationship() -> TestResult {
 
 #[test]
 fn test_patch_replaces_nullable_to_many_detaching_dropped_members() -> TestResult {
-    let registry = registry()?;
+    let manager = manager()?;
 
     let response = serve(
-        &registry,
+        &manager,
         "PATCH",
         "/articles/1",
         json!({
@@ -576,13 +573,13 @@ fn test_patch_replaces_nullable_to_many_detaching_dropped_members() -> TestResul
 
     assert_eq!(response.status(), StatusCode::OK);
 
-    let article = serve(&registry, "GET", "/articles/1", Value::Null)?;
+    let article = serve(&manager, "GET", "/articles/1", Value::Null)?;
     assert_eq!(linkage_ids(&article, "drafts"), vec![json!("1")]);
 
-    let kept = serve(&registry, "GET", "/drafts/1", Value::Null)?;
+    let kept = serve(&manager, "GET", "/drafts/1", Value::Null)?;
     assert_eq!(linkage_id(&kept, "article"), json!("1"));
 
-    let dropped = serve(&registry, "GET", "/drafts/2", Value::Null)?;
+    let dropped = serve(&manager, "GET", "/drafts/2", Value::Null)?;
     assert!(linkage_id(&dropped, "article").is_null());
 
     Ok(())
@@ -590,10 +587,10 @@ fn test_patch_replaces_nullable_to_many_detaching_dropped_members() -> TestResul
 
 #[test]
 fn test_patch_clears_nullable_to_many() -> TestResult {
-    let registry = registry()?;
+    let manager = manager()?;
 
     let response = serve(
-        &registry,
+        &manager,
         "PATCH",
         "/articles/1",
         json!({
@@ -607,10 +604,10 @@ fn test_patch_clears_nullable_to_many() -> TestResult {
 
     assert_eq!(response.status(), StatusCode::OK);
 
-    let first = serve(&registry, "GET", "/drafts/1", Value::Null)?;
+    let first = serve(&manager, "GET", "/drafts/1", Value::Null)?;
     assert!(linkage_id(&first, "article").is_null());
 
-    let second = serve(&registry, "GET", "/drafts/2", Value::Null)?;
+    let second = serve(&manager, "GET", "/drafts/2", Value::Null)?;
     assert!(linkage_id(&second, "article").is_null());
 
     Ok(())
@@ -618,10 +615,10 @@ fn test_patch_clears_nullable_to_many() -> TestResult {
 
 #[test]
 fn test_patch_clearing_required_to_many_conflicts() -> TestResult {
-    let registry = registry()?;
+    let manager = manager()?;
 
     let response = serve(
-        &registry,
+        &manager,
         "PATCH",
         "/articles/1",
         json!({
@@ -640,10 +637,10 @@ fn test_patch_clearing_required_to_many_conflicts() -> TestResult {
 
 #[test]
 fn test_assign_has_one_to_owned_record_conflicts() -> TestResult {
-    let registry = registry()?;
+    let manager = manager()?;
 
     let response = serve(
-        &registry,
+        &manager,
         "PATCH",
         "/articles/1",
         json!({
@@ -664,10 +661,10 @@ fn test_assign_has_one_to_owned_record_conflicts() -> TestResult {
 
 #[test]
 fn test_patch_leaves_omitted_relationship_unchanged() -> TestResult {
-    let registry = registry()?;
+    let manager = manager()?;
 
     let response = serve(
-        &registry,
+        &manager,
         "PATCH",
         "/comments/1",
         json!({
@@ -681,7 +678,7 @@ fn test_patch_leaves_omitted_relationship_unchanged() -> TestResult {
 
     assert_eq!(response.status(), StatusCode::OK);
 
-    let fetched = serve(&registry, "GET", "/comments/1", Value::Null)?;
+    let fetched = serve(&manager, "GET", "/comments/1", Value::Null)?;
     assert_eq!(linkage_id(&fetched, "article"), json!("1"));
 
     Ok(())
@@ -689,10 +686,10 @@ fn test_patch_leaves_omitted_relationship_unchanged() -> TestResult {
 
 #[test]
 fn test_patch_rejects_type_mismatch() -> TestResult {
-    let registry = registry()?;
+    let manager = manager()?;
 
     let response = serve(
-        &registry,
+        &manager,
         "PATCH",
         "/articles/1",
         json!({ "data": { "type": "comments", "id": "1" } }),
@@ -705,10 +702,10 @@ fn test_patch_rejects_type_mismatch() -> TestResult {
 
 #[test]
 fn test_patch_rejects_id_mismatch() -> TestResult {
-    let registry = registry()?;
+    let manager = manager()?;
 
     let response = serve(
-        &registry,
+        &manager,
         "PATCH",
         "/articles/1",
         json!({ "data": { "type": "articles", "id": "2" } }),
@@ -721,8 +718,8 @@ fn test_patch_rejects_id_mismatch() -> TestResult {
 
 #[test]
 fn test_read_only_index() -> TestResult {
-    let registry = registry()?;
-    let response = serve_read_only(&registry, "GET", "/summaries", Value::Null)?;
+    let manager = manager()?;
+    let response = serve_read_only(&manager, "GET", "/summaries", Value::Null)?;
 
     assert_eq!(response.status(), StatusCode::OK);
     let document = body(&response);
@@ -735,8 +732,8 @@ fn test_read_only_index() -> TestResult {
 
 #[test]
 fn test_read_only_show() -> TestResult {
-    let registry = registry()?;
-    let response = serve_read_only(&registry, "GET", "/summaries/1", Value::Null)?;
+    let manager = manager()?;
+    let response = serve_read_only(&manager, "GET", "/summaries/1", Value::Null)?;
 
     assert_eq!(response.status(), StatusCode::OK);
     let document = body(&response);
@@ -751,9 +748,9 @@ fn test_read_only_show() -> TestResult {
 
 #[test]
 fn test_read_only_rejects_create() -> TestResult {
-    let registry = registry()?;
+    let manager = manager()?;
     let response = serve_read_only(
-        &registry,
+        &manager,
         "POST",
         "/summaries",
         json!({ "data": { "type": "summaries", "attributes": { "abstract": "New" } } }),
@@ -766,8 +763,8 @@ fn test_read_only_rejects_create() -> TestResult {
 
 #[test]
 fn test_read_only_rejects_delete() -> TestResult {
-    let registry = registry()?;
-    let response = serve_read_only(&registry, "DELETE", "/summaries/1", Value::Null)?;
+    let manager = manager()?;
+    let response = serve_read_only(&manager, "DELETE", "/summaries/1", Value::Null)?;
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
