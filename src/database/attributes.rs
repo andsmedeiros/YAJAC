@@ -504,31 +504,23 @@ pub fn from_value(schema: &TableSchema, value: Value) -> Result<Attributes, Erro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::adapters::SqliteAdapter;
-    use crate::database::adapters::sqlite::Pool;
     use crate::database::registry::Registry as DatabaseRegistry;
     use crate::database::schema::{AttributeType, SchemaBuilder};
     use chrono::Utc;
     use serde_json::json;
 
-    type Registry = DatabaseRegistry<'static, SqliteAdapter>;
+    type Registry = DatabaseRegistry<'static>;
 
-    // Temporary: these pure `from_value` conversion tests only need a `&TableSchema`,
-    // but the registry still owns the pool, so obtaining one couples them to the
-    // sqlite adapter. Reverts once the pool moves to a ConnectionManager.
     fn registry() -> Registry {
-        DatabaseRegistry::try_new(
-            Pool::memory().expect("in-memory pool is available"),
-            [
-                SchemaBuilder::table("typed")
-                    .attribute("name", AttributeType::Text)
-                    .attribute("age", AttributeType::Integer)
-                    .attribute("score", AttributeType::Float)
-                    .attribute("active", AttributeType::Boolean),
-                SchemaBuilder::table("temporal").attribute("timestamp", AttributeType::DateTime),
-                SchemaBuilder::table("flagged").attribute("flag", AttributeType::Boolean),
-            ],
-        )
+        DatabaseRegistry::try_new([
+            SchemaBuilder::table("typed")
+                .attribute("name", AttributeType::Text)
+                .attribute("age", AttributeType::Integer)
+                .attribute("score", AttributeType::Float)
+                .attribute("active", AttributeType::Boolean),
+            SchemaBuilder::table("temporal").attribute("timestamp", AttributeType::DateTime),
+            SchemaBuilder::table("flagged").attribute("flag", AttributeType::Boolean),
+        ])
         .expect("schema set is consistent")
     }
 
