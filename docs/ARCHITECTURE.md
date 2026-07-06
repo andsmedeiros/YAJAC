@@ -137,6 +137,47 @@ Three error types, each translating outward toward the wire:
 
 See [CONVENTIONS.md](CONVENTIONS.md) for the error-message rules.
 
+## Testing & conformance
+
+Two test layers (authoring rules in [CONVENTIONS.md](CONVENTIONS.md)):
+
+- **In-crate unit tests** — per module, white-box, asserting the exact behaviour of each entity.
+- **Black-box conformance suite** (`tests/conformance/`, the `conformance` test target) — drives
+  `Router::handle` exactly as an embedder would and asserts *only* at the request→response boundary, so
+  it is untouched by internal refactors. Authored **spec-first**: each test encodes a JSON:API v1.1
+  rule (quoted verbatim above it), not current behaviour.
+
+**What it pins — the public contract.** The suite tests an *arbitrary public contract*, not this
+crate's internals: **the resource set and their schema, their locations (URLs), and each resource's
+action mode (read-only | read-write)**. Nothing else is contractual — everything else is judged exactly
+as the spec mandates. So any implementation exposing the *same* contract must pass, which makes the
+suite a portable conformance harness rather than a mirror of this implementation.
+
+**Tiers.**
+
+- `mandatory` — the spec's MUSTs plus the contract's own obligations; every conforming implementation
+  must pass.
+- `recommended` — the spec's SHOULDs; a conforming implementation may decline these.
+
+**Guarded optional affordances.** A few invariants are MUST/SHOULD *given support* for a feature whose
+support is itself a MAY — `include`, `sort`, client-generated ids, full to-many replacement, and
+relationship-member deletion. They live at their true obligation tier but **guard on the feature's
+spec-defined non-support signal** (`400` for include/sort, `403` for the write opt-outs): absent
+enforcement, that exact response lets the test log and return (skip) instead of failing; any other
+response falls through and is asserted. Enforcement is per-affordance — set `YAJAC_ENFORCE_OPTIONAL` to
+a comma-separated list of affordance keys (`include`, `sort`, `client-ids`, `full-replacement`,
+`relationship-delete`) or `all` to turn a skip into a failure.
+
+**Layout.** `test_support` is the fixture (a `ConnectionManager` + `RouterBuilder` over an abstract
+five-resource schema, one read-only); `validations` holds the generic, reusable validators (JSON:API
+grammar, full linkage, application URL set); the `mandatory` and `recommended` modules hold the tests.
+
+**Current state — red by design.** The suite runs partially red on `main`: the mandatory failures are
+this implementation's known conformance gaps (e.g. relationship/related-URL routing is not yet wired,
+so those URLs return `404`; the response `Content-Type` is not yet the JSON:API media type). Those reds
+are an accepted, tracked liability until the implementation is conformed — the work belongs to Phase A
+(see *Known rework*).
+
 ## Features
 
 Declared in `Cargo.toml`:
@@ -154,4 +195,5 @@ The near-term plan reshapes parts of this document; treat the following as in-fl
 - The **controller model** will grow: `ResourceContext` becomes a user-extensible per-request
   controller (`new(schema, context)` + user fields), and `Context` is renamed `RoutingContext`.
 - **Relationship endpoints** (`/:type/:id/relationships/:rel`) are not yet implemented; only resource
-  endpoints exist.
+  endpoints exist. Wiring them (and the related-resource URLs) is what turns much of the conformance
+  suite's mandatory tier green.
