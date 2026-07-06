@@ -25,3 +25,7 @@ test-log = "0.2.21"
 default = ["sqlite"]
 sqlite = ["dep:rusqlite", "dep:base64", "dep:r2d2", "dep:r2d2_sqlite"]
 builtin_migrations = ["dep:include_dir"]
+
+[[test]]
+name = "conformance"
+path = "tests/conformance/main.rs"
