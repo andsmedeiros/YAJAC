@@ -60,18 +60,40 @@ should key them at `'sch`.
 
 ## Tests
 
-- **Per-module.** Tests live in a `#[cfg(test)] mod tests` in the same file, or a sibling `tests.rs`
-  for larger suites (`routing/tests.rs`, `database/data_loader/tests.rs`).
-- **Exact assertions.** Assert exact collection contents and exact error *variants* — not inclusion
-  checks, not "is an error." A test that accepts a superset has a hole.
-- **Comprehensive over the public API.** Cover the whole surface of the entity under test.
-- **`test-log`** surfaces log output in tests.
-- Red tests may be committed to a dev branch; they must **never** reach `main`.
+Two layers, with different remits:
+
+- **In-crate unit tests — per-module.** Tests live in a `#[cfg(test)] mod tests` in the same file, or a
+  sibling `tests.rs` for larger suites (`routing/tests.rs`, `database/data_loader/tests.rs`). They
+  assert **exact** collection contents and exact error *variants* — not inclusion checks, not "is an
+  error." A test that accepts a superset has a hole. Cover the whole public surface of the entity.
+- **Black-box conformance suite — `tests/conformance/`.** A separate integration target (registered as
+  `[[test]] name = "conformance"`) driving `Router::handle` exactly as an embedder would, asserting
+  *only* at the request→response boundary so it survives internal refactors. Structure and the contract
+  it pins are in ARCHITECTURE.md; its authoring rules:
+    - **Spec-first, never impl-first.** Derive every expectation from the JSON:API spec, never by
+      reading the implementation. Each test carries the **verbatim spec clause** it encodes as a
+      comment directly above it.
+    - **Placed by obligation level.** MUSTs (and contract obligations) go in `mandatory`; SHOULDs in
+      `recommended`. An invariant that is MUST/SHOULD *given support* for an optional feature lives at
+      its true tier, guarded on the feature's spec-defined non-support signal (see ARCHITECTURE.md).
+    - **Assert exactly what the spec mandates — which may be a bound, not equality.** Where the spec
+      says "MUST NOT include *additional*", a subset check is correct, not exact equality; optional
+      members are checked only when present (`if let Some`). Do **not** "tighten" a spec-bounded
+      assertion into equality — and note we cannot assert data round-trips, since the server is free to
+      alter the data it stores.
+    - Tests return `Result` and use `?`; helpers only access/normalise response bits, assertions stay
+      in the test body.
+- **`test-log`** surfaces log output in tests (including the guarded-affordance skip messages).
+- **Red on `main`:** ordinary unit/integration tests must be green on every branch and on `main`. The
+  **conformance suite is the one sanctioned exception** — it is a spec-conformance *target*, red by
+  design until the implementation is conformed (its reds are the tracked gaps). Ordinary red tests
+  still must never reach `main`.
 
 ## Formatting & build
 
-- **`cargo fmt` is mandatory** and gates commits. `rustfmt.toml` sets `imports_granularity = "Crate"`
-  (a nightly-only option — stable `cargo fmt` prints a warning and skips it; harmless).
+- **`cargo fmt` is mandatory** and gates commits. There is no custom `rustfmt.toml` — a former
+  nightly-only `imports_granularity = "Crate"` setting was removed, as stable `cargo fmt` only warned
+  on it and skipped it.
 - Edition **2024**.
 - **Zero warnings** at commit time, except the sanctioned dead-code scaffolding in `record.rs`
   (`Index::{get_mut,require,require_mut}`, `TableCache`, `Groupable`, `index_by`, `group_by`) — kept
@@ -91,7 +113,8 @@ Before every commit, run a tidy-up pass and fix (not just report) what it finds:
 
 1. `cargo fmt` clean,
 2. `cargo build` warning-free (modulo the sanctioned scaffolding),
-3. `cargo test` green,
+3. `cargo test` green — **except** the conformance suite, whose by-design reds track un-implemented
+   spec obligations (see *Tests*); no *new* red beyond those,
 4. no stray debug artifacts, leftover comments, or typos,
 5. `docs/` (`ARCHITECTURE.md`, `CONVENTIONS.md`) updated in the same commit (or an adjacent one) when
    the change altered documented structure or conventions — the docs track reality, they do not lag it.
