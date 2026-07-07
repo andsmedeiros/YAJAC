@@ -174,9 +174,9 @@ grammar, full linkage, application URL set); the `mandatory` and `recommended` m
 
 **Current state — red by design.** The suite runs partially red on `main`: the mandatory failures are
 this implementation's known conformance gaps (e.g. relationship/related-URL routing is not yet wired,
-so those URLs return `404`; the response `Content-Type` is not yet the JSON:API media type). Those reds
-are an accepted, tracked liability until the implementation is conformed — the work belongs to Phase A
-(see *Known rework*).
+so those URLs return `404`, and self-links are emitted relative rather than absolute). Those reds are an
+accepted, tracked liability until the implementation is conformed — the work belongs to Phase A (see
+*Known rework*).
 
 ## Features
 
