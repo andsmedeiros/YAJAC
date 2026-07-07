@@ -7,7 +7,7 @@ use crate::database::composite::{Composite, CompositeCollection, CompositeRecord
 use crate::database::connection::Connection as ConnectionInterface;
 use crate::database::connection_manager::ConnectionManager;
 use crate::database::data_loader::DataLoader;
-use crate::database::error::Error;
+use crate::database::error::{ConstraintKind, Error};
 use crate::database::query_parameters::{FilterParameters, FilterValue, QueryParameters};
 use crate::database::record::{Indexable, Record, RecordPatch, Refreshable};
 use crate::database::relationships::Relationship as DatabaseRelationship;
@@ -15,6 +15,19 @@ use crate::database::schema::{Relationship as SchemaRelationship, TableSchema};
 use crate::database::table::Table as TableInterface;
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
+
+/// Recasts the foreign-key violation a write raises into `RelatedRecordNotFound`. When persisting a
+/// resource, a failed foreign key means the referenced resource does not exist -- a 404, not the
+/// bare 409 a constraint violation carries at the database layer. Every other error passes through.
+fn map_fk_violation_to_missing_reference(error: Error) -> Error {
+    match error {
+        Error::ConstraintViolation {
+            kind: ConstraintKind::ForeignKey,
+            ..
+        } => Error::RelatedRecordNotFound,
+        other => other,
+    }
+}
 
 pub struct Store<'sch, 'req, Adapter: AdapterInterface> {
     manager: &'sch ConnectionManager<'sch, Adapter>,
@@ -151,12 +164,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                     if let Some(DatabaseRelationship::BelongsTo(id)) =
                         record.relationships.get(relationship)
                     {
-                        let related_record =
-                            index.get(id).ok_or_else(|| Error::RelatedRecordNotFound {
-                                relationship: relationship.to_string(),
-                                resource: descriptor.resource.to_string(),
-                                id: id.to_string(),
-                            })?;
+                        let related_record = index.get(id).ok_or(Error::RelatedRecordNotFound)?;
                         let value = related_record.require(descriptor.keys.related).cloned()?;
                         record.foreign_keys.insert(descriptor.keys.own, value);
                     }
@@ -316,18 +324,20 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
         mut record: Record<'sch>,
         parameters: &QueryParameters<'sch, 'req>,
     ) -> Result<CompositeRecord<'sch>, Error> {
-        self.connection.transaction(|| {
-            let schema = record.schema;
-            self.attach_belongs_to(slice::from_mut(&mut record))?;
-            record.refresh_with(|row| self.table(schema)?.insert(row, parameters))?;
-            self.attach_has_one_many(slice::from_ref(&record), false)?;
-            let included = self.loader().load_for_record(&mut record, parameters)?;
+        self.connection
+            .transaction(|| {
+                let schema = record.schema;
+                self.attach_belongs_to(slice::from_mut(&mut record))?;
+                record.refresh_with(|row| self.table(schema)?.insert(row, parameters))?;
+                self.attach_has_one_many(slice::from_ref(&record), false)?;
+                let included = self.loader().load_for_record(&mut record, parameters)?;
 
-            Ok(Composite {
-                content: record,
-                included,
+                Ok(Composite {
+                    content: record,
+                    included,
+                })
             })
-        })
+            .map_err(map_fk_violation_to_missing_reference)
     }
 
     pub fn update_record(
@@ -335,25 +345,27 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
         mut record: Record<'sch>,
         parameters: &QueryParameters<'sch, 'req>,
     ) -> Result<CompositeRecord<'sch>, Error> {
-        self.connection.transaction(|| {
-            let schema = record.schema;
-            self.attach_belongs_to(slice::from_mut(&mut record))?;
-            let id = record.require_id()?.clone();
-            record.refresh_with(|row| {
-                if row.is_empty() {
-                    self.table(schema)?.find(id, parameters)
-                } else {
-                    self.table(schema)?.update(id, row, parameters)
-                }
-            })?;
-            self.attach_has_one_many(slice::from_ref(&record), true)?;
-            let included = self.loader().load_for_record(&mut record, parameters)?;
+        self.connection
+            .transaction(|| {
+                let schema = record.schema;
+                self.attach_belongs_to(slice::from_mut(&mut record))?;
+                let id = record.require_id()?.clone();
+                record.refresh_with(|row| {
+                    if row.is_empty() {
+                        self.table(schema)?.find(id, parameters)
+                    } else {
+                        self.table(schema)?.update(id, row, parameters)
+                    }
+                })?;
+                self.attach_has_one_many(slice::from_ref(&record), true)?;
+                let included = self.loader().load_for_record(&mut record, parameters)?;
 
-            Ok(Composite {
-                content: record,
-                included,
+                Ok(Composite {
+                    content: record,
+                    included,
+                })
             })
-        })
+            .map_err(map_fk_violation_to_missing_reference)
     }
 
     pub fn delete_record(
@@ -383,19 +395,21 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
             return Err(Error::InconsistentCollection);
         }
 
-        self.connection.transaction(|| {
-            self.attach_belongs_to(&mut records)?;
-            records.refresh_with(|rows| self.table(schema)?.insert_batch(rows, parameters))?;
-            self.attach_has_one_many(&records, false)?;
-            let included = self
-                .loader()
-                .load_for_collection(&mut records, parameters)?;
+        self.connection
+            .transaction(|| {
+                self.attach_belongs_to(&mut records)?;
+                records.refresh_with(|rows| self.table(schema)?.insert_batch(rows, parameters))?;
+                self.attach_has_one_many(&records, false)?;
+                let included = self
+                    .loader()
+                    .load_for_collection(&mut records, parameters)?;
 
-            Ok(Composite {
-                content: records,
-                included,
+                Ok(Composite {
+                    content: records,
+                    included,
+                })
             })
-        })
+            .map_err(map_fk_violation_to_missing_reference)
     }
 
     pub fn update_collection(
@@ -405,28 +419,30 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
     ) -> Result<CompositeCollection<'sch>, Error> {
         let schema = patch.schema;
         let mut patch = Record::from(patch);
-        self.connection.transaction(|| {
-            self.attach_belongs_to(slice::from_mut(&mut patch))?;
-            let row = patch.take_row();
-            let mut records = self
-                .table(schema)?
-                .update_batch(row, parameters)?
-                .into_iter()
-                .map(|row| {
-                    Record::try_from_row(schema, row)
-                        .map(|record| record.with_relationships(patch.relationships.clone()))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            self.attach_has_one_many(&records, true)?;
-            let included = self
-                .loader()
-                .load_for_collection(&mut records, parameters)?;
+        self.connection
+            .transaction(|| {
+                self.attach_belongs_to(slice::from_mut(&mut patch))?;
+                let row = patch.take_row();
+                let mut records = self
+                    .table(schema)?
+                    .update_batch(row, parameters)?
+                    .into_iter()
+                    .map(|row| {
+                        Record::try_from_row(schema, row)
+                            .map(|record| record.with_relationships(patch.relationships.clone()))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.attach_has_one_many(&records, true)?;
+                let included = self
+                    .loader()
+                    .load_for_collection(&mut records, parameters)?;
 
-            Ok(Composite {
-                content: records,
-                included,
+                Ok(Composite {
+                    content: records,
+                    included,
+                })
             })
-        })
+            .map_err(map_fk_violation_to_missing_reference)
     }
 
     pub fn delete_collection(
@@ -456,7 +472,7 @@ mod tests {
     use crate::database::adapters::sqlite::{Connection, Pool};
     use crate::database::attributes::{Attribute, Attributes, Identifier, Row};
     use crate::database::connection_manager::ConnectionManager;
-    use crate::database::error::Error;
+    use crate::database::error::{ConstraintKind, Error};
     use crate::database::query_parameters::{FilterParameters, FilterValue, QueryParameters};
     use crate::database::record::{Builder, Record, RecordPatch};
     use crate::database::registry::Registry;
@@ -840,6 +856,82 @@ mod tests {
         })
     }
 
+    #[test]
+    fn test_create_record_invalid_belongs_to_is_related_not_found() -> Result<(), Box<dyn StdError>>
+    {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+
+            let store = Store::new(manager, &connection);
+            // `author` 999 is provided but references no user: a missing reference (404).
+            let parameters = QueryParameters::new(schema(manager, "posts"));
+            let result = store.create_record(new_post(manager, "Orphan", 999), &parameters);
+
+            assert!(matches!(result, Err(Error::RelatedRecordNotFound)));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_create_record_absent_required_belongs_to_is_a_constraint_violation()
+    -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+
+            let store = Store::new(manager, &connection);
+            // profiles.user_id is NOT NULL: an absent `user` leaves it null, which is a NOT NULL
+            // violation -- not a missing reference, so it must not be recast to a 404.
+            let profile = Record::from_attributes(
+                schema(manager, "profiles"),
+                Attributes::from_iter([(
+                    "bio".to_string(),
+                    Attribute::Text("no user".to_string()),
+                )]),
+            );
+            let parameters = QueryParameters::new(schema(manager, "profiles"));
+            let result = store.create_record(profile, &parameters);
+
+            assert!(matches!(
+                result,
+                Err(Error::ConstraintViolation {
+                    kind: ConstraintKind::NotNull,
+                    ..
+                })
+            ));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_create_record_absent_optional_belongs_to_persists_null() -> Result<(), Box<dyn StdError>>
+    {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+
+            let store = Store::new(manager, &connection);
+            // posts.author_id is nullable: an absent `author` is accepted as a null key.
+            let post = Record::from_attributes(
+                schema(manager, "posts"),
+                Attributes::from_iter([(
+                    "title".to_string(),
+                    Attribute::Text("no author".to_string()),
+                )]),
+            );
+            let parameters = QueryParameters::new(schema(manager, "posts"));
+            store.create_record(post, &parameters)?;
+
+            let persisted = manager
+                .table("posts", &connection)?
+                .query(&QueryParameters::new(schema(manager, "posts")))?;
+            assert_eq!(persisted.len(), 1);
+            assert_eq!(persisted[0]["author_id"], Attribute::Null);
+
+            Ok(())
+        })
+    }
+
     // --- update_record -----------------------------------------------------
 
     #[test]
@@ -911,6 +1003,33 @@ mod tests {
                 Attribute::Integer(1)
             );
             assert_eq!(posts[&Attribute::Integer(3)]["author_id"], Attribute::Null);
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_update_record_invalid_belongs_to_is_related_not_found() -> Result<(), Box<dyn StdError>>
+    {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_post(manager, &connection, 1, 1, "before")?;
+
+            let store = Store::new(manager, &connection);
+            let record = Record::from_relationships(
+                schema(manager, "posts"),
+                Relationships::from([(
+                    "author",
+                    Relationship::BelongsTo(Identifier::Integer(999)),
+                )]),
+            )
+            .with_id(Some(Identifier::Integer(1)));
+
+            let parameters = QueryParameters::new(schema(manager, "posts"));
+            let result = store.update_record(record, &parameters);
+
+            assert!(matches!(result, Err(Error::RelatedRecordNotFound)));
 
             Ok(())
         })
