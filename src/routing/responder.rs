@@ -5,7 +5,7 @@ use http::{Response, StatusCode, response::Builder as ResponseBuilder};
 pub fn default_response() -> ResponseBuilder {
     Response::builder()
         .header("Access-Control-Allow-Origin", "*")
-        .header("Content-Type", "application/json; charset=utf-8")
+        .header("Content-Type", "application/vnd.api+json")
 }
 
 pub fn respond_with<T>(code: StatusCode, payload: T) -> Result<Response<T>, Error> {
