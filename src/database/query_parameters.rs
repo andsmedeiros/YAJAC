@@ -267,11 +267,13 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
         fields: &'req str,
         registry: &Registry<'sch>,
     ) -> Result<(), Error> {
+        let schema = registry.schema(model)?;
+
         if fields.is_empty() {
+            self.fields.entry(schema.name()).or_default();
             return Ok(());
         }
 
-        let schema = registry.schema(model)?;
         let schema_fields = schema.fields().collect::<HashSet<_>>();
 
         let model_fields = fields
@@ -726,18 +728,12 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_fields_empty_value_defaults_to_all() {
+    fn test_parse_fields_empty_value_selects_nothing() {
         let registry = registry();
-        let articles = registry
-            .schema("articles")
-            .expect("articles schema is registered");
         let uri = mock_uri("fields[articles]=");
         let params = parse(&registry, &uri);
 
-        assert_eq!(
-            params.fields["articles"],
-            articles.fields().collect::<IndexSet<_>>()
-        );
+        assert_eq!(params.fields["articles"], IndexSet::new());
     }
 
     #[test]
