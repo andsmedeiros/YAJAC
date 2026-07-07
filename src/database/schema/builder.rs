@@ -1,5 +1,5 @@
 use super::{
-    AttributeType, Column, IdentifierType, PrimaryKey, RelatedResource, Relationship,
+    AttributeType, ColumnDescriptor, IdentifierType, PrimaryKey, RelatedResource, Relationship,
     RelationshipKeys, SchemaParts,
 };
 use indexmap::IndexMap;
@@ -96,12 +96,16 @@ impl<'sch> SchemaBuilder<'sch> {
     }
 
     pub fn attribute(mut self, name: &'sch str, kind: AttributeType) -> Self {
-        self.parts.attributes.insert(name, Column { kind });
+        self.parts
+            .attributes
+            .insert(name, ColumnDescriptor { kind });
         self
     }
 
     pub fn foreign_key(mut self, name: &'sch str, kind: AttributeType) -> Self {
-        self.parts.foreign_keys.insert(name, Column { kind });
+        self.parts
+            .foreign_keys
+            .insert(name, ColumnDescriptor { kind });
         self
     }
 
@@ -157,13 +161,13 @@ mod tests {
         assert_eq!(
             parts.attributes,
             IndexMap::from([
-                ("name", Column { kind: Text }),
-                ("price", Column { kind: Float })
+                ("name", ColumnDescriptor { kind: Text }),
+                ("price", ColumnDescriptor { kind: Float })
             ])
         );
         assert_eq!(
             parts.foreign_keys,
-            IndexMap::from([("category_id", Column { kind: Integer })])
+            IndexMap::from([("category_id", ColumnDescriptor { kind: Integer })])
         );
         assert_eq!(
             parts.relationships,

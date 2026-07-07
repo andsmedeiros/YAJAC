@@ -47,7 +47,7 @@ impl From<IdentifierType> for AttributeType {
 /// A stored column's metadata. The sole extension point for per-column facts;
 /// today it carries only its type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Column {
+pub(crate) struct ColumnDescriptor {
     pub kind: AttributeType,
 }
 
@@ -111,8 +111,8 @@ impl Display for Relationship<'_> {
 pub(crate) struct SchemaParts<'sch> {
     pub name: &'sch str,
     pub primary_key: PrimaryKey<'sch>,
-    pub attributes: IndexMap<&'sch str, Column>,
-    pub foreign_keys: IndexMap<&'sch str, Column>,
+    pub attributes: IndexMap<&'sch str, ColumnDescriptor>,
+    pub foreign_keys: IndexMap<&'sch str, ColumnDescriptor>,
     pub relationships: IndexMap<&'sch str, Relationship<'sch>>,
     pub text_index: bool,
 }
@@ -121,8 +121,8 @@ pub(crate) struct SchemaParts<'sch> {
 pub struct Schema<'sch> {
     name: &'sch str,
     primary_key: PrimaryKey<'sch>,
-    attributes: IndexMap<&'sch str, Column>,
-    foreign_keys: IndexMap<&'sch str, Column>,
+    attributes: IndexMap<&'sch str, ColumnDescriptor>,
+    foreign_keys: IndexMap<&'sch str, ColumnDescriptor>,
     relationships: IndexMap<&'sch str, Relationship<'sch>>,
     text_index: bool,
 }
