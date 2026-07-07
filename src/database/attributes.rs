@@ -1,6 +1,6 @@
 use super::{
     error::Error,
-    schema::{AttributeType, DateTime, TableSchema},
+    schema::{AttributeType, DateTime, Schema},
 };
 use crate::{
     database::schema::IdentifierType, json_api::identifier::Identifier as JsonApiIdentifier,
@@ -79,9 +79,9 @@ impl Display for Identifier {
     }
 }
 
-impl<'sch> TryFrom<(JsonApiIdentifier, &'sch TableSchema<'sch>)> for Identifier {
+impl<'sch> TryFrom<(JsonApiIdentifier, &'sch Schema<'sch>)> for Identifier {
     type Error = Error;
-    fn try_from(value: (JsonApiIdentifier, &'sch TableSchema<'sch>)) -> Result<Self, Error> {
+    fn try_from(value: (JsonApiIdentifier, &'sch Schema<'sch>)) -> Result<Self, Error> {
         let (identifier, schema) = value;
 
         let id = match identifier {
@@ -478,7 +478,7 @@ fn attribute_from_value(
     }
 }
 
-pub fn from_value(schema: &TableSchema, value: Value) -> Result<Attributes, Error> {
+pub fn from_value(schema: &Schema, value: Value) -> Result<Attributes, Error> {
     let schema_name = schema.name();
     let entries = match value {
         Value::Object(object) => object.into_iter().map(|(attribute, value)| {

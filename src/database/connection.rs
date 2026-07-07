@@ -1,7 +1,7 @@
 use super::{
     attributes::{Attribute, Attributes},
     error::Error,
-    schema::TableSchema,
+    schema::Schema,
 };
 
 pub trait Connection {
@@ -9,7 +9,7 @@ pub trait Connection {
         &self,
         query: String,
         bindings: Vec<Attribute>,
-        table_schema: &TableSchema,
+        schema: &Schema,
     ) -> Result<Vec<Attributes>, Error>;
 
     fn execute(&self, query: String, bindings: Vec<Attribute>) -> Result<(), Error>;

@@ -1,5 +1,5 @@
 use crate::database::attributes::{date_time_from_millis, date_time_from_rfc3339};
-use crate::database::schema::{AttributeType, TableSchema};
+use crate::database::schema::{AttributeType, Schema};
 use crate::database::{
     attributes::{Attribute, Attributes},
     connection::Connection as ConnectionInterface,
@@ -37,7 +37,7 @@ impl ToSql for Attribute {
 }
 
 fn inconsistent_schema_error<T, U>(
-    schema: &TableSchema,
+    schema: &Schema,
     attribute: &str,
     from: T,
     to: U,
@@ -53,7 +53,7 @@ where
     })
 }
 
-fn materialise_attributes(schema: &TableSchema, row: &Row) -> Result<Attributes, Error> {
+fn materialise_attributes(schema: &Schema, row: &Row) -> Result<Attributes, Error> {
     let entries = row
         .as_ref()
         .columns()
@@ -121,7 +121,7 @@ impl ConnectionInterface for Connection {
         &self,
         query: String,
         bindings: Vec<Attribute>,
-        table_schema: &TableSchema,
+        schema: &Schema,
     ) -> Result<Vec<Attributes>, Error> {
         debug!("{}, {:?}", query, bindings);
 
@@ -129,7 +129,7 @@ impl ConnectionInterface for Connection {
         let mut statement = self.prepare(&query)?;
         let rows = statement
             .query_and_then(bindings.as_slice(), |row| {
-                materialise_attributes(table_schema, row)
+                materialise_attributes(schema, row)
             })?
             .collect::<Result<Vec<Attributes>, _>>()?;
 

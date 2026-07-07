@@ -7,7 +7,7 @@ use crate::database::{
         FieldsParameters, FilterParameters, FilterValue, PageParameters, QueryParameters,
         SearchParameters, SortDirection, SortParameters, SortingAttribute,
     },
-    schema::{AttributeType, TableSchema},
+    schema::{AttributeType, Schema},
 };
 use itertools::Itertools;
 
@@ -37,7 +37,7 @@ impl Binder for Bindings {
 }
 
 pub struct QueryBuilder<'sch> {
-    schema: &'sch TableSchema<'sch>,
+    schema: &'sch Schema<'sch>,
 }
 
 impl<'sch> QueryBuilder<'sch> {
@@ -315,7 +315,7 @@ impl<'sch> QueryBuilder<'sch> {
 }
 
 impl<'sch> QueryBuilderInterface<'sch> for QueryBuilder<'sch> {
-    fn new(schema: &'sch TableSchema) -> Self {
+    fn new(schema: &'sch Schema) -> Self {
         Self { schema }
     }
 
@@ -457,7 +457,7 @@ mod tests {
         DatabaseRegistry::try_new([my_schema(text_index)]).expect("schema set is consistent")
     }
 
-    fn schema(registry: &Registry) -> &TableSchema<'_> {
+    fn schema(registry: &Registry) -> &Schema<'_> {
         registry.schema("my_table").expect("my_table is registered")
     }
 

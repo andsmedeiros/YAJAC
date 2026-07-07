@@ -1,24 +1,21 @@
 use crate::database::{
     adapters::sqlite::{Connection, QueryBuilder},
-    schema::TableSchema,
+    schema::Schema,
     table::Table as TableInterface,
 };
 
 pub struct Table<'sch, 'req> {
-    pub table_schema: &'sch TableSchema<'sch>,
+    pub schema: &'sch Schema<'sch>,
     pub connection: &'req Connection,
 }
 
 impl<'sch, 'req> TableInterface<'sch, 'req, Connection, QueryBuilder<'sch>> for Table<'sch, 'req> {
-    fn new(table_schema: &'sch TableSchema<'sch>, connection: &'req Connection) -> Self {
-        Self {
-            table_schema,
-            connection,
-        }
+    fn new(schema: &'sch Schema<'sch>, connection: &'req Connection) -> Self {
+        Self { schema, connection }
     }
 
-    fn schema(&self) -> &'sch TableSchema<'sch> {
-        self.table_schema
+    fn schema(&self) -> &'sch Schema<'sch> {
+        self.schema
     }
 
     fn connection(&self) -> &'req Connection {
@@ -37,7 +34,7 @@ mod tests {
         error::Error,
         query_parameters::{FilterParameters, FilterValue, QueryParameters},
         registry::Registry,
-        schema::{AttributeType, SchemaBuilder, TableSchema},
+        schema::{AttributeType, Schema, SchemaBuilder},
         table::Table,
     };
     use crate::http_wrappers::Uri;
@@ -53,7 +50,7 @@ mod tests {
             .text_index()
     }
 
-    fn schema(manager: &Manager) -> &TableSchema<'_> {
+    fn schema(manager: &Manager) -> &Schema<'_> {
         manager
             .registry()
             .schema("my_table")

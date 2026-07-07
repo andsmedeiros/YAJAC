@@ -7,7 +7,7 @@ use crate::{
         error::Error as DatabaseError,
         query_parameters::QueryParameters,
         record::Record,
-        schema::{IdentifierType, TableSchema},
+        schema::{IdentifierType, Schema},
         store::Store,
     },
     http_wrappers::Uri,
@@ -19,16 +19,16 @@ use http::StatusCode;
 /// routing context. It lends the context's request operations already bound to that
 /// schema, so controller handlers never thread the schema through by hand.
 pub struct ResourceContext<'sch, 'req, Adapter: AdapterInterface + 'sch> {
-    schema: &'sch TableSchema<'sch>,
+    schema: &'sch Schema<'sch>,
     context: Context<'sch, 'req, Adapter>,
 }
 
 impl<'sch, 'req, Adapter: AdapterInterface + 'sch> ResourceContext<'sch, 'req, Adapter> {
-    pub fn new(schema: &'sch TableSchema<'sch>, context: Context<'sch, 'req, Adapter>) -> Self {
+    pub fn new(schema: &'sch Schema<'sch>, context: Context<'sch, 'req, Adapter>) -> Self {
         Self { schema, context }
     }
 
-    pub fn schema(&self) -> &'sch TableSchema<'sch> {
+    pub fn schema(&self) -> &'sch Schema<'sch> {
         self.schema
     }
 

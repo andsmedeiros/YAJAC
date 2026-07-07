@@ -11,7 +11,7 @@ use crate::database::error::{ConstraintKind, Error};
 use crate::database::query_parameters::{FilterParameters, FilterValue, QueryParameters};
 use crate::database::record::{Indexable, Record, RecordPatch, Refreshable};
 use crate::database::relationships::Relationship as DatabaseRelationship;
-use crate::database::schema::{Relationship as SchemaRelationship, TableSchema};
+use crate::database::schema::{Relationship as SchemaRelationship, Schema};
 use crate::database::table::Table as TableInterface;
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
@@ -47,7 +47,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
 
     pub fn fetch_record(
         &self,
-        schema: &'sch TableSchema<'sch>,
+        schema: &'sch Schema<'sch>,
         id: Identifier,
         parameters: &QueryParameters<'sch, 'req>,
     ) -> Result<CompositeRecord<'sch>, Error> {
@@ -62,7 +62,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
 
     pub fn fetch_collection(
         &self,
-        schema: &'sch TableSchema<'sch>,
+        schema: &'sch Schema<'sch>,
         parameters: &QueryParameters<'sch, 'req>,
     ) -> Result<CompositeCollection<'sch>, Error> {
         self.connection.transaction(|| {
@@ -177,7 +177,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
 
     fn attach_has_one_many(&self, records: &[Record<'sch>], replace: bool) -> Result<(), Error> {
         use DatabaseRelationship as Data;
-        use SchemaRelationship as Schema;
+        use SchemaRelationship as Descriptor;
         let mut patches: HashMap<&str, HashMap<Attribute, Row>> = HashMap::new();
         let mut full_detachments: HashMap<&str, HashMap<&str, IndexSet<_>>> = HashMap::new();
 
@@ -194,13 +194,14 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                         })?;
 
                 let (ids, descriptor) = match (&relationship, descriptor) {
-                    (Data::Empty, Schema::HasOne(descriptor) | Schema::HasMany(descriptor)) => {
-                        ([].as_slice(), descriptor)
-                    }
-                    (Data::HasOne(id), Schema::HasOne(descriptor)) => {
+                    (
+                        Data::Empty,
+                        Descriptor::HasOne(descriptor) | Descriptor::HasMany(descriptor),
+                    ) => ([].as_slice(), descriptor),
+                    (Data::HasOne(id), Descriptor::HasOne(descriptor)) => {
                         (slice::from_ref(id), descriptor)
                     }
-                    (Data::HasMany(ids), Schema::HasMany(descriptor)) => {
+                    (Data::HasMany(ids), Descriptor::HasMany(descriptor)) => {
                         (ids.as_slice(), descriptor)
                     }
                     (Data::HasOne(..) | Data::HasMany(..), _) => {
@@ -368,11 +369,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
             .map_err(map_fk_violation_to_missing_reference)
     }
 
-    pub fn delete_record(
-        &self,
-        schema: &'sch TableSchema<'sch>,
-        id: Identifier,
-    ) -> Result<(), Error> {
+    pub fn delete_record(&self, schema: &'sch Schema<'sch>, id: Identifier) -> Result<(), Error> {
         self.connection
             .transaction(|| self.table(schema)?.delete(id))
     }
@@ -447,14 +444,14 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
 
     pub fn delete_collection(
         &self,
-        schema: &'sch TableSchema<'sch>,
+        schema: &'sch Schema<'sch>,
         parameters: &QueryParameters<'sch, 'req>,
     ) -> Result<(), Error> {
         self.connection
             .transaction(|| self.table(schema)?.delete_batch(parameters))
     }
 
-    fn table(&self, schema: &'sch TableSchema<'sch>) -> Result<Adapter::Table<'sch, 'req>, Error> {
+    fn table(&self, schema: &'sch Schema<'sch>) -> Result<Adapter::Table<'sch, 'req>, Error> {
         self.manager.table(schema.name(), self.connection)
     }
 
@@ -477,7 +474,7 @@ mod tests {
     use crate::database::record::{Builder, Record, RecordPatch};
     use crate::database::registry::Registry;
     use crate::database::relationships::{Relationship, Relationships};
-    use crate::database::schema::{AttributeType, Related, SchemaBuilder, TableSchema};
+    use crate::database::schema::{AttributeType, Related, Schema, SchemaBuilder};
     use crate::database::table::Table;
     use crate::http_wrappers::Uri;
     use std::collections::HashMap;
@@ -528,7 +525,7 @@ mod tests {
     fn schema<'sch>(
         manager: &'sch ConnectionManager<SqliteAdapter>,
         name: &str,
-    ) -> &'sch TableSchema<'sch> {
+    ) -> &'sch Schema<'sch> {
         manager
             .registry()
             .schema(name)

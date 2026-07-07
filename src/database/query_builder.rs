@@ -2,14 +2,14 @@ use super::{
     QueryParameters,
     attributes::{Attribute, Attributes},
     error::Error,
-    schema::TableSchema,
+    schema::Schema,
 };
 use crate::database::attributes::Identifier;
 
 pub type Bindings = Vec<Attribute>;
 
-pub trait QueryBuilder<'a> {
-    fn new(schema: &'a TableSchema) -> Self;
+pub trait QueryBuilder<'sch> {
+    fn new(schema: &'sch Schema) -> Self;
     fn query(&self, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
     fn find(
         &self,

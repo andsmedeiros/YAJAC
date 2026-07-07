@@ -53,12 +53,12 @@ beyond serde.
 
 The engine. Schema-driven and adapter-generic.
 
-- **`schema`** — `TableSchema<'sch>` and its parts (`PrimaryKey`, `AttributeType`, `Relationship`,
+- **`schema`** — `Schema<'sch>` and its parts (`PrimaryKey`, `AttributeType`, `Relationship`,
   `RelatedResource`, `RelationshipKeys`). Owned `IndexMap` containers keyed by borrowed `&'sch str`:
   O(1) lookup with **definition order preserved** (that order is observable in generated SQL). Built by
   an ergonomic **`SchemaBuilder`** (`schema::builder`) — the public, intended way to define a schema —
-  which collects inert `SchemaParts` that the registry validates and mints into `TableSchema`s
-  (`TableSchema::new` is `pub(crate)`).
+  which collects inert `SchemaParts` that the registry validates and mints into `Schema`s
+  (`Schema::new` is `pub(crate)`).
 - **`registry`** — `Registry<'sch>`: takes `SchemaBuilder`s and **owns** the resulting schemas,
   validating-and-minting them in one fallible `try_build` step (per-schema consistency + cross-schema
   relationship checks; a duplicate or inconsistent set is rejected at construction). A pure schema

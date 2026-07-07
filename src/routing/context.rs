@@ -3,7 +3,7 @@ use crate::database::attributes::{ForeignKeys, Identifier};
 use crate::database::error::Error;
 use crate::database::record::Record;
 use crate::database::relationships::Relationship;
-use crate::database::schema::{IdentifierType, Relationship as SchemaRelationship, TableSchema};
+use crate::database::schema::{IdentifierType, Relationship as SchemaRelationship, Schema};
 use crate::json_api::identifier::Identifier as JsonApiIdentifier;
 use crate::json_api::relationship::Linkage;
 use crate::{
@@ -79,7 +79,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
         Ok(Store::new(self.manager, self.connection()?))
     }
 
-    pub fn require_resource(&mut self, schema: &TableSchema) -> Result<Resource, RoutingError> {
+    pub fn require_resource(&mut self, schema: &Schema) -> Result<Resource, RoutingError> {
         let document = self.body.take().ok_or_else(|| {
             RoutingError::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -135,7 +135,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
 
     pub fn require_record(
         &mut self,
-        schema: &'sch TableSchema<'sch>,
+        schema: &'sch Schema<'sch>,
     ) -> Result<Record<'sch>, RoutingError> {
         let resource = self.require_resource(schema)?;
         let record = Record {
@@ -282,7 +282,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
 
     pub fn query_parameters(
         &self,
-        schema: &'sch TableSchema<'sch>,
+        schema: &'sch Schema<'sch>,
     ) -> Result<&QueryParameters<'sch, 'req>, Error> {
         match self.query.get() {
             Some(parameters) => Ok(parameters),

@@ -7,7 +7,7 @@ use crate::{
     core::factories::to_document,
     database::{
         adapters::Adapter as AdapterInterface, connection_manager::ConnectionManager,
-        schema::TableSchema,
+        schema::Schema,
     },
     http_wrappers::{StatusCode, Uri},
     json_api::{document::Document, error::Error as JsonApiError},
@@ -210,11 +210,7 @@ impl<'sch, Adapter: AdapterInterface> RouterBuilder<'sch, Adapter> {
         self
     }
 
-    pub fn read_only_resource<T>(
-        &mut self,
-        scope: &str,
-        schema: &'sch TableSchema<'sch>,
-    ) -> &mut Self
+    pub fn read_only_resource<T>(&mut self, scope: &str, schema: &'sch Schema<'sch>) -> &mut Self
     where
         T: ReadOnlyResourceController<'sch, Adapter> + 'sch,
     {
@@ -229,7 +225,7 @@ impl<'sch, Adapter: AdapterInterface> RouterBuilder<'sch, Adapter> {
         })
     }
 
-    pub fn resource<T>(&mut self, scope: &str, schema: &'sch TableSchema<'sch>) -> &mut Self
+    pub fn resource<T>(&mut self, scope: &str, schema: &'sch Schema<'sch>) -> &mut Self
     where
         T: ResourceController<'sch, Adapter> + 'sch,
     {

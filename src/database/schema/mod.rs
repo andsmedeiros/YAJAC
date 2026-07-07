@@ -105,7 +105,7 @@ impl Display for Relationship<'_> {
 }
 
 /// The inert, unvalidated extract of a `SchemaBuilder`. The registry reads it to
-/// validate cross-schema, then mints a `TableSchema` from it; it is the only
+/// validate cross-schema, then mints a `Schema` from it; it is the only
 /// path to a schema.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SchemaParts<'sch> {
@@ -118,7 +118,7 @@ pub(crate) struct SchemaParts<'sch> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TableSchema<'sch> {
+pub struct Schema<'sch> {
     name: &'sch str,
     primary_key: PrimaryKey<'sch>,
     attributes: IndexMap<&'sch str, Column>,
@@ -127,7 +127,7 @@ pub struct TableSchema<'sch> {
     text_index: bool,
 }
 
-impl<'sch> TableSchema<'sch> {
+impl<'sch> Schema<'sch> {
     /// Mints a validated schema from a builder's extract. Restricted to the
     /// crate so construction always flows through the registry's validation.
     pub(crate) fn new(parts: SchemaParts<'sch>) -> Self {
@@ -273,7 +273,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_table_schema_column_operations() {
-        let schema = TableSchema::new(products().into_parts());
+        let schema = Schema::new(products().into_parts());
 
         assert_eq!(schema.attribute("name"), Some(Text));
         assert_eq!(schema.attribute("price"), Some(Float));

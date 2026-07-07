@@ -4,24 +4,21 @@ use super::{
     attributes::{Attributes, Identifier},
     error::Error,
     relationships::{Relationship, Relationships},
-    schema::{IdentifierType, TableSchema},
+    schema::{IdentifierType, Schema},
 };
 use crate::database::attributes::{Attribute, ForeignKeys, Row};
 use crate::json_api::identifier::Identifier as JsonApiIdentifier;
 use std::{borrow::Borrow, collections::HashMap};
 
-pub trait Builder<'sch>: From<(&'sch TableSchema<'sch>, Attributes, Relationships<'sch>)> {
-    fn new(schema: &'sch TableSchema<'sch>) -> Self;
-    fn from_attributes(schema: &'sch TableSchema<'sch>, attributes: Attributes) -> Self;
-    fn from_relationships(
-        schema: &'sch TableSchema<'sch>,
-        relationships: Relationships<'sch>,
-    ) -> Self;
+pub trait Builder<'sch>: From<(&'sch Schema<'sch>, Attributes, Relationships<'sch>)> {
+    fn new(schema: &'sch Schema<'sch>) -> Self;
+    fn from_attributes(schema: &'sch Schema<'sch>, attributes: Attributes) -> Self;
+    fn from_relationships(schema: &'sch Schema<'sch>, relationships: Relationships<'sch>) -> Self;
 }
 
 #[derive(Debug, Clone)]
 pub struct Record<'sch> {
-    pub schema: &'sch TableSchema<'sch>,
+    pub schema: &'sch Schema<'sch>,
     pub id: Option<Identifier>,
     pub attributes: Attributes,
     pub relationships: Relationships<'sch>,
@@ -48,7 +45,7 @@ impl<'sch> Record<'sch> {
         self.schema.name()
     }
 
-    pub fn schema(&self) -> &'sch TableSchema<'sch> {
+    pub fn schema(&self) -> &'sch Schema<'sch> {
         self.schema
     }
 
@@ -126,7 +123,7 @@ impl<'sch> Record<'sch> {
     /// Synthesises a record from a `Table`-provided row, sorting its columns into the primary key,
     /// attributes and foreign keys declared by `schema`. The primary key is optional; any column
     /// the schema does not recognise is rejected.
-    pub fn try_from_row(schema: &'sch TableSchema<'sch>, row: Row) -> Result<Self, Error> {
+    pub fn try_from_row(schema: &'sch Schema<'sch>, row: Row) -> Result<Self, Error> {
         let mut id = None;
         let mut attributes = Attributes::new();
         let mut foreign_keys = ForeignKeys::new();
@@ -188,7 +185,7 @@ impl<'sch> Record<'sch> {
 }
 
 impl<'sch> Builder<'sch> for Record<'sch> {
-    fn new(schema: &'sch TableSchema<'sch>) -> Self {
+    fn new(schema: &'sch Schema<'sch>) -> Self {
         Record {
             schema,
             id: None,
@@ -198,17 +195,14 @@ impl<'sch> Builder<'sch> for Record<'sch> {
         }
     }
 
-    fn from_attributes(schema: &'sch TableSchema<'sch>, attributes: Attributes) -> Self {
+    fn from_attributes(schema: &'sch Schema<'sch>, attributes: Attributes) -> Self {
         Record {
             attributes,
             ..Self::new(schema)
         }
     }
 
-    fn from_relationships(
-        schema: &'sch TableSchema<'sch>,
-        relationships: Relationships<'sch>,
-    ) -> Self {
+    fn from_relationships(schema: &'sch Schema<'sch>, relationships: Relationships<'sch>) -> Self {
         Record {
             relationships,
             ..Self::new(schema)
@@ -216,8 +210,8 @@ impl<'sch> Builder<'sch> for Record<'sch> {
     }
 }
 
-impl<'sch> From<(&'sch TableSchema<'sch>, Attributes, Relationships<'sch>)> for Record<'sch> {
-    fn from(parts: (&'sch TableSchema<'sch>, Attributes, Relationships<'sch>)) -> Self {
+impl<'sch> From<(&'sch Schema<'sch>, Attributes, Relationships<'sch>)> for Record<'sch> {
+    fn from(parts: (&'sch Schema<'sch>, Attributes, Relationships<'sch>)) -> Self {
         let (schema, attributes, relationships) = parts;
         Record {
             attributes,
@@ -239,10 +233,10 @@ impl<'sch> From<RecordPatch<'sch>> for Record<'sch> {
     }
 }
 
-impl<'sch> TryFrom<(&'sch TableSchema<'sch>, Row)> for Record<'sch> {
+impl<'sch> TryFrom<(&'sch Schema<'sch>, Row)> for Record<'sch> {
     type Error = Error;
 
-    fn try_from((schema, row): (&'sch TableSchema<'sch>, Row)) -> Result<Self, Error> {
+    fn try_from((schema, row): (&'sch Schema<'sch>, Row)) -> Result<Self, Error> {
         Record::try_from_row(schema, row)
     }
 }
@@ -304,13 +298,13 @@ impl<'sch> Refreshable for Vec<Record<'sch>> {
 
 #[derive(Debug, Clone)]
 pub struct RecordPatch<'sch> {
-    pub schema: &'sch TableSchema<'sch>,
+    pub schema: &'sch Schema<'sch>,
     pub attributes: Attributes,
     pub relationships: Relationships<'sch>,
 }
 
 impl<'sch> Builder<'sch> for RecordPatch<'sch> {
-    fn new(schema: &'sch TableSchema<'sch>) -> Self {
+    fn new(schema: &'sch Schema<'sch>) -> Self {
         Self {
             schema,
             attributes: Attributes::new(),
@@ -318,17 +312,14 @@ impl<'sch> Builder<'sch> for RecordPatch<'sch> {
         }
     }
 
-    fn from_attributes(schema: &'sch TableSchema<'sch>, attributes: Attributes) -> Self {
+    fn from_attributes(schema: &'sch Schema<'sch>, attributes: Attributes) -> Self {
         Self {
             attributes,
             ..Self::new(schema)
         }
     }
 
-    fn from_relationships(
-        schema: &'sch TableSchema<'sch>,
-        relationships: Relationships<'sch>,
-    ) -> Self {
+    fn from_relationships(schema: &'sch Schema<'sch>, relationships: Relationships<'sch>) -> Self {
         RecordPatch {
             relationships,
             ..Self::new(schema)
@@ -336,8 +327,8 @@ impl<'sch> Builder<'sch> for RecordPatch<'sch> {
     }
 }
 
-impl<'sch> From<(&'sch TableSchema<'sch>, Attributes, Relationships<'sch>)> for RecordPatch<'sch> {
-    fn from(parts: (&'sch TableSchema<'sch>, Attributes, Relationships<'sch>)) -> Self {
+impl<'sch> From<(&'sch Schema<'sch>, Attributes, Relationships<'sch>)> for RecordPatch<'sch> {
+    fn from(parts: (&'sch Schema<'sch>, Attributes, Relationships<'sch>)) -> Self {
         let (schema, attributes, relationships) = parts;
         RecordPatch {
             attributes,

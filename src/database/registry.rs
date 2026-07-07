@@ -1,21 +1,19 @@
 use super::{
     error::Error,
-    schema::{
-        AttributeType, RelatedResource, Relationship, SchemaBuilder, SchemaParts, TableSchema,
-    },
+    schema::{AttributeType, RelatedResource, Relationship, Schema, SchemaBuilder, SchemaParts},
 };
 use std::collections::HashMap;
 
 /// An immutable, validated collection of schemas keyed by resource type. Holds no
 /// storage: binding a registry to a connection pool is `ConnectionManager`'s job.
 pub struct Registry<'sch> {
-    schemas: HashMap<&'sch str, TableSchema<'sch>>,
+    schemas: HashMap<&'sch str, Schema<'sch>>,
 }
 
 impl<'sch> Registry<'sch> {
     /// Builds the registry from schema builders: decomposes them into their raw
     /// parts and hands them to `try_build`, which validates the set and mints the
-    /// schemas — the sole path by which a `TableSchema` comes into being.
+    /// schemas — the sole path by which a `Schema` comes into being.
     pub fn try_new(builders: impl IntoIterator<Item = SchemaBuilder<'sch>>) -> Result<Self, Error> {
         let parts = builders
             .into_iter()
@@ -27,7 +25,7 @@ impl<'sch> Registry<'sch> {
         })
     }
 
-    pub fn schema(&self, name: &str) -> Result<&TableSchema<'sch>, Error> {
+    pub fn schema(&self, name: &str) -> Result<&Schema<'sch>, Error> {
         self.schemas.get(name).ok_or_else(|| Error::UnknownSchema {
             schema: name.to_string(),
             message: "The requested table is not registered".to_string(),
@@ -36,10 +34,10 @@ impl<'sch> Registry<'sch> {
 }
 
 /// Validates the schema set and mints it. Returns the built schemas iff every
-/// invariant holds, so an inconsistent set never yields a `TableSchema`.
+/// invariant holds, so an inconsistent set never yields a `Schema`.
 fn try_build<'sch>(
     parts: Vec<SchemaParts<'sch>>,
-) -> Result<HashMap<&'sch str, TableSchema<'sch>>, Error> {
+) -> Result<HashMap<&'sch str, Schema<'sch>>, Error> {
     let mut registry: HashMap<&'sch str, SchemaParts<'sch>> = HashMap::with_capacity(parts.len());
 
     // Resource types are unique across the set.
@@ -61,7 +59,7 @@ fn try_build<'sch>(
 
     Ok(registry
         .into_iter()
-        .map(|(name, schema)| (name, TableSchema::new(schema)))
+        .map(|(name, schema)| (name, Schema::new(schema)))
         .collect())
 }
 

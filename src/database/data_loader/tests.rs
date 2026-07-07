@@ -8,7 +8,7 @@ use crate::database::{
     query_parameters::QueryParameters,
     record::Record,
     registry::Registry,
-    schema::{AttributeType, Related, SchemaBuilder, TableSchema},
+    schema::{AttributeType, Related, Schema, SchemaBuilder},
     table::Table,
 };
 use crate::{core::to_document, http_wrappers::Uri, routing::DefaultUriGenerator};
@@ -118,10 +118,7 @@ fn schemas() -> [SchemaBuilder<'static>; 5] {
     ]
 }
 
-fn schema<'sch>(
-    manager: &'sch ConnectionManager<SqliteAdapter>,
-    name: &str,
-) -> &'sch TableSchema<'sch> {
+fn schema<'sch>(manager: &'sch ConnectionManager<SqliteAdapter>, name: &str) -> &'sch Schema<'sch> {
     manager
         .registry()
         .schema(name)

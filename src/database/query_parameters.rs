@@ -8,7 +8,7 @@ use crate::database::error::Error::{
     InvalidEncodingFailure, ParseParameterFailure, QueryValidationFailure,
 };
 use crate::database::registry::Registry;
-use crate::database::schema::{AttributeType, Relationship, TableSchema};
+use crate::database::schema::{AttributeType, Relationship, Schema};
 use crate::http_wrappers::Uri;
 use indexmap::{IndexMap, IndexSet};
 use regex::Regex;
@@ -118,13 +118,13 @@ impl Default for PageParameters {
 
 /// Auxiliary struct to collect model schemas that should be loaded for all the requested
 /// information to be served
-pub type ModelsToSerialise<'sch> = HashMap<&'sch str, &'sch TableSchema<'sch>>;
+pub type ModelsToSerialise<'sch> = HashMap<&'sch str, &'sch Schema<'sch>>;
 
 /// Stores all possible query parameters received.
 /// Those parameters will be used later to determine which and how data should be loaded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryParameters<'sch, 'req> {
-    pub schema: &'sch TableSchema<'sch>,
+    pub schema: &'sch Schema<'sch>,
     pub fields: FieldsParameters<'sch>,
     pub include: IncludeParameters<'sch, 'req>,
     pub filter: Option<FilterParameters<'sch>>,
@@ -134,7 +134,7 @@ pub struct QueryParameters<'sch, 'req> {
 }
 
 impl<'sch, 'req> QueryParameters<'sch, 'req> {
-    pub fn new(schema: &'sch TableSchema<'sch>) -> Self {
+    pub fn new(schema: &'sch Schema<'sch>) -> Self {
         let mut parameters = Self {
             schema,
             fields: FieldsParameters::from_iter([(schema.name(), schema.fields().collect())]),
@@ -158,7 +158,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
     /// return an `Err`.
     pub fn parse(
         uri: &'req Uri,
-        schema: &'sch TableSchema<'sch>,
+        schema: &'sch Schema<'sch>,
         registry: &'sch Registry<'sch>,
     ) -> Result<QueryParameters<'sch, 'req>, Error> {
         let mut query_parameters = Self {
@@ -320,7 +320,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
         &mut self,
         attribute: &'req str,
         entries: &'req str,
-        schema: &'sch TableSchema,
+        schema: &'sch Schema,
     ) -> Result<(), Error> {
         let (attribute, kind) = schema
             .attributes()
@@ -395,8 +395,8 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
     fn parse_include(
         &mut self,
         include: &str,
-        models: &mut HashMap<&'sch str, &'sch TableSchema<'sch>>,
-        schema: &'sch TableSchema<'sch>,
+        models: &mut HashMap<&'sch str, &'sch Schema<'sch>>,
+        schema: &'sch Schema<'sch>,
         registry: &'sch Registry<'sch>,
     ) -> Result<(), Error> {
         if !include.is_empty() {
@@ -440,11 +440,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
         Ok(())
     }
 
-    fn parse_sort(
-        &mut self,
-        entries: &'req str,
-        schema: &'sch TableSchema<'sch>,
-    ) -> Result<(), Error> {
+    fn parse_sort(&mut self, entries: &'req str, schema: &'sch Schema<'sch>) -> Result<(), Error> {
         let attributes = schema
             .attributes()
             .map(|(name, _)| name)
@@ -511,7 +507,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
     fn parse_query(
         &mut self,
         query: &'req str,
-        schema: &'sch TableSchema<'sch>,
+        schema: &'sch Schema<'sch>,
         registry: &'sch Registry<'sch>,
     ) -> Result<(), Error> {
         let mut models_to_serialise = HashMap::from_iter([(schema.name(), schema)]);

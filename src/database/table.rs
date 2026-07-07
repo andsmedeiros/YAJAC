@@ -4,7 +4,7 @@ use super::{
     error::Error,
     query_builder::QueryBuilder as QueryBuilderInterface,
     query_parameters::QueryParameters,
-    schema::TableSchema,
+    schema::Schema,
 };
 use crate::database::attributes::Identifier;
 
@@ -15,9 +15,9 @@ pub trait Table<
     QueryBuilder: QueryBuilderInterface<'sch>,
 >
 {
-    fn new(table_schema: &'sch TableSchema<'sch>, connection: &'req Connection) -> Self;
+    fn new(schema: &'sch Schema<'sch>, connection: &'req Connection) -> Self;
 
-    fn schema(&self) -> &'sch TableSchema<'sch>;
+    fn schema(&self) -> &'sch Schema<'sch>;
 
     fn connection(&self) -> &'req Connection;
 

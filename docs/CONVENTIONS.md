@@ -39,11 +39,11 @@ should key them at `'sch`.
 ## Schema definition
 
 - Schemas are defined through **`SchemaBuilder`** (the public, intended API), never by constructing a
-  `TableSchema` directly (`TableSchema::new` is `pub(crate)`); the registry validates and mints them.
+  `Schema` directly (`Schema::new` is `pub(crate)`); the registry validates and mints them.
   The relationship DSL reads directionally: `Related::to(resource).pointing_own(fk).to_related(pk)` when
   the foreign key is on our table, `.pointing_related(fk).to_own(pk)` when it is on the related table.
 - **Tests build through the registry.** Fixtures construct `SchemaBuilder`s, pass them to
-  `Registry::try_new`, and take a `&TableSchema` via `registry.schema(name)` — they do not reach for
+  `Registry::try_new`, and take a `&Schema` via `registry.schema(name)` — they do not reach for
   the `pub(crate)` constructor. Pure schema-only tests build a bare pool-free `Registry`; tests that
   touch the database wrap it in a `ConnectionManager` (`ConnectionManager::new(registry, pool)`) and
   reach schemas through `manager.registry()`.
