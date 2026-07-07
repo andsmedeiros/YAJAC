@@ -5,6 +5,30 @@ use std::{
     fmt::{Display, Formatter},
 };
 
+/// The class of a database constraint, abstracted across adapters so callers can react to a
+/// violation portably (each adapter maps its native codes onto these).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConstraintKind {
+    ForeignKey,
+    Unique,
+    NotNull,
+    Check,
+    Other,
+}
+
+impl Display for ConstraintKind {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        let label = match self {
+            ConstraintKind::ForeignKey => "foreign key",
+            ConstraintKind::Unique => "unique",
+            ConstraintKind::NotNull => "not null",
+            ConstraintKind::Check => "check",
+            ConstraintKind::Other => "unknown",
+        };
+        write!(f, "{label}")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Error {
     ParseParameterFailure {
@@ -53,14 +77,11 @@ pub enum Error {
         message: String,
     },
     ConstraintViolation {
+        kind: ConstraintKind,
         message: String,
     },
     RecordNotFound,
-    RelatedRecordNotFound {
-        relationship: String,
-        resource: String,
-        id: String,
-    },
+    RelatedRecordNotFound,
     DataLoadingError {
         message: String,
     },
@@ -90,7 +111,7 @@ impl Error {
             | InvalidAttribute { .. }
             | InvalidOperation { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             ConstraintViolation { .. } => StatusCode::CONFLICT,
-            RecordNotFound | RelatedRecordNotFound { .. } => StatusCode::NOT_FOUND,
+            RecordNotFound | RelatedRecordNotFound => StatusCode::NOT_FOUND,
             InconsistentSchema { .. }
             | UnknownSchema { .. }
             | InvalidAttributeConversion { .. }
@@ -123,7 +144,7 @@ impl Error {
             DatabaseFailure { .. } => "DatabaseFailure",
             ConstraintViolation { .. } => "ConstraintViolation",
             RecordNotFound => "RecordNotFound",
-            RelatedRecordNotFound { .. } => "RelatedRecordNotFound",
+            RelatedRecordNotFound => "RelatedRecordNotFound",
             DataLoadingError { .. } => "DataLoadingError",
             UnloadedAttributeAccess { .. } => "UnloadedAttributeAccess",
             MissingRecordId { .. } => "MissingRecordId",
@@ -152,7 +173,7 @@ impl Error {
             DatabaseFailure { .. } => "The database operation failed",
             ConstraintViolation { .. } => "A database constraint was violated",
             RecordNotFound => "The requested record was not found",
-            RelatedRecordNotFound { .. } => "A related record was not found",
+            RelatedRecordNotFound => "A related record was not found",
             DataLoadingError { .. } => "Failed to load related data",
             UnloadedAttributeAccess { .. } => "An unloaded attribute was accessed",
             MissingRecordId { .. } => "The record is missing an identifier",
@@ -171,7 +192,15 @@ impl From<rusqlite::Error> for Error {
             rusqlite::Error::SqliteFailure(failure, _)
                 if failure.code == rusqlite::ErrorCode::ConstraintViolation =>
             {
-                Error::ConstraintViolation { message }
+                let kind = match failure.extended_code {
+                    rusqlite::ffi::SQLITE_CONSTRAINT_FOREIGNKEY => ConstraintKind::ForeignKey,
+                    rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
+                    | rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY => ConstraintKind::Unique,
+                    rusqlite::ffi::SQLITE_CONSTRAINT_NOTNULL => ConstraintKind::NotNull,
+                    rusqlite::ffi::SQLITE_CONSTRAINT_CHECK => ConstraintKind::Check,
+                    _ => ConstraintKind::Other,
+                };
+                Error::ConstraintViolation { kind, message }
             }
             _ => Error::DatabaseFailure { message },
         }
@@ -254,17 +283,11 @@ impl Display for Error {
                 operation, schema, message
             ),
             DatabaseFailure { message } => write!(f, "Failed to execute query: {}", message),
-            ConstraintViolation { message } => write!(f, "Constraint violation: {}", message),
+            ConstraintViolation { kind, message } => {
+                write!(f, "Constraint violation ({kind}): {message}")
+            }
             RecordNotFound => write!(f, "Record not found"),
-            RelatedRecordNotFound {
-                relationship,
-                resource,
-                id,
-            } => write!(
-                f,
-                "Relationship '{}' references a '{}' with id '{}' that does not exist",
-                relationship, resource, id
-            ),
+            RelatedRecordNotFound => write!(f, "A referenced resource does not exist"),
             DataLoadingError { message } => write!(
                 f,
                 "Failed to load relationships for primary content: {}",
