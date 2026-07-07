@@ -135,7 +135,12 @@ pub fn to_document<'a>(
     uri: &Uri,
     uri_generator: &dyn UriGenerator,
 ) -> Result<Document, Error> {
-    let content: PrimaryContent = match content.into() {
+    let content = content.into();
+    // `included` MUST NOT accompany a document without primary `data` (i.e. an
+    // errors document); a data document keeps it, even as an empty array.
+    let carries_data = !matches!(content, Content::Errors(_));
+
+    let content: PrimaryContent = match content {
         Content::Resource(record) => make_resource(record, uri_generator)?.into(),
         Content::Collection(collection) => collection
             .into_iter()
@@ -155,6 +160,6 @@ pub fn to_document<'a>(
         meta: None,
         jsonapi: Some(implementation_info()),
         links: Some(document_links(uri)),
-        included: Some(included),
+        included: carries_data.then_some(included),
     })
 }
