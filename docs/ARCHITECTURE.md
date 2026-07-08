@@ -198,9 +198,12 @@ Declared in `Cargo.toml`:
 The near-term plan reshapes parts of this document; treat the following as in-flux:
 
 - The key-bearing signatures (`Attributes`, `ForeignKeys`, `Relationships`, `QueryParameters`) now key
-  on schema-borrowed `&'sch str` under a "parse, don't validate" layer. The remaining move is on the
-  **value** side: `Attribute` will carry `Cow<'req, str>` so request-borrowed and DB-owned values share
-  one type (`Attributes<'sch, 'req>`), with no separate `Row` type.
+  on schema-borrowed `&'sch str` under a "parse, don't validate" layer. The value side stays **owned**:
+  a request-borrowed `Attribute` value (`Cow<'req, str>`) was explored and dropped — serde cannot
+  zero-copy a map/container value into `Cow` without a hand-written borrowing `Deserialize`, so the win
+  did not justify the machinery. Likewise a `Cow<'static, str>` error payload was dropped: every error
+  funnels into the owned wire type (`json_api::error::Error`) and is re-owned there, so an upstream
+  borrow only relocates the allocation rather than removing it.
 - The **controller model** will grow: `ResourceContext` becomes a user-extensible per-request
   controller (`new(schema, context)` + user fields), and `Context` is renamed `RoutingContext`.
 - **Relationship endpoints** (`/:type/:id/relationships/:rel`) are not yet implemented; only resource
