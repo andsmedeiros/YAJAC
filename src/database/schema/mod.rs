@@ -47,7 +47,7 @@ impl From<IdentifierType> for AttributeType {
 /// A stored column's metadata: its schema-defined name and type. The sole
 /// extension point for per-column facts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ColumnDescriptor<'sch> {
+pub struct ColumnDescriptor<'sch> {
     pub name: &'sch str,
     pub kind: AttributeType,
 }
@@ -181,16 +181,12 @@ impl<'sch> Schema<'sch> {
             .map(|(name, relationship)| (*name, relationship))
     }
 
-    pub fn attribute(&self, attribute_name: &str) -> Option<AttributeType> {
-        self.attributes
-            .get(attribute_name)
-            .map(|column| column.kind)
+    pub fn attribute(&self, attribute_name: &str) -> Option<&ColumnDescriptor<'sch>> {
+        self.attributes.get(attribute_name)
     }
 
-    pub fn foreign_key(&self, foreign_key_name: &str) -> Option<AttributeType> {
-        self.foreign_keys
-            .get(foreign_key_name)
-            .map(|column| column.kind)
+    pub fn foreign_key(&self, foreign_key_name: &str) -> Option<&ColumnDescriptor<'sch>> {
+        self.foreign_keys.get(foreign_key_name)
     }
 
     pub fn relationship(&self, relationship_name: &str) -> Option<&RelationshipDescriptor<'sch>> {
@@ -226,6 +222,7 @@ impl<'sch> Schema<'sch> {
         } else {
             self.attribute(name)
                 .or_else(|| self.foreign_key(name))
+                .map(|column| column.kind)
                 .ok_or_else(|| Error::InvalidAttributeAccess {
                     schema: self.name.to_string(),
                     attribute: name.to_string(),
@@ -281,9 +278,27 @@ pub(crate) mod tests {
     fn test_table_schema_column_operations() {
         let schema = Schema::new(products().into_parts());
 
-        assert_eq!(schema.attribute("name"), Some(Text));
-        assert_eq!(schema.attribute("price"), Some(Float));
-        assert_eq!(schema.foreign_key("category_id"), Some(Integer));
+        assert_eq!(
+            schema.attribute("name"),
+            Some(&ColumnDescriptor {
+                name: "name",
+                kind: Text
+            })
+        );
+        assert_eq!(
+            schema.attribute("price"),
+            Some(&ColumnDescriptor {
+                name: "price",
+                kind: Float
+            })
+        );
+        assert_eq!(
+            schema.foreign_key("category_id"),
+            Some(&ColumnDescriptor {
+                name: "category_id",
+                kind: Integer
+            })
+        );
         assert_eq!(
             schema.relationship("category"),
             Some(&RelationshipDescriptor {

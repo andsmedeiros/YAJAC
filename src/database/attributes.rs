@@ -483,9 +483,9 @@ pub fn from_value(schema: &Schema, value: Value) -> Result<Attributes, Error> {
     let entries = match value {
         Value::Object(object) => object.into_iter().map(|(attribute, value)| {
             match schema.attribute(attribute.as_str()) {
-                Some(attribute_type) => Ok((
+                Some(column) => Ok((
                     attribute,
-                    attribute_from_value(value, schema_name, attribute_type)?,
+                    attribute_from_value(value, schema_name, column.kind)?,
                 )),
                 None => Err(Error::ResourceValidationFailure {
                     schema: schema_name.to_string(),
