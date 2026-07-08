@@ -9,7 +9,7 @@ use super::{
     query_parameters::{FilterValue::In, QueryParameters},
     record::Record,
     relationships::Relationship::*,
-    schema::{RelatedResource, Relationship},
+    schema::{RelatedResource, RelationshipDescriptor, RelationshipKind},
     table::Table,
 };
 use crate::database::attributes::Identifier;
@@ -93,17 +93,18 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
         collection: &mut [Record<'sch>],
         query_parameters: &QueryParameters<'sch, 'req>,
         relationship: &'sch str,
-        descriptor: &'sch Relationship,
+        descriptor: &'sch RelationshipDescriptor,
     ) -> Result<(), Error> {
-        let mut related_collection = match descriptor {
-            Relationship::BelongsTo(descriptor) => {
-                self.load_belongs_to(relationship, descriptor, collection, query_parameters)?
+        let related = &descriptor.related;
+        let mut related_collection = match descriptor.kind {
+            RelationshipKind::BelongsTo => {
+                self.load_belongs_to(relationship, related, collection, query_parameters)?
             }
-            Relationship::HasMany(descriptor) => {
-                self.load_has_many(relationship, descriptor, collection, query_parameters)?
+            RelationshipKind::HasMany => {
+                self.load_has_many(relationship, related, collection, query_parameters)?
             }
-            Relationship::HasOne(descriptor) => {
-                self.load_has_one(relationship, descriptor, collection, query_parameters)?
+            RelationshipKind::HasOne => {
+                self.load_has_one(relationship, related, collection, query_parameters)?
             }
         };
 

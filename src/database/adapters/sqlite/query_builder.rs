@@ -286,7 +286,7 @@ impl<'sch> QueryBuilder<'sch> {
                         the query parameters parser\
                         "
                     )
-                    .related_resource()
+                    .related
                     .keys.own
             });
 

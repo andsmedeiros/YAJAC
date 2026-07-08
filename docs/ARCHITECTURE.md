@@ -53,8 +53,8 @@ beyond serde.
 
 The engine. Schema-driven and adapter-generic.
 
-- **`schema`** — `Schema<'sch>` and its parts (`PrimaryKey`, `AttributeType`, `Relationship`,
-  `RelatedResource`, `RelationshipKeys`). Owned `IndexMap` containers keyed by borrowed `&'sch str`:
+- **`schema`** — `Schema<'sch>` and its parts (`PrimaryKey`, `AttributeType`, `RelationshipDescriptor`,
+  `RelationshipKind`, `RelatedResource`, `RelationshipKeys`). Owned `IndexMap` containers keyed by borrowed `&'sch str`:
   O(1) lookup with **definition order preserved** (that order is observable in generated SQL). Built by
   an ergonomic **`SchemaBuilder`** (`schema::builder`) — the public, intended way to define a schema —
   which collects inert `SchemaParts` that the registry validates and mints into `Schema`s

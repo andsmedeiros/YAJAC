@@ -11,7 +11,7 @@ use crate::database::error::{ConstraintKind, Error};
 use crate::database::query_parameters::{FilterParameters, FilterValue, QueryParameters};
 use crate::database::record::{Indexable, Record, RecordPatch, Refreshable};
 use crate::database::relationships::Relationship as DatabaseRelationship;
-use crate::database::schema::{Relationship as SchemaRelationship, Schema};
+use crate::database::schema::{RelationshipKind, Schema};
 use crate::database::table::Table as TableInterface;
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
@@ -90,7 +90,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
         for record in records.iter_mut() {
             let schema = record.schema();
             for (&name, linkage) in &record.relationships {
-                let (name, ref descriptor) = schema
+                let (name, descriptor) = schema
                     .relationships()
                     .find(|&entry| entry.0 == name)
                     .ok_or_else(|| Error::ResourceValidationFailure {
@@ -99,15 +99,15 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                         message: "Attempted to attach unknown relationship".to_string(),
                     })?;
 
-                if let SchemaRelationship::BelongsTo(descriptor) = descriptor {
+                if descriptor.kind == RelationshipKind::BelongsTo {
+                    let related = &descriptor.related;
                     match linkage {
                         DatabaseRelationship::BelongsTo(id) => {
-                            let related_table =
-                                self.manager.registry().schema(descriptor.resource)?;
-                            if related_table.is_primary_key(descriptor.keys.related) {
+                            let related_table = self.manager.registry().schema(related.resource)?;
+                            if related_table.is_primary_key(related.keys.related) {
                                 record
                                     .foreign_keys
-                                    .insert(descriptor.keys.own, id.clone().into());
+                                    .insert(related.keys.own, id.clone().into());
                             } else {
                                 let (_, attributes, ids, relationships) = required_queries
                                     .entry(related_table.name())
@@ -119,15 +119,15 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                                             HashMap::new(),
                                         )
                                     });
-                                attributes.insert(descriptor.keys.related);
+                                attributes.insert(related.keys.related);
                                 ids.insert(id.clone().into());
-                                relationships.insert(name, descriptor);
+                                relationships.insert(name, related);
                             }
                         }
                         DatabaseRelationship::Empty => {
                             record
                                 .foreign_keys
-                                .insert(descriptor.keys.own, Attribute::Null);
+                                .insert(related.keys.own, Attribute::Null);
                         }
                         _ => {
                             return Err(Error::ResourceValidationFailure {
@@ -159,14 +159,14 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                 .into_iter()
                 .index_by_primary_key()?;
 
-            for (relationship, descriptor) in relationships {
+            for (relationship, related) in relationships {
                 for record in records.iter_mut() {
                     if let Some(DatabaseRelationship::BelongsTo(id)) =
                         record.relationships.get(relationship)
                     {
                         let related_record = index.get(id).ok_or(Error::RelatedRecordNotFound)?;
-                        let value = related_record.require(descriptor.keys.related).cloned()?;
-                        record.foreign_keys.insert(descriptor.keys.own, value);
+                        let value = related_record.require(related.keys.related).cloned()?;
+                        record.foreign_keys.insert(related.keys.own, value);
                     }
                 }
             }
@@ -177,7 +177,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
 
     fn attach_has_one_many(&self, records: &[Record<'sch>], replace: bool) -> Result<(), Error> {
         use DatabaseRelationship as Data;
-        use SchemaRelationship as Descriptor;
+        use RelationshipKind as Kind;
         let mut patches: HashMap<&str, HashMap<Attribute, Row>> = HashMap::new();
         let mut full_detachments: HashMap<&str, HashMap<&str, IndexSet<_>>> = HashMap::new();
 
@@ -192,18 +192,12 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                             attribute: name.to_string(),
                             message: "Attempted to attach unknown relationship".to_string(),
                         })?;
+                let related = &descriptor.related;
 
-                let (ids, descriptor) = match (&relationship, descriptor) {
-                    (
-                        Data::Empty,
-                        Descriptor::HasOne(descriptor) | Descriptor::HasMany(descriptor),
-                    ) => ([].as_slice(), descriptor),
-                    (Data::HasOne(id), Descriptor::HasOne(descriptor)) => {
-                        (slice::from_ref(id), descriptor)
-                    }
-                    (Data::HasMany(ids), Descriptor::HasMany(descriptor)) => {
-                        (ids.as_slice(), descriptor)
-                    }
+                let ids = match (&relationship, descriptor.kind) {
+                    (Data::Empty, Kind::HasOne | Kind::HasMany) => [].as_slice(),
+                    (Data::HasOne(id), Kind::HasOne) => slice::from_ref(id),
+                    (Data::HasMany(ids), Kind::HasMany) => ids.as_slice(),
                     (Data::HasOne(..) | Data::HasMany(..), _) => {
                         Err(Error::ResourceValidationFailure {
                             schema: schema.name().to_string(),
@@ -215,21 +209,21 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                     _ => continue,
                 };
 
-                let value = record.require_owned(descriptor.keys.own)?;
+                let value = record.require_owned(related.keys.own)?;
                 if !ids.is_empty() {
                     for id in ids {
                         patches
-                            .entry(descriptor.resource)
+                            .entry(related.resource)
                             .or_default()
                             .entry(id.clone().into())
                             .or_default()
-                            .insert(descriptor.keys.related.to_string(), value.clone());
+                            .insert(related.keys.related.to_string(), value.clone());
                     }
                 } else {
                     full_detachments
-                        .entry(descriptor.resource)
+                        .entry(related.resource)
                         .or_default()
-                        .entry(descriptor.keys.related)
+                        .entry(related.keys.related)
                         .or_default()
                         .insert(value);
                 }

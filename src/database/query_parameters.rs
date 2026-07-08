@@ -8,7 +8,7 @@ use crate::database::error::Error::{
     InvalidEncodingFailure, ParseParameterFailure, QueryValidationFailure,
 };
 use crate::database::registry::Registry;
-use crate::database::schema::{AttributeType, Relationship, Schema};
+use crate::database::schema::{AttributeType, RelationshipDescriptor, RelationshipKind, Schema};
 use crate::http_wrappers::Uri;
 use indexmap::{IndexMap, IndexSet};
 use regex::Regex;
@@ -89,7 +89,7 @@ pub type SearchParameters<'req> = Vec<Cow<'req, str>>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IncludeNode<'sch: 'req, 'req> {
     relationship: &'req str,
-    descriptor: &'sch Relationship<'sch>,
+    descriptor: &'sch RelationshipDescriptor<'sch>,
     children: HashMap<&'sch str, IncludeNode<'sch, 'req>>,
 }
 
@@ -189,7 +189,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
                     message: "Invalid relationship requested".to_string(),
                 })?;
 
-        let schema = registry.schema(include.descriptor.related_resource().resource)?;
+        let schema = registry.schema(include.descriptor.related.resource)?;
 
         Ok(Self {
             fields: self.fields.clone(),
@@ -215,7 +215,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
 
     pub fn relationships_to_load(
         &self,
-    ) -> impl Iterator<Item = (&'sch str, &'sch Relationship<'sch>)> {
+    ) -> impl Iterator<Item = (&'sch str, &'sch RelationshipDescriptor<'sch>)> {
         self.schema
             .relationships()
             .filter(|(relationship, _)| self.should_load(relationship))
@@ -250,8 +250,8 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
 
         for (_, schema) in models_to_serialise {
             for (_, relationship) in schema.relationships() {
-                use Relationship::*;
-                if let HasOne(related) | HasMany(related) = relationship {
+                if let RelationshipKind::HasOne | RelationshipKind::HasMany = relationship.kind {
+                    let related = &relationship.related;
                     self.fields
                         .entry(related.resource)
                         .or_default()
@@ -421,7 +421,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
                             message: "Invalid relationship requested".to_string(),
                         })?;
 
-                    schema = registry.schema(descriptor.related_resource().resource)?;
+                    schema = registry.schema(descriptor.related.resource)?;
 
                     models.insert(schema.name(), schema);
 

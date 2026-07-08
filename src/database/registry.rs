@@ -1,6 +1,8 @@
 use super::{
     error::Error,
-    schema::{AttributeType, RelatedResource, Relationship, Schema, SchemaBuilder, SchemaParts},
+    schema::{
+        AttributeType, RelatedResource, RelationshipKind, Schema, SchemaBuilder, SchemaParts,
+    },
 };
 use std::collections::HashMap;
 
@@ -119,8 +121,9 @@ fn validate_relationships<'sch>(
     registry: &HashMap<&'sch str, SchemaParts<'sch>>,
 ) -> Result<(), Error> {
     for (&relationship, descriptor) in &schema.relationships {
-        match descriptor {
-            Relationship::BelongsTo(RelatedResource { resource, keys }) => {
+        let RelatedResource { resource, keys } = &descriptor.related;
+        match descriptor.kind {
+            RelationshipKind::BelongsTo => {
                 let Some(own_column) = schema.foreign_keys.get(keys.own) else {
                     return Err(Error::InconsistentSchema {
                         schema: schema.name.to_string(),
@@ -168,8 +171,7 @@ fn validate_relationships<'sch>(
                     });
                 }
             }
-            Relationship::HasOne(RelatedResource { resource, keys })
-            | Relationship::HasMany(RelatedResource { resource, keys }) => {
+            RelationshipKind::HasOne | RelationshipKind::HasMany => {
                 let own_type = if keys.own == schema.primary_key.name {
                     AttributeType::from(schema.primary_key.kind)
                 } else if let Some(column) = schema.attributes.get(keys.own) {

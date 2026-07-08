@@ -2,7 +2,7 @@ use crate::{
     core::error::Error,
     database::{
         record::Record, relationships::Relationship as DatabaseRelationship,
-        schema::Relationship as SchemaRelationship,
+        schema::RelationshipKind as SchemaRelationship,
     },
     http_wrappers::Uri,
     json_api::{
@@ -58,24 +58,25 @@ pub fn make_resource(record: &Record, uri_generator: &dyn UriGenerator) -> Resul
                 .ok_or_else(|| Error::DocumentSerialisationError {
                     message: format!("Failed to describe relationship '{}' on model '{}'", relationship, record.kind())
                 })?;
+            let related = &descriptor.related;
 
-            let linkage = match (descriptor, value) {
-                (SchemaRelationship::BelongsTo(def), DatabaseRelationship::BelongsTo(id)) |
-                (SchemaRelationship::HasOne(def), DatabaseRelationship::HasOne(id)) =>
+            let linkage = match (descriptor.kind, value) {
+                (SchemaRelationship::BelongsTo, DatabaseRelationship::BelongsTo(id)) |
+                (SchemaRelationship::HasOne, DatabaseRelationship::HasOne(id)) =>
                     Linkage::ToOne(Identifier::Existing {
-                        kind: def.resource.to_string(),
+                        kind: related.resource.to_string(),
                         id: id.to_string()
                     }),
-                (SchemaRelationship::HasMany(def), DatabaseRelationship::HasMany(ids)) =>
+                (SchemaRelationship::HasMany, DatabaseRelationship::HasMany(ids)) =>
                     Linkage::ToMany(ids
                         .iter()
                         .map(|id| Identifier::Existing {
-                            kind: def.resource.to_string(),
+                            kind: related.resource.to_string(),
                             id: id.to_string()
                         })
                         .collect()
                     ),
-                (SchemaRelationship::HasMany(_), DatabaseRelationship::Empty) =>
+                (SchemaRelationship::HasMany, DatabaseRelationship::Empty) =>
                     Linkage::ToMany(Vec::new()),
                 (_, DatabaseRelationship::Empty) => Linkage::Empty,
                 _ => Err(Error::DocumentSerialisationError {

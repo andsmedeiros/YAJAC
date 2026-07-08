@@ -44,8 +44,7 @@ impl From<IdentifierType> for AttributeType {
     }
 }
 
-/// A stored column's metadata: its schema-defined name and type. Self-naming lets
-/// a lookup hand back the trusted `&'sch` name alongside the type. The sole
+/// A stored column's metadata: its schema-defined name and type. The sole
 /// extension point for per-column facts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ColumnDescriptor<'sch> {
@@ -83,24 +82,29 @@ impl Display for RelatedResource<'_> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Relationship<'sch> {
-    BelongsTo(RelatedResource<'sch>),
-    HasMany(RelatedResource<'sch>),
-    HasOne(RelatedResource<'sch>),
+/// The direction a relationship points.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RelationshipKind {
+    BelongsTo,
+    HasMany,
+    HasOne,
 }
 
-impl<'sch> Relationship<'sch> {
-    pub fn related_resource(&self) -> &RelatedResource<'_> {
-        match self {
-            Relationship::BelongsTo(related_resource)
-            | Relationship::HasMany(related_resource)
-            | Relationship::HasOne(related_resource) => related_resource,
-        }
+impl Display for RelationshipKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
     }
 }
 
-impl Display for Relationship<'_> {
+/// A named relationship: its name, direction, and the resource it targets.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RelationshipDescriptor<'sch> {
+    pub name: &'sch str,
+    pub kind: RelationshipKind,
+    pub related: RelatedResource<'sch>,
+}
+
+impl Display for RelationshipDescriptor<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
     }
@@ -115,7 +119,7 @@ pub(crate) struct SchemaParts<'sch> {
     pub primary_key: PrimaryKey<'sch>,
     pub attributes: IndexMap<&'sch str, ColumnDescriptor<'sch>>,
     pub foreign_keys: IndexMap<&'sch str, ColumnDescriptor<'sch>>,
-    pub relationships: IndexMap<&'sch str, Relationship<'sch>>,
+    pub relationships: IndexMap<&'sch str, RelationshipDescriptor<'sch>>,
     pub text_index: bool,
 }
 
@@ -125,7 +129,7 @@ pub struct Schema<'sch> {
     primary_key: PrimaryKey<'sch>,
     attributes: IndexMap<&'sch str, ColumnDescriptor<'sch>>,
     foreign_keys: IndexMap<&'sch str, ColumnDescriptor<'sch>>,
-    relationships: IndexMap<&'sch str, Relationship<'sch>>,
+    relationships: IndexMap<&'sch str, RelationshipDescriptor<'sch>>,
     text_index: bool,
 }
 
@@ -171,7 +175,7 @@ impl<'sch> Schema<'sch> {
 
     pub fn relationships(
         &'sch self,
-    ) -> impl Iterator<Item = (&'sch str, &'sch Relationship<'sch>)> {
+    ) -> impl Iterator<Item = (&'sch str, &'sch RelationshipDescriptor<'sch>)> {
         self.relationships
             .iter()
             .map(|(name, relationship)| (*name, relationship))
@@ -189,7 +193,7 @@ impl<'sch> Schema<'sch> {
             .map(|column| column.kind)
     }
 
-    pub fn relationship(&self, relationship_name: &str) -> Option<&Relationship<'sch>> {
+    pub fn relationship(&self, relationship_name: &str) -> Option<&RelationshipDescriptor<'sch>> {
         self.relationships.get(relationship_name)
     }
 
@@ -282,13 +286,17 @@ pub(crate) mod tests {
         assert_eq!(schema.foreign_key("category_id"), Some(Integer));
         assert_eq!(
             schema.relationship("category"),
-            Some(&Relationship::BelongsTo(RelatedResource {
-                resource: "categories",
-                keys: RelationshipKeys {
-                    own: "category_id",
-                    related: "id"
+            Some(&RelationshipDescriptor {
+                name: "category",
+                kind: RelationshipKind::BelongsTo,
+                related: RelatedResource {
+                    resource: "categories",
+                    keys: RelationshipKeys {
+                        own: "category_id",
+                        related: "id"
+                    }
                 }
-            }))
+            })
         );
 
         assert_eq!(schema.attribute("nonexistent"), None);

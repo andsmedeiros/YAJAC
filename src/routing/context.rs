@@ -3,7 +3,7 @@ use crate::database::attributes::{ForeignKeys, Identifier};
 use crate::database::error::Error;
 use crate::database::record::Record;
 use crate::database::relationships::Relationship;
-use crate::database::schema::{IdentifierType, Relationship as SchemaRelationship, Schema};
+use crate::database::schema::{IdentifierType, RelationshipKind, Schema};
 use crate::json_api::identifier::Identifier as JsonApiIdentifier;
 use crate::json_api::relationship::Linkage;
 use crate::{
@@ -177,20 +177,19 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
                                 attribute: name,
                                 message: "Attempted to attach unknown relationship".to_string(),
                             })?;
-                        let result = match (relationship.data, descriptor) {
-                            (
-                                Some(Linkage::ToOne(identifier)),
-                                SchemaRelationship::HasOne(related),
-                            ) => Some(Relationship::HasOne(
-                                self.materialise_id(identifier, related.resource)?,
-                            )),
-                            (
-                                Some(Linkage::ToOne(identifier)),
-                                SchemaRelationship::BelongsTo(related),
-                            ) => Some(Relationship::BelongsTo(
-                                self.materialise_id(identifier, related.resource)?,
-                            )),
-                            (Some(Linkage::ToMany(ids)), SchemaRelationship::HasMany(related)) => {
+                        let related = &descriptor.related;
+                        let result = match (relationship.data, descriptor.kind) {
+                            (Some(Linkage::ToOne(identifier)), RelationshipKind::HasOne) => {
+                                Some(Relationship::HasOne(
+                                    self.materialise_id(identifier, related.resource)?,
+                                ))
+                            }
+                            (Some(Linkage::ToOne(identifier)), RelationshipKind::BelongsTo) => {
+                                Some(Relationship::BelongsTo(
+                                    self.materialise_id(identifier, related.resource)?,
+                                ))
+                            }
+                            (Some(Linkage::ToMany(ids)), RelationshipKind::HasMany) => {
                                 Some(Relationship::HasMany(
                                     ids.into_iter()
                                         .map(|identifier| {

@@ -1,6 +1,6 @@
 use super::{
-    AttributeType, ColumnDescriptor, IdentifierType, PrimaryKey, RelatedResource, Relationship,
-    RelationshipKeys, SchemaParts,
+    AttributeType, ColumnDescriptor, IdentifierType, PrimaryKey, RelatedResource,
+    RelationshipDescriptor, RelationshipKeys, RelationshipKind, SchemaParts,
 };
 use indexmap::IndexMap;
 
@@ -110,23 +110,38 @@ impl<'sch> SchemaBuilder<'sch> {
     }
 
     pub fn belongs_to(mut self, name: &'sch str, related: RelatedResource<'sch>) -> Self {
-        self.parts
-            .relationships
-            .insert(name, Relationship::BelongsTo(related));
+        self.parts.relationships.insert(
+            name,
+            RelationshipDescriptor {
+                name,
+                kind: RelationshipKind::BelongsTo,
+                related,
+            },
+        );
         self
     }
 
     pub fn has_one(mut self, name: &'sch str, related: RelatedResource<'sch>) -> Self {
-        self.parts
-            .relationships
-            .insert(name, Relationship::HasOne(related));
+        self.parts.relationships.insert(
+            name,
+            RelationshipDescriptor {
+                name,
+                kind: RelationshipKind::HasOne,
+                related,
+            },
+        );
         self
     }
 
     pub fn has_many(mut self, name: &'sch str, related: RelatedResource<'sch>) -> Self {
-        self.parts
-            .relationships
-            .insert(name, Relationship::HasMany(related));
+        self.parts.relationships.insert(
+            name,
+            RelationshipDescriptor {
+                name,
+                kind: RelationshipKind::HasMany,
+                related,
+            },
+        );
         self
     }
 
@@ -192,33 +207,45 @@ mod tests {
             IndexMap::from([
                 (
                     "category",
-                    Relationship::BelongsTo(RelatedResource {
-                        resource: "categories",
-                        keys: RelationshipKeys {
-                            own: "category_id",
-                            related: "id",
+                    RelationshipDescriptor {
+                        name: "category",
+                        kind: RelationshipKind::BelongsTo,
+                        related: RelatedResource {
+                            resource: "categories",
+                            keys: RelationshipKeys {
+                                own: "category_id",
+                                related: "id",
+                            },
                         },
-                    }),
+                    },
                 ),
                 (
                     "variants",
-                    Relationship::HasMany(RelatedResource {
-                        resource: "variants",
-                        keys: RelationshipKeys {
-                            own: "id",
-                            related: "product_id",
+                    RelationshipDescriptor {
+                        name: "variants",
+                        kind: RelationshipKind::HasMany,
+                        related: RelatedResource {
+                            resource: "variants",
+                            keys: RelationshipKeys {
+                                own: "id",
+                                related: "product_id",
+                            },
                         },
-                    }),
+                    },
                 ),
                 (
                     "position",
-                    Relationship::HasOne(RelatedResource {
-                        resource: "display_positions",
-                        keys: RelationshipKeys {
-                            own: "id",
-                            related: "product_id",
+                    RelationshipDescriptor {
+                        name: "position",
+                        kind: RelationshipKind::HasOne,
+                        related: RelatedResource {
+                            resource: "display_positions",
+                            keys: RelationshipKeys {
+                                own: "id",
+                                related: "product_id",
+                            },
                         },
-                    }),
+                    },
                 ),
             ])
         );
