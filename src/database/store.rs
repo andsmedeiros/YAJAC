@@ -178,7 +178,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
     fn attach_has_one_many(&self, records: &[Record<'sch>], replace: bool) -> Result<(), Error> {
         use DatabaseRelationship as Data;
         use RelationshipKind as Kind;
-        let mut patches: HashMap<&str, HashMap<Attribute, Row>> = HashMap::new();
+        let mut patches: HashMap<&str, HashMap<Attribute, Row<'sch>>> = HashMap::new();
         let mut full_detachments: HashMap<&str, HashMap<&str, IndexSet<_>>> = HashMap::new();
 
         for record in records.iter() {
@@ -217,7 +217,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                             .or_default()
                             .entry(id.clone().into())
                             .or_default()
-                            .insert(related.keys.related.to_string(), value.clone());
+                            .insert(related.keys.related, value.clone());
                     }
                 } else {
                     full_detachments
@@ -238,7 +238,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                     |mut map: HashMap<Vec<_>, IndexSet<_>>, (id, patch)| {
                         let key = patch
                             .into_iter()
-                            .sorted_by(|a, b| Ord::cmp(a.0.as_str(), b.0.as_str()))
+                            .sorted_by(|a, b| Ord::cmp(a.0, b.0))
                             .collect_vec();
                         map.entry(key).or_default().insert(id);
                         map
@@ -267,7 +267,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                     HashMap::new(),
                     |mut patches,
                      (attributes, ids)|
-                     -> HashMap<(String, Attribute), IndexSet<Attribute>> {
+                     -> HashMap<(&str, Attribute), IndexSet<Attribute>> {
                         for attribute in attributes {
                             patches.entry(attribute).or_default().extend(ids.clone())
                         }
@@ -277,10 +277,10 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
 
                 for ((name, value), ids) in patches {
                     table.update_batch(
-                        Row::from([(name.clone(), Attribute::Null)]),
+                        Row::from([(name, Attribute::Null)]),
                         &QueryParameters {
                             filter: Some(FilterParameters::from([
-                                (name.as_str(), vec![FilterValue::Equal(value)]),
+                                (name, vec![FilterValue::Equal(value)]),
                                 (schema.primary_key().name, vec![FilterValue::NotIn(ids)]),
                             ])),
                             ..QueryParameters::new(schema)
@@ -297,7 +297,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
 
                 for (column, values) in columns {
                     table.update_batch(
-                        Row::from([(column.to_string(), Attribute::Null)]),
+                        Row::from([(column, Attribute::Null)]),
                         &QueryParameters {
                             filter: Some(
                                 [(column, vec![FilterValue::In(values)])]
@@ -569,8 +569,8 @@ mod tests {
     ) -> Result<(), Error> {
         manager.table("users", connection)?.insert(
             Row::from_iter([
-                ("id".to_string(), Attribute::Integer(id)),
-                ("name".to_string(), Attribute::Text(name.to_string())),
+                ("id", Attribute::Integer(id)),
+                ("name", Attribute::Text(name.to_string())),
             ]),
             &QueryParameters::new(schema(manager, "users")),
         )?;
@@ -587,9 +587,9 @@ mod tests {
     ) -> Result<(), Error> {
         manager.table("posts", connection)?.insert(
             Row::from_iter([
-                ("id".to_string(), Attribute::Integer(id)),
-                ("author_id".to_string(), Attribute::Integer(author_id)),
-                ("title".to_string(), Attribute::Text(title.to_string())),
+                ("id", Attribute::Integer(id)),
+                ("author_id", Attribute::Integer(author_id)),
+                ("title", Attribute::Text(title.to_string())),
             ]),
             &QueryParameters::new(schema(manager, "posts")),
         )?;
@@ -606,9 +606,9 @@ mod tests {
     ) -> Result<(), Error> {
         manager.table("profiles", connection)?.insert(
             Row::from_iter([
-                ("id".to_string(), Attribute::Integer(id)),
-                ("user_id".to_string(), Attribute::Integer(user_id)),
-                ("bio".to_string(), Attribute::Text(bio.to_string())),
+                ("id", Attribute::Integer(id)),
+                ("user_id", Attribute::Integer(user_id)),
+                ("bio", Attribute::Text(bio.to_string())),
             ]),
             &QueryParameters::new(schema(manager, "profiles")),
         )?;
@@ -623,7 +623,7 @@ mod tests {
     ) -> Record<'sch> {
         Record::from((
             schema(manager, "posts"),
-            Attributes::from_iter([("title".to_string(), Attribute::Text(title.to_string()))]),
+            Attributes::from_iter([("title", Attribute::Text(title.to_string()))]),
             Relationships::from_iter([(
                 "author",
                 Relationship::BelongsTo(Identifier::Integer(author)),
@@ -823,8 +823,7 @@ mod tests {
             seed_post(manager, &connection, 2, 1, "two")?;
 
             let store = Store::new(manager, &connection);
-            let attributes =
-                Attributes::from_iter([("name".to_string(), Attribute::Text("dave".to_string()))]);
+            let attributes = Attributes::from_iter([("name", Attribute::Text("dave".to_string()))]);
             let relationships = Relationships::from_iter([(
                 "posts",
                 Relationship::HasMany(vec![Identifier::Integer(1), Identifier::Integer(2)]),
@@ -875,10 +874,7 @@ mod tests {
             // violation -- not a missing reference, so it must not be recast to a 404.
             let profile = Record::from_attributes(
                 schema(manager, "profiles"),
-                Attributes::from_iter([(
-                    "bio".to_string(),
-                    Attribute::Text("no user".to_string()),
-                )]),
+                Attributes::from_iter([("bio", Attribute::Text("no user".to_string()))]),
             );
             let parameters = QueryParameters::new(schema(manager, "profiles"));
             let result = store.create_record(profile, &parameters);
@@ -905,10 +901,7 @@ mod tests {
             // posts.author_id is nullable: an absent `author` is accepted as a null key.
             let post = Record::from_attributes(
                 schema(manager, "posts"),
-                Attributes::from_iter([(
-                    "title".to_string(),
-                    Attribute::Text("no author".to_string()),
-                )]),
+                Attributes::from_iter([("title", Attribute::Text("no author".to_string()))]),
             );
             let parameters = QueryParameters::new(schema(manager, "posts"));
             store.create_record(post, &parameters)?;
@@ -935,10 +928,7 @@ mod tests {
             let store = Store::new(manager, &connection);
             let record = Record::from_attributes(
                 schema(manager, "posts"),
-                Attributes::from_iter([(
-                    "title".to_string(),
-                    Attribute::Text("after".to_string()),
-                )]),
+                Attributes::from_iter([("title", Attribute::Text("after".to_string()))]),
             )
             .with_id(Identifier::Integer(1).into());
 
@@ -1196,7 +1186,7 @@ mod tests {
             let store = Store::new(manager, &connection);
             let user = Record::from((
                 schema(manager, "users"),
-                Attributes::from_iter([("name".to_string(), Attribute::Text("dave".to_string()))]),
+                Attributes::from_iter([("name", Attribute::Text("dave".to_string()))]),
                 Relationships::from_iter([(
                     "posts",
                     Relationship::HasMany(vec![Identifier::Integer(1), Identifier::Integer(2)]),
@@ -1228,7 +1218,7 @@ mod tests {
             let store = Store::new(manager, &connection);
             let user = Record::from((
                 schema(manager, "users"),
-                Attributes::from_iter([("name".to_string(), Attribute::Text("dave".to_string()))]),
+                Attributes::from_iter([("name", Attribute::Text("dave".to_string()))]),
                 Relationships::from_iter([(
                     "profile",
                     Relationship::HasOne(Identifier::Integer(1)),
@@ -1265,10 +1255,7 @@ mod tests {
 
             let patch = RecordPatch::from_attributes(
                 schema(manager, "posts"),
-                Attributes::from_iter([(
-                    "title".to_string(),
-                    Attribute::Text("patched".to_string()),
-                )]),
+                Attributes::from_iter([("title", Attribute::Text("patched".to_string()))]),
             );
 
             let parameters = QueryParameters {

@@ -186,12 +186,9 @@ fn seed_database(manager: &ConnectionManager<SqliteAdapter>) -> Result<(), Box<d
     {
         users_table.insert(
             Row::from_iter([
-                ("id".to_string(), Attribute::Integer((i + 1) as i64)),
-                (
-                    "username".to_string(),
-                    Attribute::Text(username.to_string()),
-                ),
-                ("email".to_string(), Attribute::Text(email.to_string())),
+                ("id", Attribute::Integer((i + 1) as i64)),
+                ("username", Attribute::Text(username.to_string())),
+                ("email", Attribute::Text(email.to_string())),
             ]),
             &QueryParameters::new(users_table.schema()),
         )?;
@@ -206,13 +203,10 @@ fn seed_database(manager: &ConnectionManager<SqliteAdapter>) -> Result<(), Box<d
     ] {
         profiles_table.insert(
             Row::from_iter([
-                ("id".to_string(), Attribute::Integer(id)),
-                ("user_id".to_string(), Attribute::Integer(user_id)),
-                ("bio".to_string(), Attribute::Text(bio.to_string())),
-                (
-                    "avatar_url".to_string(),
-                    Attribute::Text(avatar.to_string()),
-                ),
+                ("id", Attribute::Integer(id)),
+                ("user_id", Attribute::Integer(user_id)),
+                ("bio", Attribute::Text(bio.to_string())),
+                ("avatar_url", Attribute::Text(avatar.to_string())),
             ]),
             &QueryParameters::new(profiles_table.schema()),
         )?;
@@ -241,11 +235,11 @@ fn seed_database(manager: &ConnectionManager<SqliteAdapter>) -> Result<(), Box<d
     ] {
         posts_table.insert(
             Row::from_iter([
-                ("id".to_string(), Attribute::Integer(id)),
-                ("author_id".to_string(), Attribute::Integer(author_id)),
-                ("title".to_string(), Attribute::Text(title.to_string())),
-                ("content".to_string(), Attribute::Text(content.to_string())),
-                ("published".to_string(), Attribute::Boolean(published)),
+                ("id", Attribute::Integer(id)),
+                ("author_id", Attribute::Integer(author_id)),
+                ("title", Attribute::Text(title.to_string())),
+                ("content", Attribute::Text(content.to_string())),
+                ("published", Attribute::Boolean(published)),
             ]),
             &QueryParameters::new(posts_table.schema()),
         )?;
@@ -295,11 +289,11 @@ fn seed_database(manager: &ConnectionManager<SqliteAdapter>) -> Result<(), Box<d
     ] {
         comments_table.insert(
             Row::from_iter([
-                ("id".to_string(), Attribute::Integer(id)),
-                ("post_id".to_string(), Attribute::Integer(post_id)),
-                ("author_id".to_string(), Attribute::Integer(author_id)),
-                ("parent_id".to_string(), parent_id),
-                ("content".to_string(), Attribute::Text(content.to_string())),
+                ("id", Attribute::Integer(id)),
+                ("post_id", Attribute::Integer(post_id)),
+                ("author_id", Attribute::Integer(author_id)),
+                ("parent_id", parent_id),
+                ("content", Attribute::Text(content.to_string())),
             ]),
             &QueryParameters::new(comments_table.schema()),
         )?;
@@ -310,8 +304,8 @@ fn seed_database(manager: &ConnectionManager<SqliteAdapter>) -> Result<(), Box<d
     for (id, name) in [(1, "rust"), (2, "programming"), (3, "web"), (4, "database")] {
         tags_table.insert(
             Row::from_iter([
-                ("id".to_string(), Attribute::Integer(id)),
-                ("name".to_string(), Attribute::Text(name.to_string())),
+                ("id", Attribute::Integer(id)),
+                ("name", Attribute::Text(name.to_string())),
             ]),
             &QueryParameters::new(tags_table.schema()),
         )?;

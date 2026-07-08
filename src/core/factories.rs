@@ -48,7 +48,7 @@ pub fn make_resource(record: &Record, uri_generator: &dyn UriGenerator) -> Resul
     let attributes = record
         .attributes
         .iter()
-        .map(|(name, value)| (name.clone(), Value::from(value.clone())))
+        .map(|(name, value)| (name.to_string(), Value::from(value.clone())))
         .collect();
 
     let relationships = record.relationships

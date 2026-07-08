@@ -344,11 +344,11 @@ impl From<&Attribute> for Option<AttributeType> {
     }
 }
 
-pub type Attributes = IndexMap<String, Attribute>;
+pub type Attributes<'sch> = IndexMap<&'sch str, Attribute>;
 
 /// A flexible, schema-agnostic tabular container of column values, as exchanged with a `Table`.
 /// Unlike a `Record`, it makes no distinction between primary key, attributes and foreign keys.
-pub type Row = Attributes;
+pub type Row<'sch> = Attributes<'sch>;
 
 pub type ForeignKeys<'sch> = IndexMap<&'sch str, Attribute>;
 
@@ -478,13 +478,16 @@ fn attribute_from_value(
     }
 }
 
-pub fn from_value(schema: &Schema, value: Value) -> Result<Attributes, Error> {
+pub fn from_value<'sch>(
+    schema: &'sch Schema<'sch>,
+    value: Value,
+) -> Result<Attributes<'sch>, Error> {
     let schema_name = schema.name();
     let entries = match value {
         Value::Object(object) => object.into_iter().map(|(attribute, value)| {
             match schema.attribute(attribute.as_str()) {
                 Some(column) => Ok((
-                    attribute,
+                    column.name,
                     attribute_from_value(value, schema_name, column.kind)?,
                 )),
                 None => Err(Error::ResourceValidationFailure {

@@ -1,4 +1,3 @@
-use crate::database::error::Error;
 use indexmap::IndexMap;
 use std::fmt::Display;
 
@@ -193,6 +192,22 @@ impl<'sch> Schema<'sch> {
         self.relationships.get(relationship_name)
     }
 
+    /// Resolves any stored column -- primary key, attribute, or foreign key -- to its
+    /// descriptor, synthesising the primary key's (widening its identifier type to the
+    /// matching `AttributeType`).
+    pub fn column(&self, name: &str) -> Option<ColumnDescriptor<'sch>> {
+        if self.is_primary_key(name) {
+            Some(ColumnDescriptor {
+                name: self.primary_key.name,
+                kind: AttributeType::from(self.primary_key.kind),
+            })
+        } else {
+            self.attribute(name)
+                .or_else(|| self.foreign_key(name))
+                .copied()
+        }
+    }
+
     pub fn is_primary_key(&self, attribute_name: &str) -> bool {
         self.primary_key.name == attribute_name
     }
@@ -214,20 +229,6 @@ impl<'sch> Schema<'sch> {
         let relationships = self.relationships.keys().copied();
 
         columns.chain(relationships)
-    }
-
-    pub fn attribute_type(&self, name: &str) -> Result<AttributeType, Error> {
-        if self.is_primary_key(name) {
-            Ok(AttributeType::from(self.primary_key.kind))
-        } else {
-            self.attribute(name)
-                .or_else(|| self.foreign_key(name))
-                .map(|column| column.kind)
-                .ok_or_else(|| Error::InvalidAttributeAccess {
-                    schema: self.name.to_string(),
-                    attribute: name.to_string(),
-                })
-        }
     }
 }
 
@@ -329,5 +330,35 @@ pub(crate) mod tests {
             schema.fields().collect::<HashSet<_>>(),
             HashSet::from_iter(["name", "price", "category", "variants", "position"])
         );
+    }
+
+    #[test]
+    fn test_column_resolves_any_stored_column() {
+        let schema = Schema::new(products().into_parts());
+
+        // The primary key's descriptor is synthesised, widening `IdentifierType` to `AttributeType`.
+        assert_eq!(
+            schema.column("id"),
+            Some(ColumnDescriptor {
+                name: "id",
+                kind: Integer
+            })
+        );
+        assert_eq!(
+            schema.column("name"),
+            Some(ColumnDescriptor {
+                name: "name",
+                kind: Text
+            })
+        );
+        assert_eq!(
+            schema.column("category_id"),
+            Some(ColumnDescriptor {
+                name: "category_id",
+                kind: Integer
+            })
+        );
+        assert_eq!(schema.column("variants"), None);
+        assert_eq!(schema.column("nonexistent"), None);
     }
 }

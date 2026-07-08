@@ -53,7 +53,10 @@ where
     })
 }
 
-fn materialise_attributes(schema: &Schema, row: &Row) -> Result<Attributes, Error> {
+fn materialise_attributes<'sch>(
+    schema: &'sch Schema<'sch>,
+    row: &Row,
+) -> Result<Attributes<'sch>, Error> {
     let entries = row
         .as_ref()
         .columns()
@@ -63,7 +66,14 @@ fn materialise_attributes(schema: &Schema, row: &Row) -> Result<Attributes, Erro
             let name = column.name();
             let value = row.get_ref_unwrap(index);
 
-            let attribute_type = schema.attribute_type(name)?;
+            let column = schema
+                .column(name)
+                .ok_or_else(|| Error::InconsistentSchema {
+                    schema: schema.name().to_string(),
+                    attribute: name.to_string(),
+                    message: "Database returned an unknown column".to_string(),
+                })?;
+            let attribute_type = column.kind;
 
             let value = match value {
                 ValueRef::Null => Attribute::Null,
@@ -105,7 +115,7 @@ fn materialise_attributes(schema: &Schema, row: &Row) -> Result<Attributes, Erro
                     kind => inconsistent_schema_error(schema, name, "Blob", kind)?,
                 },
             };
-            Ok((name.to_string(), value))
+            Ok((column.name, value))
         })
         .collect::<Result<Vec<_>, Error>>()?;
 
@@ -117,12 +127,12 @@ fn build_bindings(bindings: &[Attribute]) -> Vec<&dyn ToSql> {
 }
 
 impl ConnectionInterface for Connection {
-    fn query(
+    fn query<'sch>(
         &self,
         query: String,
         bindings: Vec<Attribute>,
-        schema: &Schema,
-    ) -> Result<Vec<Attributes>, Error> {
+        schema: &'sch Schema<'sch>,
+    ) -> Result<Vec<Attributes<'sch>>, Error> {
         debug!("{}, {:?}", query, bindings);
 
         let bindings = build_bindings(&bindings);
@@ -131,7 +141,7 @@ impl ConnectionInterface for Connection {
             .query_and_then(bindings.as_slice(), |row| {
                 materialise_attributes(schema, row)
             })?
-            .collect::<Result<Vec<Attributes>, _>>()?;
+            .collect::<Result<Vec<Attributes<'sch>>, _>>()?;
 
         debug!("Returned {} rows", rows.len());
         Ok(rows)

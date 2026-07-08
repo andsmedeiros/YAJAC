@@ -10,9 +10,9 @@ use crate::database::attributes::{Attribute, ForeignKeys, Row};
 use crate::json_api::identifier::Identifier as JsonApiIdentifier;
 use std::{borrow::Borrow, collections::HashMap};
 
-pub trait Builder<'sch>: From<(&'sch Schema<'sch>, Attributes, Relationships<'sch>)> {
+pub trait Builder<'sch>: From<(&'sch Schema<'sch>, Attributes<'sch>, Relationships<'sch>)> {
     fn new(schema: &'sch Schema<'sch>) -> Self;
-    fn from_attributes(schema: &'sch Schema<'sch>, attributes: Attributes) -> Self;
+    fn from_attributes(schema: &'sch Schema<'sch>, attributes: Attributes<'sch>) -> Self;
     fn from_relationships(schema: &'sch Schema<'sch>, relationships: Relationships<'sch>) -> Self;
 }
 
@@ -20,7 +20,7 @@ pub trait Builder<'sch>: From<(&'sch Schema<'sch>, Attributes, Relationships<'sc
 pub struct Record<'sch> {
     pub schema: &'sch Schema<'sch>,
     pub id: Option<Identifier>,
-    pub attributes: Attributes,
+    pub attributes: Attributes<'sch>,
     pub relationships: Relationships<'sch>,
     pub(crate) foreign_keys: ForeignKeys<'sch>,
 }
@@ -31,7 +31,7 @@ impl<'sch> Record<'sch> {
         self
     }
 
-    pub fn with_attributes(mut self, attributes: Attributes) -> Self {
+    pub fn with_attributes(mut self, attributes: Attributes<'sch>) -> Self {
         self.attributes = attributes;
         self
     }
@@ -121,15 +121,16 @@ impl<'sch> Record<'sch> {
     }
 
     /// Synthesises a record from a `Table`-provided row, sorting its columns into the primary key,
-    /// attributes and foreign keys declared by `schema`. The primary key is optional; any column
-    /// the schema does not recognise is rejected.
-    pub fn try_from_row(schema: &'sch Schema<'sch>, row: Row) -> Result<Self, Error> {
+    /// attributes and foreign keys declared by `schema`. The row's keys are already the schema's own
+    /// `&'sch` names, so each is stored directly. The primary key is optional; any column the schema
+    /// does not recognise is rejected.
+    pub fn try_from_row(schema: &'sch Schema<'sch>, row: Row<'sch>) -> Result<Self, Error> {
         let mut id = None;
         let mut attributes = Attributes::new();
         let mut foreign_keys = ForeignKeys::new();
 
         for (name, value) in row {
-            if schema.is_primary_key(&name) {
+            if schema.is_primary_key(name) {
                 id = Some(match (schema.primary_key().kind, value) {
                     (IdentifierType::Integer, Attribute::Integer(value)) => {
                         Identifier::Integer(value)
@@ -145,18 +146,14 @@ impl<'sch> Record<'sch> {
                         });
                     }
                 });
-            } else if schema.has_attribute(&name) {
+            } else if schema.has_attribute(name) {
                 attributes.insert(name, value);
-            } else if schema.has_foreign_key(&name) {
-                let (key, _) = schema
-                    .foreign_keys()
-                    .find(|(key, _)| **key == *name)
-                    .expect("has_foreign_key guarantees the column is present");
-                foreign_keys.insert(key, value);
+            } else if schema.has_foreign_key(name) {
+                foreign_keys.insert(name, value);
             } else {
                 return Err(Error::InconsistentSchema {
                     schema: schema.name().to_string(),
-                    attribute: name,
+                    attribute: name.to_string(),
                     message: "Database returned an unknown attribute".to_string(),
                 });
             }
@@ -173,13 +170,9 @@ impl<'sch> Record<'sch> {
 
     /// Moves the columns out as a writable row, leaving the record column-less but with its id and
     /// relationships intact. Pair with `Refreshable::refresh_with` to refill from the persisted row.
-    pub fn take_row(&mut self) -> Row {
+    pub fn take_row(&mut self) -> Row<'sch> {
         let mut row = std::mem::take(&mut self.attributes);
-        row.extend(
-            std::mem::take(&mut self.foreign_keys)
-                .into_iter()
-                .map(|(key, value)| (key.to_string(), value)),
-        );
+        row.extend(std::mem::take(&mut self.foreign_keys));
         row
     }
 }
@@ -195,7 +188,7 @@ impl<'sch> Builder<'sch> for Record<'sch> {
         }
     }
 
-    fn from_attributes(schema: &'sch Schema<'sch>, attributes: Attributes) -> Self {
+    fn from_attributes(schema: &'sch Schema<'sch>, attributes: Attributes<'sch>) -> Self {
         Record {
             attributes,
             ..Self::new(schema)
@@ -210,8 +203,8 @@ impl<'sch> Builder<'sch> for Record<'sch> {
     }
 }
 
-impl<'sch> From<(&'sch Schema<'sch>, Attributes, Relationships<'sch>)> for Record<'sch> {
-    fn from(parts: (&'sch Schema<'sch>, Attributes, Relationships<'sch>)) -> Self {
+impl<'sch> From<(&'sch Schema<'sch>, Attributes<'sch>, Relationships<'sch>)> for Record<'sch> {
+    fn from(parts: (&'sch Schema<'sch>, Attributes<'sch>, Relationships<'sch>)) -> Self {
         let (schema, attributes, relationships) = parts;
         Record {
             attributes,
@@ -233,17 +226,17 @@ impl<'sch> From<RecordPatch<'sch>> for Record<'sch> {
     }
 }
 
-impl<'sch> TryFrom<(&'sch Schema<'sch>, Row)> for Record<'sch> {
+impl<'sch> TryFrom<(&'sch Schema<'sch>, Row<'sch>)> for Record<'sch> {
     type Error = Error;
 
-    fn try_from((schema, row): (&'sch Schema<'sch>, Row)) -> Result<Self, Error> {
+    fn try_from((schema, row): (&'sch Schema<'sch>, Row<'sch>)) -> Result<Self, Error> {
         Record::try_from_row(schema, row)
     }
 }
 
 /// Projects a record onto a flat row, carrying over its attributes and foreign keys. The primary
 /// key (side-loaded on writes) and relationships (not columns) are dropped.
-impl<'sch> From<Record<'sch>> for Row {
+impl<'sch> From<Record<'sch>> for Row<'sch> {
     fn from(mut record: Record<'sch>) -> Self {
         record.take_row()
     }
@@ -262,11 +255,11 @@ pub trait Refreshable {
 }
 
 impl<'sch> Refreshable for Record<'sch> {
-    type Content = Row;
+    type Content = Row<'sch>;
 
     fn refresh_with(
         &mut self,
-        producer: impl FnOnce(Row) -> Result<Row, Error>,
+        producer: impl FnOnce(Row<'sch>) -> Result<Row<'sch>, Error>,
     ) -> Result<(), Error> {
         let row = producer(self.take_row())?;
         let refreshed = Record::try_from_row(self.schema, row)?;
@@ -277,11 +270,11 @@ impl<'sch> Refreshable for Record<'sch> {
 }
 
 impl<'sch> Refreshable for Vec<Record<'sch>> {
-    type Content = Vec<Row>;
+    type Content = Vec<Row<'sch>>;
 
     fn refresh_with(
         &mut self,
-        producer: impl FnOnce(Vec<Row>) -> Result<Vec<Row>, Error>,
+        producer: impl FnOnce(Vec<Row<'sch>>) -> Result<Vec<Row<'sch>>, Error>,
     ) -> Result<(), Error> {
         let rows = producer(self.iter_mut().map(Record::take_row).collect())?;
         if rows.len() != self.len() {
@@ -299,7 +292,7 @@ impl<'sch> Refreshable for Vec<Record<'sch>> {
 #[derive(Debug, Clone)]
 pub struct RecordPatch<'sch> {
     pub schema: &'sch Schema<'sch>,
-    pub attributes: Attributes,
+    pub attributes: Attributes<'sch>,
     pub relationships: Relationships<'sch>,
 }
 
@@ -312,7 +305,7 @@ impl<'sch> Builder<'sch> for RecordPatch<'sch> {
         }
     }
 
-    fn from_attributes(schema: &'sch Schema<'sch>, attributes: Attributes) -> Self {
+    fn from_attributes(schema: &'sch Schema<'sch>, attributes: Attributes<'sch>) -> Self {
         Self {
             attributes,
             ..Self::new(schema)
@@ -327,8 +320,8 @@ impl<'sch> Builder<'sch> for RecordPatch<'sch> {
     }
 }
 
-impl<'sch> From<(&'sch Schema<'sch>, Attributes, Relationships<'sch>)> for RecordPatch<'sch> {
-    fn from(parts: (&'sch Schema<'sch>, Attributes, Relationships<'sch>)) -> Self {
+impl<'sch> From<(&'sch Schema<'sch>, Attributes<'sch>, Relationships<'sch>)> for RecordPatch<'sch> {
+    fn from(parts: (&'sch Schema<'sch>, Attributes<'sch>, Relationships<'sch>)) -> Self {
         let (schema, attributes, relationships) = parts;
         RecordPatch {
             attributes,

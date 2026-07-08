@@ -5,12 +5,12 @@ use super::{
 };
 
 pub trait Connection {
-    fn query(
+    fn query<'sch>(
         &self,
         query: String,
         bindings: Vec<Attribute>,
-        schema: &Schema,
-    ) -> Result<Vec<Attributes>, Error>;
+        schema: &'sch Schema<'sch>,
+    ) -> Result<Vec<Attributes<'sch>>, Error>;
 
     fn execute(&self, query: String, bindings: Vec<Attribute>) -> Result<(), Error>;
 

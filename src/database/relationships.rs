@@ -9,4 +9,4 @@ pub enum Relationship {
     Empty,
 }
 
-pub type Relationships<'a> = HashMap<&'a str, Relationship>;
+pub type Relationships<'sch> = HashMap<&'sch str, Relationship>;

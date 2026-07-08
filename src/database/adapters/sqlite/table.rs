@@ -100,9 +100,9 @@ mod tests {
             ] {
                 table.insert(
                     Row::from_iter([
-                        ("col1".to_string(), Attribute::Text(col1.to_string())),
-                        ("col2".to_string(), Attribute::Text(col2.to_string())),
-                        ("col3".to_string(), Attribute::Integer(col3)),
+                        ("col1", Attribute::Text(col1.to_string())),
+                        ("col2", Attribute::Text(col2.to_string())),
+                        ("col3", Attribute::Integer(col3)),
                     ]),
                     &QueryParameters::new(schema(&manager)),
                 )?;
@@ -244,7 +244,7 @@ mod tests {
         let manager = manager();
         let connection = manager.acquire()?;
         let result = manager.table("my_table", &connection)?.insert(
-            Row::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]),
+            Row::from_iter([("col1", Attribute::Text("value1".to_string()))]),
             &QueryParameters::new(schema(&manager)),
         )?;
 
@@ -263,13 +263,13 @@ mod tests {
         let table = manager.table("my_table", &connection)?;
 
         table.insert(
-            Row::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]),
+            Row::from_iter([("col1", Attribute::Text("value1".to_string()))]),
             &QueryParameters::new(schema(&manager)),
         )?;
 
         let result = table.update(
             Identifier::Integer(1),
-            Row::from_iter([("col1".to_string(), Attribute::Text("new_value".to_string()))]),
+            Row::from_iter([("col1", Attribute::Text("new_value".to_string()))]),
             &QueryParameters::new(schema(&manager)),
         )?;
 
@@ -288,7 +288,7 @@ mod tests {
         let table = manager.table("my_table", &connection)?;
 
         table.insert(
-            Row::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]),
+            Row::from_iter([("col1", Attribute::Text("value1".to_string()))]),
             &QueryParameters::new(schema(&manager)),
         )?;
 
@@ -311,8 +311,8 @@ mod tests {
         let table = manager.table("my_table", &connection)?;
 
         let rows = vec![
-            Row::from_iter([("col1".to_string(), Attribute::Text("a".to_string()))]),
-            Row::from_iter([("col1".to_string(), Attribute::Text("b".to_string()))]),
+            Row::from_iter([("col1", Attribute::Text("a".to_string()))]),
+            Row::from_iter([("col1", Attribute::Text("b".to_string()))]),
         ];
         let inserted = table.insert_batch(rows, &QueryParameters::new(schema(&manager)))?;
 
@@ -390,10 +390,7 @@ mod tests {
 
         let result: Result<(), Error> = connection.transaction(|| {
             table.insert(
-                Row::from_iter([(
-                    "col1".to_string(),
-                    Attribute::Text("rolled-back".to_string()),
-                )]),
+                Row::from_iter([("col1", Attribute::Text("rolled-back".to_string()))]),
                 &parameters,
             )?;
 

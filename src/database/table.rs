@@ -29,34 +29,43 @@ pub trait Table<
         self.schema().foreign_key(name).is_some()
     }
 
-    fn query(&self, parameters: &QueryParameters) -> Result<Vec<Row>, Error> {
+    fn query(&self, parameters: &QueryParameters) -> Result<Vec<Row<'sch>>, Error> {
         let (query, bindings) = QueryBuilder::new(self.schema()).query(parameters)?;
         self.run_fetch(query, bindings)
     }
 
-    fn first(&self, parameters: &QueryParameters) -> Result<Option<Row>, Error> {
+    fn first(&self, parameters: &QueryParameters) -> Result<Option<Row<'sch>>, Error> {
         self.query(parameters).map(|rows| rows.into_iter().next())
     }
 
-    fn find(&self, id: Identifier, parameters: &QueryParameters) -> Result<Row, Error> {
+    fn find(&self, id: Identifier, parameters: &QueryParameters) -> Result<Row<'sch>, Error> {
         let (query, bindings) = QueryBuilder::new(self.schema()).find(id, parameters)?;
 
         self.run_fetch_single(query, bindings)
     }
 
-    fn insert(&self, row: Row, parameters: &QueryParameters) -> Result<Row, Error> {
+    fn insert(&self, row: Row<'sch>, parameters: &QueryParameters) -> Result<Row<'sch>, Error> {
         let (query, bindings) = QueryBuilder::new(self.schema()).insert(row, parameters)?;
 
         self.run_fetch_single(query, bindings)
     }
 
-    fn update(&self, id: Identifier, row: Row, parameters: &QueryParameters) -> Result<Row, Error> {
+    fn update(
+        &self,
+        id: Identifier,
+        row: Row<'sch>,
+        parameters: &QueryParameters,
+    ) -> Result<Row<'sch>, Error> {
         self.require_columns(&row)?;
         let (query, bindings) = QueryBuilder::new(self.schema()).update(id, row, parameters)?;
         self.run_fetch_single(query, bindings)
     }
 
-    fn update_batch(&self, row: Row, parameters: &QueryParameters) -> Result<Vec<Row>, Error> {
+    fn update_batch(
+        &self,
+        row: Row<'sch>,
+        parameters: &QueryParameters,
+    ) -> Result<Vec<Row<'sch>>, Error> {
         self.require_columns(&row)?;
         let (query, bindings) = QueryBuilder::new(self.schema()).update_batch(row, parameters)?;
         self.run_fetch(query, bindings)
@@ -64,9 +73,9 @@ pub trait Table<
 
     fn insert_batch(
         &self,
-        rows: Vec<Row>,
+        rows: Vec<Row<'sch>>,
         parameters: &QueryParameters,
-    ) -> Result<Vec<Row>, Error> {
+    ) -> Result<Vec<Row<'sch>>, Error> {
         if rows.is_empty() {
             return Ok(Vec::new());
         }
@@ -75,7 +84,7 @@ pub trait Table<
         self.run_fetch(query, bindings)
     }
 
-    fn require_columns(&self, row: &Row) -> Result<(), Error> {
+    fn require_columns(&self, row: &Row<'sch>) -> Result<(), Error> {
         if row.is_empty() {
             return Err(Error::InvalidOperation {
                 schema: self.schema().name().to_string(),
@@ -97,11 +106,15 @@ pub trait Table<
         self.connection().execute(query, bindings)
     }
 
-    fn run_fetch(&self, query: String, bindings: Vec<Attribute>) -> Result<Vec<Row>, Error> {
+    fn run_fetch(&self, query: String, bindings: Vec<Attribute>) -> Result<Vec<Row<'sch>>, Error> {
         self.connection().query(query, bindings, self.schema())
     }
 
-    fn run_fetch_single(&self, query: String, bindings: Vec<Attribute>) -> Result<Row, Error> {
+    fn run_fetch_single(
+        &self,
+        query: String,
+        bindings: Vec<Attribute>,
+    ) -> Result<Row<'sch>, Error> {
         self.run_fetch(query, bindings)?
             .into_iter()
             .next()

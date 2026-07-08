@@ -11,8 +11,8 @@ use crate::database::{
 };
 use itertools::Itertools;
 
-struct ExtractedAttributes {
-    fields: Vec<String>,
+struct ExtractedAttributes<'sch> {
+    fields: Vec<&'sch str>,
     values: Vec<Attribute>,
 }
 
@@ -47,7 +47,7 @@ impl<'sch> QueryBuilder<'sch> {
 
     fn build_insert_clause(
         &self,
-        rows: Vec<Attributes>,
+        rows: Vec<Attributes<'sch>>,
         query: &mut Vec<String>,
         bindings: &mut Bindings,
     ) -> Result<(), Error> {
@@ -59,7 +59,7 @@ impl<'sch> QueryBuilder<'sch> {
                 message: "cannot insert without any records".to_string(),
             });
         };
-        let columns: Vec<String> = first.keys().cloned().collect();
+        let columns: Vec<&str> = first.keys().copied().collect();
 
         let mut tuples = Vec::new();
         for mut row in std::iter::once(first).chain(rows) {
@@ -96,7 +96,7 @@ impl<'sch> QueryBuilder<'sch> {
 
     fn build_update_clause(
         &self,
-        attributes: Attributes,
+        attributes: Attributes<'sch>,
         query: &mut Vec<String>,
         bindings: &mut Bindings,
     ) {
@@ -176,7 +176,14 @@ impl<'sch> QueryBuilder<'sch> {
         if let Some(filter) = filter {
             for (field, filters) in filter {
                 let table = self.schema.name();
-                let kind = self.schema.attribute_type(field)?;
+                let kind = self
+                    .schema
+                    .column(field)
+                    .ok_or_else(|| Error::InvalidAttributeAccess {
+                        schema: self.schema.name().to_string(),
+                        attribute: field.to_string(),
+                    })?
+                    .kind;
 
                 for filter in filters {
                     match filter {
@@ -301,8 +308,8 @@ impl<'sch> QueryBuilder<'sch> {
         }
     }
 
-    fn extract_attributes(&self, attributes: Attributes) -> ExtractedAttributes {
-        let mut fields = Vec::<String>::new();
+    fn extract_attributes(&self, attributes: Attributes<'sch>) -> ExtractedAttributes<'sch> {
+        let mut fields = Vec::<&'sch str>::new();
         let mut values = Vec::<Attribute>::new();
 
         for (field, value) in attributes {
@@ -315,7 +322,7 @@ impl<'sch> QueryBuilder<'sch> {
 }
 
 impl<'sch> QueryBuilderInterface<'sch> for QueryBuilder<'sch> {
-    fn new(schema: &'sch Schema) -> Self {
+    fn new(schema: &'sch Schema<'sch>) -> Self {
         Self { schema }
     }
 
@@ -356,7 +363,7 @@ impl<'sch> QueryBuilderInterface<'sch> for QueryBuilder<'sch> {
 
     fn insert(
         &self,
-        attributes: Attributes,
+        attributes: Attributes<'sch>,
         parameters: &QueryParameters,
     ) -> Result<(String, Bindings), Error> {
         let mut query = Vec::new();
@@ -370,7 +377,7 @@ impl<'sch> QueryBuilderInterface<'sch> for QueryBuilder<'sch> {
 
     fn insert_batch(
         &self,
-        rows: Vec<Attributes>,
+        rows: Vec<Attributes<'sch>>,
         parameters: &QueryParameters,
     ) -> Result<(String, Bindings), Error> {
         let mut query = Vec::new();
@@ -385,7 +392,7 @@ impl<'sch> QueryBuilderInterface<'sch> for QueryBuilder<'sch> {
     fn update(
         &self,
         id: Identifier,
-        attributes: Attributes,
+        attributes: Attributes<'sch>,
         parameters: &QueryParameters,
     ) -> Result<(String, Bindings), Error> {
         let mut query = Vec::new();
@@ -400,7 +407,7 @@ impl<'sch> QueryBuilderInterface<'sch> for QueryBuilder<'sch> {
 
     fn update_batch(
         &self,
-        attributes: Attributes,
+        attributes: Attributes<'sch>,
         parameters: &QueryParameters,
     ) -> Result<(String, Bindings), Error> {
         let mut query = Vec::new();
@@ -667,8 +674,7 @@ mod tests {
     fn test_insert_single_field() {
         let registry = registry(true);
         let uri = mock_uri("");
-        let attributes =
-            Attributes::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]);
+        let attributes = Attributes::from_iter([("col1", Attribute::Text("value1".to_string()))]);
         let (query, bindings) = QueryBuilder::new(schema(&registry))
             .insert(attributes, &parse(&registry, &uri))
             .unwrap();
@@ -685,8 +691,8 @@ mod tests {
         let registry = registry(true);
         let uri = mock_uri("");
         let attributes = Attributes::from_iter([
-            ("col1".to_string(), Attribute::Text("value1".to_string())),
-            ("col2".to_string(), Attribute::Integer(42)),
+            ("col1", Attribute::Text("value1".to_string())),
+            ("col2", Attribute::Integer(42)),
         ]);
         let (query, bindings) = QueryBuilder::new(schema(&registry))
             .insert(attributes, &parse(&registry, &uri))
@@ -709,8 +715,7 @@ mod tests {
     fn test_insert_with_returning_fields() {
         let registry = registry(true);
         let uri = mock_uri("fields[my_table]=col1");
-        let attributes =
-            Attributes::from_iter([("col1".to_string(), Attribute::Text("value1".to_string()))]);
+        let attributes = Attributes::from_iter([("col1", Attribute::Text("value1".to_string()))]);
         let (query, bindings) = QueryBuilder::new(schema(&registry))
             .insert(attributes, &parse(&registry, &uri))
             .unwrap();
@@ -756,7 +761,7 @@ mod tests {
         let registry = registry(true);
         let uri = mock_uri("");
         let attributes =
-            Attributes::from_iter([("col1".to_string(), Attribute::Text("new_value".to_string()))]);
+            Attributes::from_iter([("col1", Attribute::Text("new_value".to_string()))]);
         let (query, bindings) = QueryBuilder::new(schema(&registry))
             .update(Identifier::Integer(1), attributes, &parse(&registry, &uri))
             .unwrap();
@@ -779,8 +784,8 @@ mod tests {
         let registry = registry(true);
         let uri = mock_uri("");
         let attributes = Attributes::from_iter([
-            ("col1".to_string(), Attribute::Text("new_value".to_string())),
-            ("col2".to_string(), Attribute::Integer(42)),
+            ("col1", Attribute::Text("new_value".to_string())),
+            ("col2", Attribute::Integer(42)),
         ]);
         let (query, bindings) = QueryBuilder::new(schema(&registry))
             .update(Identifier::Integer(1), attributes, &parse(&registry, &uri))
@@ -805,7 +810,7 @@ mod tests {
         let registry = registry(true);
         let uri = mock_uri("fields[my_table]=col1");
         let attributes =
-            Attributes::from_iter([("col1".to_string(), Attribute::Text("new_value".to_string()))]);
+            Attributes::from_iter([("col1", Attribute::Text("new_value".to_string()))]);
         let (query, bindings) = QueryBuilder::new(schema(&registry))
             .update(Identifier::Integer(1), attributes, &parse(&registry, &uri))
             .unwrap();
@@ -846,7 +851,7 @@ mod tests {
     fn test_update_batch_scopes_by_filter() {
         let registry = registry(true);
         let uri = mock_uri("");
-        let attributes = Attributes::from_iter([("col1".to_string(), Attribute::Null)]);
+        let attributes = Attributes::from_iter([("col1", Attribute::Null)]);
         let (query, bindings) = QueryBuilder::new(schema(&registry))
             .update_batch(attributes, &scoped_to_id(&registry, &uri, 5))
             .unwrap();
@@ -870,7 +875,7 @@ mod tests {
                 Attribute::Integer(2),
             ]))],
         )]));
-        let attributes = Attributes::from_iter([("col1".to_string(), Attribute::Integer(7))]);
+        let attributes = Attributes::from_iter([("col1", Attribute::Integer(7))]);
         let (query, bindings) = QueryBuilder::new(schema(&registry))
             .update_batch(attributes, &parameters)
             .unwrap();
@@ -904,12 +909,12 @@ mod tests {
         let uri = mock_uri("");
         let rows = vec![
             Attributes::from_iter([
-                ("col1".to_string(), Attribute::Text("a".to_string())),
-                ("col2".to_string(), Attribute::Text("b".to_string())),
+                ("col1", Attribute::Text("a".to_string())),
+                ("col2", Attribute::Text("b".to_string())),
             ]),
             Attributes::from_iter([
-                ("col1".to_string(), Attribute::Text("c".to_string())),
-                ("col2".to_string(), Attribute::Text("d".to_string())),
+                ("col1", Attribute::Text("c".to_string())),
+                ("col2", Attribute::Text("d".to_string())),
             ]),
         ];
         let (query, bindings) = QueryBuilder::new(schema(&registry))
@@ -936,8 +941,8 @@ mod tests {
         let registry = registry(true);
         let uri = mock_uri("");
         let rows = vec![
-            Attributes::from_iter([("col1".to_string(), Attribute::Text("a".to_string()))]),
-            Attributes::from_iter([("col2".to_string(), Attribute::Text("b".to_string()))]),
+            Attributes::from_iter([("col1", Attribute::Text("a".to_string()))]),
+            Attributes::from_iter([("col2", Attribute::Text("b".to_string()))]),
         ];
         let result =
             QueryBuilder::new(schema(&registry)).insert_batch(rows, &parse(&registry, &uri));

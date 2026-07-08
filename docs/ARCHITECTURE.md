@@ -125,6 +125,11 @@ Two lifetimes thread the whole codebase and carry a **provenance** meaning, not 
 - **`'req`** — request-scoped: everything derived from the incoming request, i.e. **untrusted** data,
   which may only ever reach query **bindings**, never SQL text.
 
+The column-name **keys** of `Attributes`/`Row` are `&'sch str`, interned at the two boundaries where
+raw identifiers enter — request-in (`from_value`, `Context::require_record`) and `Table`-out
+(`materialise_attributes`) — through the schema's self-named lookups. A request-supplied string can
+therefore never *be* a column name in generated SQL; it can only ride into a binding as a value.
+
 A handler is `for<'req> Fn(Context<'sch, 'req, Adapter>) -> Result + Sync + Send + 'sch`.
 
 ## Error flow
@@ -192,9 +197,10 @@ Declared in `Cargo.toml`:
 
 The near-term plan reshapes parts of this document; treat the following as in-flux:
 
-- The **key-bearing signatures** (`Attributes`, `ForeignKeys`, `Relationships`, `QueryParameters`)
-  will move from owned `String`s to schema-borrowed identifiers under a "parse, don't validate"
-  validation layer.
+- The key-bearing signatures (`Attributes`, `ForeignKeys`, `Relationships`, `QueryParameters`) now key
+  on schema-borrowed `&'sch str` under a "parse, don't validate" layer. The remaining move is on the
+  **value** side: `Attribute` will carry `Cow<'req, str>` so request-borrowed and DB-owned values share
+  one type (`Attributes<'sch, 'req>`), with no separate `Row` type.
 - The **controller model** will grow: `ResourceContext` becomes a user-extensible per-request
   controller (`new(schema, context)` + user fields), and `Context` is renamed `RoutingContext`.
 - **Relationship endpoints** (`/:type/:id/relationships/:rel`) are not yet implemented; only resource
