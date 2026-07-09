@@ -15,6 +15,7 @@ use super::{
 use crate::database::attributes::Identifier;
 use crate::database::query_parameters::FieldsParameters;
 use crate::database::relationships::Relationships;
+use crate::utils::indexing::Indexable;
 use std::{
     collections::{HashMap, HashSet, hash_map::Entry},
     slice,
@@ -169,7 +170,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
         if requested {
             if joins_on_primary_key {
                 for record in collection {
-                    if let Some(related_id) = Self::get_attribute(record, descriptor.keys.own)
+                    if let Some(related_id) = record.get_owned(descriptor.keys.own)
                         && !matches!(related_id, Attribute::Null)
                     {
                         record
@@ -178,18 +179,19 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
                     }
                 }
             } else {
-                let index = Self::index_for_unique_attribute(
+                let index = Self::index_by_unique_foreign_key(
                     related_collection.as_slice(),
                     descriptor.keys.related,
                     relationship,
                 )?;
 
                 for record in collection {
-                    if let Some(attribute) = Self::get_attribute(record, descriptor.keys.own)
+                    if let Some(attribute) = record.get_owned(descriptor.keys.own)
                         && !matches!(attribute, Attribute::Null)
                     {
                         let related_id = index
                             .get(&attribute)
+                            .copied()
                             .ok_or_else(|| {
                                 let id = record.require_id()
                                     .map(ToString::to_string)
@@ -229,7 +231,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
             &own_attributes,
             &query_parameters.fields,
         )?;
-        let mut index = Self::index_for_unique_attribute(
+        let index = Self::index_by_unique_foreign_key(
             &related_collection,
             descriptor.keys.related,
             relationship,
@@ -237,12 +239,12 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
 
         if query_parameters.is_requested(relationship) {
             for record in collection {
-                if let Some(attribute) = Self::get_attribute(record, descriptor.keys.own)
-                    && let Some(related_id) = index.remove(&attribute)
+                if let Some(attribute) = record.get_owned(descriptor.keys.own)
+                    && let Some(related_id) = index.get(&attribute).copied()
                 {
                     record
                         .relationships
-                        .insert(relationship, HasOne(related_id));
+                        .insert(relationship, HasOne(related_id.clone()));
                 }
             }
         }
@@ -265,7 +267,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
             own_attributes.as_slice(),
             &query_parameters.fields,
         )?;
-        let mut index = Self::index_for_repeating_attribute(
+        let mut index = Self::group_by_foreign_key(
             related_collection.as_slice(),
             descriptor.keys.related,
             relationship,
@@ -273,7 +275,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
 
         if query_parameters.is_requested(relationship) {
             for record in collection {
-                if let Some(attribute) = Self::get_attribute(record, descriptor.keys.own)
+                if let Some(attribute) = record.get_owned(descriptor.keys.own)
                     && let Some(related_ids) = index.remove(&attribute)
                 {
                     record
@@ -316,65 +318,62 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
             .collect()
     }
 
-    fn get_attribute(record: &Record, key: &str) -> Option<Attribute> {
-        if record.schema.is_primary_key(key) {
-            Some(Attribute::from(record.require_id().ok()?.clone()))
-        } else {
-            record
-                .attributes
-                .get(key)
-                .or_else(|| record.foreign_keys.get(key))
-                .map(ToOwned::to_owned)
-        }
-    }
-
-    fn get_foreign_key(record: &Record, key: &str, relationship: &str) -> Result<Attribute, Error> {
-        record.foreign_keys.get(key)
-            .map(ToOwned::to_owned)
-            .ok_or_else(|| Error::DataLoadingError {
-                message: format!(
-                    "Foreign key '{}', necessary for loading the relationship '{}' on model '{}', is not loaded.",
-                    key, relationship, record.schema.name()
-                )
-            })
-    }
-
-    fn index_for_unique_attribute(
-        collection: &[Record],
-        attribute: &str,
+    /// Borrows a record's loaded foreign key, erroring if the column was not materialised.
+    fn require_foreign_key<'a>(
+        record: &'a Record<'sch>,
+        key: &str,
         relationship: &str,
-    ) -> Result<HashMap<Attribute, Identifier>, Error> {
+    ) -> Result<&'a Attribute, Error> {
+        record.foreign_keys.get(key).ok_or_else(|| Error::DataLoadingError {
+            message: format!(
+                "Foreign key '{}', necessary for loading the relationship '{}' on model '{}', is not loaded.",
+                key, relationship, record.schema.name()
+            ),
+        })
+    }
+
+    /// Indexes a related collection by each record's foreign key, borrowing key and id in place. The
+    /// key is expected unique (a `BelongsTo`/`HasOne` join), so a collision is an inconsistency; the
+    /// id is borrowed and cloned only when a lookup matches.
+    fn index_by_unique_foreign_key<'a>(
+        collection: &'a [Record<'sch>],
+        key: &str,
+        relationship: &str,
+    ) -> Result<HashMap<&'a Attribute, &'a Identifier>, Error> {
         collection
             .iter()
-            .map(|record| {
-                let foreign_key = Self::get_foreign_key(record, attribute, relationship)?;
-                Ok((foreign_key, record.require_id()?.clone()))
+            .try_index_with(|record| {
+                Ok::<_, Error>((
+                    Self::require_foreign_key(record, key, relationship)?,
+                    record.require_id()?,
+                ))
             })
-            .collect()
+            .map_err(Error::from)
     }
 
-    fn index_for_repeating_attribute(
-        collection: &[Record],
-        attribute: &str,
+    /// Groups a related collection by each record's foreign key, borrowing the key but owning the
+    /// ids, so records sharing a key (a `HasMany` join) gather under it and the whole group can be
+    /// moved out on a lookup.
+    fn group_by_foreign_key<'a>(
+        collection: &'a [Record<'sch>],
+        key: &str,
         relationship: &str,
-    ) -> Result<HashMap<Attribute, Vec<Identifier>>, Error> {
-        let mut index = HashMap::new();
-        for record in collection {
-            let foreign_key = Self::get_foreign_key(record, attribute, relationship)?;
-
-            index
-                .entry(foreign_key)
-                .or_insert_with(Vec::new)
-                .push(record.require_id()?.clone());
-        }
-
-        Ok(index)
+    ) -> Result<HashMap<&'a Attribute, Vec<Identifier>>, Error> {
+        collection
+            .iter()
+            .try_group_with(|record| {
+                Ok::<_, Error>((
+                    Self::require_foreign_key(record, key, relationship)?,
+                    record.require_id()?.clone(),
+                ))
+            })
+            .map_err(Error::from)
     }
 
     fn collection_attribute(collection: &[Record], attribute: &str) -> Vec<Option<Attribute>> {
         collection
             .iter()
-            .map(|record| Self::get_attribute(record, attribute))
+            .map(|record| record.get_owned(attribute))
             .collect()
     }
 
