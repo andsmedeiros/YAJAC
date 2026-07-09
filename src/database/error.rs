@@ -1,4 +1,5 @@
 use crate::http_wrappers::StatusCode;
+use crate::utils::indexing::Error as IndexingError;
 use std::string::FromUtf8Error;
 use std::{
     error::Error as StdError,
@@ -210,6 +211,13 @@ impl From<rusqlite::Error> for Error {
 impl From<FromUtf8Error> for Error {
     fn from(_: FromUtf8Error) -> Self {
         Error::InvalidEncodingFailure
+    }
+}
+
+impl From<IndexingError> for Error {
+    /// Any indexing failure is a broken internal invariant, surfaced uniformly as an index access.
+    fn from(_: IndexingError) -> Self {
+        Error::InvalidIndexAccess
     }
 }
 
