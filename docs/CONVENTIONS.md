@@ -95,9 +95,7 @@ Two layers, with different remits:
   nightly-only `imports_granularity = "Crate"` setting was removed, as stable `cargo fmt` only warned
   on it and skipped it.
 - Edition **2024**.
-- **Zero warnings** at commit time, except the sanctioned dead-code scaffolding in `record.rs`
-  (`Index::{get_mut,require,require_mut}`, `TableCache`, `Groupable`, `index_by`, `group_by`) — kept
-  intentionally for upcoming work; do not delete it, do not let *new* warnings hide among it.
+- **Zero warnings** at commit time.
 
 ## Adapters & features
 
@@ -112,7 +110,7 @@ Two layers, with different remits:
 Before every commit, run a tidy-up pass and fix (not just report) what it finds:
 
 1. `cargo fmt` clean,
-2. `cargo build` warning-free (modulo the sanctioned scaffolding),
+2. `cargo build` warning-free,
 3. `cargo test` green — **except** the conformance suite, whose by-design reds track un-implemented
    spec obligations (see *Tests*); no *new* red beyond those,
 4. no stray debug artifacts, leftover comments, or typos,

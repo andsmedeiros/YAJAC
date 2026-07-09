@@ -10,7 +10,7 @@ transport (a web framework, a Tauri command, a test harness) to the embedder.
 
 ## Module map
 
-The crate root (`src/lib.rs`) exposes five top-level modules, layered from the wire inward:
+The crate root (`src/lib.rs`) exposes six top-level modules, layered from the wire inward:
 
 | Module          | Role                                                                                     |
 | --------------- | ---------------------------------------------------------------------------------------- |
@@ -19,6 +19,7 @@ The crate root (`src/lib.rs`) exposes five top-level modules, layered from the w
 | `database`      | Schema-driven data layer: schema, registry, store, records, query building, adapters.    |
 | `http_wrappers` | Serde-friendly newtypes over the `http` crate (`StatusCode`, `Uri`).                     |
 | `core`          | Cross-cutting glue: the document factory (`to_document`) and a shared error type.         |
+| `utils`         | Generic, domain-agnostic helpers — e.g. the `indexing` iterator adaptors.                |
 
 ### `routing`
 
