@@ -1,5 +1,3 @@
-use itertools::Itertools;
-
 use super::{
     attributes::{Attributes, Identifier},
     error::Error,
@@ -8,7 +6,6 @@ use super::{
 };
 use crate::database::attributes::{Attribute, ForeignKeys, Row};
 use crate::json_api::identifier::Identifier as JsonApiIdentifier;
-use std::{borrow::Borrow, collections::HashMap};
 
 pub trait Builder<'sch>: From<(&'sch Schema<'sch>, Attributes<'sch>, Relationships<'sch>)> {
     fn new(schema: &'sch Schema<'sch>) -> Self;
@@ -329,117 +326,4 @@ impl<'sch> From<(&'sch Schema<'sch>, Attributes<'sch>, Relationships<'sch>)> for
             ..Self::new(schema)
         }
     }
-}
-
-pub(crate) struct Index<'sch> {
-    records: HashMap<Identifier, Record<'sch>>,
-}
-
-impl<'sch> Index<'sch> {
-    pub fn try_from_iter(iter: impl Iterator<Item = Record<'sch>>) -> Result<Self, Error> {
-        let index = Self {
-            records: iter
-                .map(|record| -> Result<_, Error> { Ok((record.require_id()?.clone(), record)) })
-                .try_collect()?,
-        };
-
-        Ok(index)
-    }
-
-    pub fn get(&self, id: impl Borrow<Identifier>) -> Option<&Record<'sch>> {
-        self.records.get(id.borrow())
-    }
-
-    pub fn get_mut(&mut self, id: impl Borrow<Identifier>) -> Option<&mut Record<'sch>> {
-        self.records.get_mut(id.borrow())
-    }
-
-    pub fn require(&self, id: impl Borrow<Identifier>) -> Result<&Record<'sch>, Error> {
-        self.get(id).ok_or(Error::InvalidIndexAccess)
-    }
-
-    pub fn require_mut(&mut self, id: impl Borrow<Identifier>) -> Result<&mut Record<'sch>, Error> {
-        self.get_mut(id).ok_or(Error::InvalidIndexAccess)
-    }
-}
-
-pub(crate) type TableCache<'sch> = HashMap<&'sch str, Index<'sch>>;
-
-pub(crate) trait Indexable<'sch: 'req, 'req> {
-    fn index_by_primary_key(self) -> Result<Index<'sch>, Error>;
-}
-
-pub(crate) trait Groupable<'sch: 'req, 'req> {
-    fn group_by(
-        self,
-        column: &str,
-    ) -> Result<HashMap<&'req Attribute, Vec<&'req Record<'sch>>>, Error>;
-}
-
-impl<'sch: 'req, 'req, T> Indexable<'sch, 'req> for T
-where
-    T: Iterator<Item = Record<'sch>>,
-{
-    fn index_by_primary_key(self) -> Result<Index<'sch>, Error> {
-        Index::try_from_iter(self)
-    }
-}
-
-impl<'sch: 'req, 'req, T> Groupable<'sch, 'req> for T
-where
-    T: Iterator<Item = &'req Record<'sch>>,
-{
-    fn group_by(
-        self,
-        column: &str,
-    ) -> Result<HashMap<&'req Attribute, Vec<&'req Record<'sch>>>, Error> {
-        group_by(self, column)
-    }
-}
-
-fn index_by<'sch, 'req>(
-    records: impl Iterator<Item = &'req Record<'sch>>,
-    column: &str,
-) -> Result<HashMap<&'req Attribute, &'req Record<'sch>>, Error> {
-    Ok(HashMap::from_iter(
-        records
-            .map(|record| -> Result<(&Attribute, &Record<'sch>), Error> {
-                Ok((
-                    record
-                        .attributes
-                        .get(column)
-                        .or_else(|| record.foreign_keys.get(column))
-                        .ok_or_else(|| Error::UnloadedAttributeAccess {
-                            schema: record.schema.name().to_string(),
-                            attribute: column.to_string(),
-                        })?,
-                    record,
-                ))
-            })
-            .collect::<Result<Vec<_>, _>>()?,
-    ))
-}
-
-fn group_by<'sch, 'req>(
-    records: impl Iterator<Item = &'req Record<'sch>>,
-    column: &str,
-) -> Result<HashMap<&'req Attribute, Vec<&'req Record<'sch>>>, Error> {
-    records
-        .map(|record| {
-            Ok((
-                record
-                    .attributes
-                    .get(column)
-                    .or_else(|| record.foreign_keys.get(column))
-                    .ok_or_else(|| Error::UnloadedAttributeAccess {
-                        schema: record.schema.name().to_string(),
-                        attribute: column.to_string(),
-                    })?,
-                record,
-            ))
-        })
-        .fold_ok(HashMap::new(), |mut groups, (attribute, record)| {
-            groups.entry(attribute).or_default().push(record);
-            groups
-        })
 }

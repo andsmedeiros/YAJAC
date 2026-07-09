@@ -9,10 +9,11 @@ use crate::database::connection_manager::ConnectionManager;
 use crate::database::data_loader::DataLoader;
 use crate::database::error::{ConstraintKind, Error};
 use crate::database::query_parameters::{FilterParameters, FilterValue, QueryParameters};
-use crate::database::record::{Indexable, Record, RecordPatch, Refreshable};
+use crate::database::record::{Record, RecordPatch, Refreshable};
 use crate::database::relationships::Relationship as DatabaseRelationship;
 use crate::database::schema::{RelationshipKind, Schema};
 use crate::database::table::Table as TableInterface;
+use crate::utils::indexing::Indexable;
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 
@@ -157,7 +158,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                 .map(|row| Record::try_from_row(related_table, row))
                 .collect::<Result<Vec<_>, _>>()?
                 .into_iter()
-                .index_by_primary_key()?;
+                .try_index_by(|record| Ok::<_, Error>(record.require_id()?.clone()))?;
 
             for (relationship, related) in relationships {
                 for record in records.iter_mut() {
