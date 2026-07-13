@@ -4,9 +4,21 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PrimaryContent {
-    Record { data: Box<Resource> },
-    Collection { data: Vec<Resource> },
-    Errors { errors: Vec<Error> },
+    Record {
+        data: Box<Resource>,
+    },
+    Collection {
+        data: Vec<Resource>,
+    },
+    /// Primary data that is present but null: an empty to-one relationship or a
+    /// related-resource endpoint whose relationship currently targets nothing.
+    /// Serialises the mandatory `data` member as JSON `null`.
+    Empty {
+        data: (),
+    },
+    Errors {
+        errors: Vec<Error>,
+    },
 }
 
 impl From<Resource> for PrimaryContent {
@@ -103,5 +115,30 @@ mod tests {
                 { "status": "500", "code": "Boom", "title": "It broke" }
             ] })
         );
+    }
+
+    #[test]
+    fn test_empty_serialises_null_data() -> Result<(), serde_json::Error> {
+        let content = PrimaryContent::Empty { data: () };
+
+        assert_eq!(serde_json::to_value(&content)?, json!({ "data": null }));
+        Ok(())
+    }
+
+    #[test]
+    fn test_null_data_deserialises_as_empty() -> Result<(), serde_json::Error> {
+        let content: PrimaryContent = serde_json::from_value(json!({ "data": null }))?;
+
+        assert!(matches!(content, PrimaryContent::Empty { data: () }));
+        Ok(())
+    }
+
+    #[test]
+    fn test_record_still_wins_over_empty_for_identifier_data() -> Result<(), serde_json::Error> {
+        let content: PrimaryContent =
+            serde_json::from_value(json!({ "data": { "type": "articles", "id": "1" } }))?;
+
+        assert!(matches!(content, PrimaryContent::Record { .. }));
+        Ok(())
     }
 }
