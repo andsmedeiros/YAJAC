@@ -69,6 +69,18 @@ pub enum Error {
         schema: String,
         attribute: String,
     },
+    InvalidRelationshipAccess {
+        schema: String,
+        relationship: String,
+    },
+    UnexpectedCollection {
+        schema: String,
+        relationship: String,
+    },
+    MismatchedRelationshipKind {
+        schema: String,
+        relationship: String,
+    },
     InvalidOperation {
         schema: String,
         operation: String,
@@ -117,6 +129,9 @@ impl Error {
             | UnknownSchema { .. }
             | InvalidAttributeConversion { .. }
             | InvalidAttributeAccess { .. }
+            | InvalidRelationshipAccess { .. }
+            | UnexpectedCollection { .. }
+            | MismatchedRelationshipKind { .. }
             | DatabaseFailure { .. }
             | DataLoadingError { .. }
             | UnloadedAttributeAccess { .. }
@@ -141,6 +156,9 @@ impl Error {
             InvalidAttribute { .. } => "InvalidAttribute",
             InvalidAttributeConversion { .. } => "InvalidAttributeConversion",
             InvalidAttributeAccess { .. } => "InvalidAttributeAccess",
+            InvalidRelationshipAccess { .. } => "InvalidRelationshipAccess",
+            UnexpectedCollection { .. } => "UnexpectedCollection",
+            MismatchedRelationshipKind { .. } => "MismatchedRelationshipKind",
             InvalidOperation { .. } => "InvalidOperation",
             DatabaseFailure { .. } => "DatabaseFailure",
             ConstraintViolation { .. } => "ConstraintViolation",
@@ -170,6 +188,11 @@ impl Error {
             InvalidAttribute { .. } => "An attribute is invalid",
             InvalidAttributeConversion { .. } => "An attribute could not be converted",
             InvalidAttributeAccess { .. } => "An undeclared attribute was accessed",
+            InvalidRelationshipAccess { .. } => "An undeclared relationship was accessed",
+            UnexpectedCollection { .. } => "A single related record was expected",
+            MismatchedRelationshipKind { .. } => {
+                "The relationship kind is incompatible with the requested access"
+            }
             InvalidOperation { .. } => "The operation is invalid",
             DatabaseFailure { .. } => "The database operation failed",
             ConstraintViolation { .. } => "A database constraint was violated",
@@ -280,6 +303,27 @@ impl Display for Error {
             InvalidAttributeAccess { schema, attribute } => write!(
                 f,
                 "Attempted to access attribute '{attribute}', which schema '{schema}' does not declare"
+            ),
+            InvalidRelationshipAccess {
+                schema,
+                relationship,
+            } => write!(
+                f,
+                "Attempted to access relationship '{relationship}', which schema '{schema}' does not declare"
+            ),
+            UnexpectedCollection {
+                schema,
+                relationship,
+            } => write!(
+                f,
+                "Expected a single related record for relationship '{relationship}' on schema '{schema}', but it resolved to a collection"
+            ),
+            MismatchedRelationshipKind {
+                schema,
+                relationship,
+            } => write!(
+                f,
+                "Relationship '{relationship}' on schema '{schema}' has a kind incompatible with the requested access"
             ),
             InvalidOperation {
                 schema,
