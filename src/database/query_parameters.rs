@@ -88,9 +88,9 @@ pub type SearchParameters<'req> = Vec<Cow<'req, str>>;
 /// Represents a single node in the include tree
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IncludeNode<'sch: 'req, 'req> {
-    relationship: &'req str,
-    descriptor: &'sch RelationshipDescriptor<'sch>,
-    children: HashMap<&'sch str, IncludeNode<'sch, 'req>>,
+    pub(crate) relationship: &'req str,
+    pub(crate) descriptor: &'sch RelationshipDescriptor<'sch>,
+    pub(crate) children: HashMap<&'sch str, IncludeNode<'sch, 'req>>,
 }
 
 /// Stores a series of relationship names which should be included in the final payload
