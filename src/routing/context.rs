@@ -84,7 +84,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
             RoutingError::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "MissingBody",
-                "the request requires a body",
+                "This request requires a body containing a resource object",
             )
         })?;
 
@@ -92,7 +92,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
             return Err(RoutingError::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "InvalidDocument",
-                "the request body must contain a single resource object",
+                "The request body must contain a single resource object as its primary data",
             ));
         };
         let resource = *data;
@@ -106,7 +106,10 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
             return Err(RoutingError::new(
                 StatusCode::CONFLICT,
                 "ResourceTypeMismatch",
-                format!("expected resource type '{}', got '{kind}'", schema.name()),
+                format!(
+                    "The resource type '{kind}' does not match the '{}' resource served at this endpoint",
+                    schema.name()
+                ),
             ));
         }
 
@@ -116,14 +119,18 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
                     return Err(RoutingError::new(
                         StatusCode::CONFLICT,
                         "ResourceIdMismatch",
-                        format!("resource id '{sent}' does not match endpoint id '{expected}'"),
+                        format!(
+                            "The resource id '{sent}' does not match the id '{expected}' targeted by this endpoint"
+                        ),
                     ));
                 }
                 None => {
                     return Err(RoutingError::new(
                         StatusCode::CONFLICT,
                         "ResourceIdMissing",
-                        format!("the resource is missing the id required by endpoint '{expected}'"),
+                        format!(
+                            "The submitted resource must carry the id '{expected}' targeted by this endpoint"
+                        ),
                     ));
                 }
                 _ => {}
@@ -154,7 +161,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
                             StatusCode::UNPROCESSABLE_ENTITY,
                             "UnknownAttribute",
                             format!(
-                                "Unknown attribute '{name}' for resource type '{}'",
+                                "The resource type '{}' has no attribute named '{name}'",
                                 schema.name()
                             ),
                         )
@@ -220,6 +227,57 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
         Ok(record)
     }
 
+    /// Extracts the request body as relationship linkage, the counterpart of `require_resource`
+    /// for the relationship-endpoint family. Each resource object must be a bare identifier:
+    /// carrying attributes, relationships, or links makes it a resource rather than linkage and is
+    /// rejected. Type and id validation against the target resource is deferred to materialisation,
+    /// where the relationship descriptor is known.
+    pub fn require_linkage(&mut self) -> Result<Linkage, RoutingError> {
+        let document = self.body.take().ok_or_else(|| {
+            RoutingError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "MissingBody",
+                "This request requires a body containing relationship linkage",
+            )
+        })?;
+
+        match document.content {
+            PrimaryContent::Empty { .. } => Ok(Linkage::Empty),
+            PrimaryContent::Record { data } => Ok(Linkage::ToOne(Self::require_identifier(*data)?)),
+            PrimaryContent::Collection { data } => Ok(Linkage::ToMany(
+                data.into_iter()
+                    .map(Self::require_identifier)
+                    .try_collect()?,
+            )),
+            PrimaryContent::Errors { .. } => Err(RoutingError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "InvalidDocument",
+                "The request body must contain relationship linkage as its primary data",
+            )),
+        }
+    }
+
+    /// Unwraps a resource object into its identifier, asserting it is a resource identifier object
+    /// — no attributes, relationships, or links. Meta is permitted and discarded.
+    fn require_identifier(resource: Resource) -> Result<ResourceIdentifier, RoutingError> {
+        if let Resource {
+            identifier,
+            attributes: None,
+            relationships: None,
+            links: None,
+            ..
+        } = resource
+        {
+            Ok(identifier)
+        } else {
+            Err(RoutingError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "InvalidLinkage",
+                "Relationship linkage must contain resource identifier objects, not full resources",
+            ))
+        }
+    }
+
     /// Resolves a request-supplied identifier into a typed primary key. As it validates client
     /// input, every failure is a `routing::Error`: a `New` (`lid`) identifier has no id to resolve,
     /// a mismatched type cannot name the expected resource, and a non-integer id cannot be parsed.
@@ -235,14 +293,14 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
                 return Err(RoutingError::new(
                     StatusCode::UNPROCESSABLE_ENTITY,
                     "UnresolvableLinkage",
-                    "A relationship linkage must reference an existing resource by id",
+                    "Relationship linkage must reference an existing resource by its id",
                 ));
             }
             _ => {
                 return Err(RoutingError::new(
                     StatusCode::UNPROCESSABLE_ENTITY,
                     "RelationshipTypeMismatch",
-                    "A relationship linkage references the wrong resource type",
+                    "Relationship linkage references a resource of the wrong type for this relationship",
                 ));
             }
         };
@@ -253,7 +311,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
                 RoutingError::new(
                     StatusCode::UNPROCESSABLE_ENTITY,
                     "InvalidIdentifier",
-                    format!("Identifier '{identifier}' is not a valid integer"),
+                    format!("The id '{identifier}' is not a valid integer identifier"),
                 )
             }),
         }
