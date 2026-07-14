@@ -2,9 +2,7 @@ use super::{
     error::Error,
     schema::{AttributeType, DateTime, Schema},
 };
-use crate::{
-    database::schema::IdentifierType, json_api::identifier::Identifier as JsonApiIdentifier,
-};
+use crate::database::schema::IdentifierType;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -56,8 +54,12 @@ impl Identifier {
             }),
         }
     }
+}
 
-    pub fn try_from(attribute: Attribute) -> Result<Self, Error> {
+impl TryFrom<Attribute> for Identifier {
+    type Error = Error;
+
+    fn try_from(attribute: Attribute) -> Result<Self, Error> {
         let identifier = match attribute {
             Attribute::Text(text) => Self::Text(text),
             Attribute::Integer(integer) => Self::Integer(integer),
@@ -76,37 +78,6 @@ impl Display for Identifier {
             Identifier::Text(text) => f.write_str(text),
             Identifier::Integer(int) => f.write_str(int.to_string().as_str()),
         }
-    }
-}
-
-impl<'sch> TryFrom<(JsonApiIdentifier, &'sch Schema<'sch>)> for Identifier {
-    type Error = Error;
-    fn try_from(value: (JsonApiIdentifier, &'sch Schema<'sch>)) -> Result<Self, Error> {
-        let (identifier, schema) = value;
-
-        let id = match identifier {
-            JsonApiIdentifier::New { kind, .. } => Err(Error::MissingRecordId { schema: kind })?,
-            JsonApiIdentifier::Existing { kind, id } if kind == schema.name() => {
-                match schema.primary_key().kind {
-                    IdentifierType::Integer => {
-                        Identifier::Integer(id.parse().map_err(|_error| {
-                            Error::InvalidAttributeConversion {
-                                kind: "i64".to_string(),
-                            }
-                        })?)
-                    }
-                    IdentifierType::Text => Identifier::Text(id),
-                }
-            }
-
-            _ => Err(Error::ResourceValidationFailure {
-                schema: schema.name().to_string(),
-                attribute: schema.primary_key().name.to_string(),
-                message: "Resource identifier contains a mismatching schema".to_string(),
-            })?,
-        };
-
-        Ok(id)
     }
 }
 

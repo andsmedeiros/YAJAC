@@ -1,8 +1,11 @@
 use crate::{
     core::error::Error,
     database::{
-        record::Record, relationships::Relationship as DatabaseRelationship,
-        schema::RelationshipKind as SchemaRelationship,
+        attributes::Identifier as DatabaseIdentifier,
+        error::Error as DatabaseError,
+        record::Record,
+        relationships::Relationship as DatabaseRelationship,
+        schema::{IdentifierType, RelationshipKind as SchemaRelationship, Schema},
     },
     http_wrappers::Uri,
     json_api::{
@@ -19,31 +22,92 @@ use crate::{
 use serde_json::Value;
 use std::collections::HashMap;
 
-pub enum Content<'a> {
-    Resource(&'a Record<'a>),
-    Collection(Vec<&'a Record<'a>>),
+pub enum Content<'sch: 'req, 'req> {
+    Resource(&'req Record<'sch>),
+    Collection(Vec<&'req Record<'sch>>),
+    LinkageToOne(Option<Identifier>),
+    LinkageToMany(Vec<Identifier>),
     Errors(Vec<JsonApiError>),
 }
 
-impl<'a> From<&'a Record<'a>> for Content<'a> {
-    fn from(resourceful: &'a Record) -> Self {
+impl<'sch: 'req, 'req> From<&'req Record<'sch>> for Content<'sch, 'req> {
+    fn from(resourceful: &'req Record<'sch>) -> Self {
         Content::Resource(resourceful)
     }
 }
 
-impl<'a> From<&'a Vec<Record<'a>>> for Content<'a> {
-    fn from(collection: &'a Vec<Record<'a>>) -> Self {
+impl<'sch: 'req, 'req> From<&'req Vec<Record<'sch>>> for Content<'sch, 'req> {
+    fn from(collection: &'req Vec<Record<'sch>>) -> Self {
         Content::Collection(collection.iter().collect())
     }
 }
 
-impl<'a> From<Vec<JsonApiError>> for Content<'a> {
+impl<'sch: 'req, 'req> From<Option<Identifier>> for Content<'sch, 'req> {
+    fn from(identifier: Option<Identifier>) -> Self {
+        Content::LinkageToOne(identifier)
+    }
+}
+
+impl<'sch: 'req, 'req> From<Vec<Identifier>> for Content<'sch, 'req> {
+    fn from(identifiers: Vec<Identifier>) -> Self {
+        Content::LinkageToMany(identifiers)
+    }
+}
+
+impl<'sch: 'req, 'req> From<Vec<JsonApiError>> for Content<'sch, 'req> {
     fn from(errors: Vec<JsonApiError>) -> Self {
         Content::Errors(errors)
     }
 }
 
-pub fn make_resource(record: &Record, uri_generator: &dyn UriGenerator) -> Result<Resource, Error> {
+impl<'sch> From<(DatabaseIdentifier, &'sch Schema<'sch>)> for Identifier {
+    fn from((identifier, schema): (DatabaseIdentifier, &'sch Schema<'sch>)) -> Self {
+        Identifier::Existing {
+            kind: schema.name().to_string(),
+            id: match identifier {
+                DatabaseIdentifier::Integer(value) => value.to_string(),
+                DatabaseIdentifier::Text(value) => value,
+            },
+        }
+    }
+}
+
+impl<'sch> TryFrom<(Identifier, &'sch Schema<'sch>)> for DatabaseIdentifier {
+    type Error = DatabaseError;
+
+    fn try_from(value: (Identifier, &'sch Schema<'sch>)) -> Result<Self, DatabaseError> {
+        let (identifier, schema) = value;
+
+        let id = match identifier {
+            Identifier::New { kind, .. } => Err(DatabaseError::MissingRecordId { schema: kind })?,
+            Identifier::Existing { kind, id } if kind == schema.name() => {
+                match schema.primary_key().kind {
+                    IdentifierType::Integer => {
+                        DatabaseIdentifier::Integer(id.parse().map_err(|_error| {
+                            DatabaseError::InvalidAttributeConversion {
+                                kind: "i64".to_string(),
+                            }
+                        })?)
+                    }
+                    IdentifierType::Text => DatabaseIdentifier::Text(id),
+                }
+            }
+
+            _ => Err(DatabaseError::ResourceValidationFailure {
+                schema: schema.name().to_string(),
+                attribute: schema.primary_key().name.to_string(),
+                message: "Resource identifier contains a mismatching schema".to_string(),
+            })?,
+        };
+
+        Ok(id)
+    }
+}
+
+pub fn make_record_resource(
+    record: &Record,
+    uri_generator: &dyn UriGenerator,
+) -> Result<Resource, Error> {
     let identifier = record.identifier();
     let attributes = record
         .attributes
@@ -113,6 +177,16 @@ pub fn make_resource(record: &Record, uri_generator: &dyn UriGenerator) -> Resul
     })
 }
 
+pub fn make_linkage_resource(identifier: Identifier) -> Resource {
+    Resource {
+        identifier,
+        attributes: None,
+        relationships: None,
+        links: None,
+        meta: None,
+    }
+}
+
 fn implementation_info() -> ImplementationInfo {
     ImplementationInfo {
         version: Some("1.1".to_string()),
@@ -130,8 +204,8 @@ fn document_links(uri: &Uri) -> document::Links {
     }
 }
 
-pub fn to_document<'a>(
-    content: impl Into<Content<'a>>,
+pub fn to_document<'sch: 'req, 'req>(
+    content: impl Into<Content<'sch, 'req>>,
     included: Vec<Record>,
     uri: &Uri,
     uri_generator: &dyn UriGenerator,
@@ -142,18 +216,25 @@ pub fn to_document<'a>(
     let carries_data = !matches!(content, Content::Errors(_));
 
     let content: PrimaryContent = match content {
-        Content::Resource(record) => make_resource(record, uri_generator)?.into(),
+        Content::Resource(record) => make_record_resource(record, uri_generator)?.into(),
         Content::Collection(collection) => collection
             .into_iter()
-            .map(|record| make_resource(record, uri_generator))
+            .map(|record| make_record_resource(record, uri_generator))
             .collect::<Result<Vec<_>, _>>()?
+            .into(),
+        Content::LinkageToOne(Some(identifier)) => make_linkage_resource(identifier).into(),
+        Content::LinkageToOne(None) => PrimaryContent::Empty { data: () },
+        Content::LinkageToMany(identifiers) => identifiers
+            .into_iter()
+            .map(make_linkage_resource)
+            .collect::<Vec<_>>()
             .into(),
         Content::Errors(errors) => errors.into(),
     };
 
     let included = included
         .into_iter()
-        .map(|record| make_resource(&record, uri_generator))
+        .map(|record| make_record_resource(&record, uri_generator))
         .collect::<Result<Vec<_>, Error>>()?;
 
     Ok(Document {
