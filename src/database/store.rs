@@ -446,6 +446,91 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
             .transaction(|| self.table(schema)?.delete_batch(parameters))
     }
 
+    /// Resolves the to-one `relationship` of the already-loaded `record` to the identifier of the
+    /// record it targets, or `None` when the relationship is empty. Errors when `relationship` is
+    /// not declared on the record's schema, or when it is to-many — use `peek_related_collection`
+    /// for those.
+    pub fn peek_related_record(
+        &self,
+        record: &'req Record<'sch>,
+        relationship: &'req str,
+    ) -> Result<Option<Identifier>, Error> {
+        let kind = record
+            .schema
+            .relationship(relationship)
+            .ok_or_else(|| Error::InvalidRelationshipAccess {
+                schema: record.schema.name().to_string(),
+                relationship: relationship.to_string(),
+            })?
+            .kind;
+
+        if kind != RelationshipKind::BelongsTo && kind != RelationshipKind::HasOne {
+            return Err(Error::MismatchedRelationshipKind {
+                schema: record.schema.name().into(),
+                relationship: relationship.into(),
+            });
+        }
+
+        let mut related = self.peek_related_collection(record, relationship)?;
+
+        match related.len() {
+            0 => Ok(None),
+            1 => Ok(Some(related.remove(0))),
+            _ => Err(Error::UnexpectedCollection {
+                schema: record.schema.name().into(),
+                relationship: relationship.into(),
+            }),
+        }
+    }
+
+    /// Resolves `relationship` of the already-loaded `record` to the identifiers of the records it
+    /// targets, or an empty vector when the relationship is empty. Errors when `relationship` is
+    /// not declared on the record's schema.
+    pub fn peek_related_collection(
+        &self,
+        record: &'req Record<'sch>,
+        relationship: &'req str,
+    ) -> Result<Vec<Identifier>, Error> {
+        let schema = record.schema();
+        let descriptor =
+            schema
+                .relationship(relationship)
+                .ok_or_else(|| Error::InvalidRelationshipAccess {
+                    schema: schema.name().to_string(),
+                    relationship: relationship.to_string(),
+                })?;
+        let keys = &descriptor.related.keys;
+        let related_schema = self
+            .manager
+            .registry()
+            .schema(descriptor.related.resource)?;
+        let own_attribute = if let Some(attribute) = record.get_owned(keys.own)
+            && attribute != Attribute::Null
+        {
+            attribute
+        } else {
+            return Ok(Vec::new());
+        };
+
+        self.table(related_schema)?
+            .query(&QueryParameters {
+                filter: Some(FilterParameters::from([(
+                    keys.related,
+                    vec![FilterValue::Equal(own_attribute)],
+                )])),
+                ..QueryParameters::new(related_schema)
+            })?
+            .into_iter()
+            .map(|mut row| {
+                row.shift_remove(&related_schema.primary_key().name)
+                    .ok_or_else(|| Error::MissingRecordId {
+                        schema: related_schema.name().into(),
+                    })
+                    .and_then(TryInto::try_into)
+            })
+            .collect()
+    }
+
     fn table(&self, schema: &'sch Schema<'sch>) -> Result<Adapter::Table<'sch, 'req>, Error> {
         self.manager.table(schema.name(), self.connection)
     }
@@ -1372,6 +1457,230 @@ mod tests {
                     .query(&QueryParameters::new(schema(manager, "posts")))?
                     .is_empty()
             );
+
+            Ok(())
+        })
+    }
+
+    // --- peek_related_collection -------------------------------------------
+
+    #[test]
+    fn test_peek_related_collection_has_many_returns_all_ids() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_post(manager, &connection, 1, 1, "one")?;
+            seed_post(manager, &connection, 2, 1, "two")?;
+            seed_post(manager, &connection, 3, 1, "three")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            let mut ids = store
+                .peek_related_collection(&user, "posts")?
+                .iter()
+                .map(|id| id.to_i64())
+                .collect::<Result<Vec<_>, _>>()?;
+            ids.sort();
+
+            assert_eq!(ids, vec![1, 2, 3]);
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_peek_related_collection_has_many_empty_when_none() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert!(store.peek_related_collection(&user, "posts")?.is_empty());
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_peek_related_collection_belongs_to_returns_single_id() -> Result<(), Box<dyn StdError>>
+    {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 7, "alice")?;
+            seed_post(manager, &connection, 1, 7, "one")?;
+
+            let store = Store::new(manager, &connection);
+            let posts = schema(manager, "posts");
+            let post = store
+                .fetch_record(posts, Identifier::Integer(1), &QueryParameters::new(posts))?
+                .content;
+
+            assert_eq!(
+                store.peek_related_collection(&post, "author")?,
+                vec![Identifier::Integer(7)]
+            );
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_peek_related_collection_null_foreign_key_is_empty() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            let posts = schema(manager, "posts");
+            manager.table("posts", &connection)?.insert(
+                Row::from_iter([
+                    ("id", Attribute::Integer(1)),
+                    ("author_id", Attribute::Null),
+                    ("title", Attribute::Text("orphan".to_string())),
+                ]),
+                &QueryParameters::new(posts),
+            )?;
+
+            let store = Store::new(manager, &connection);
+            let post = store
+                .fetch_record(posts, Identifier::Integer(1), &QueryParameters::new(posts))?
+                .content;
+
+            assert!(store.peek_related_collection(&post, "author")?.is_empty());
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_peek_related_collection_unknown_relationship_is_error() -> Result<(), Box<dyn StdError>>
+    {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert!(matches!(
+                store.peek_related_collection(&user, "ghost"),
+                Err(Error::InvalidRelationshipAccess { .. })
+            ));
+
+            Ok(())
+        })
+    }
+
+    // --- peek_related_record -----------------------------------------------
+
+    #[test]
+    fn test_peek_related_record_belongs_to_returns_id() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 7, "alice")?;
+            seed_post(manager, &connection, 1, 7, "one")?;
+
+            let store = Store::new(manager, &connection);
+            let posts = schema(manager, "posts");
+            let post = store
+                .fetch_record(posts, Identifier::Integer(1), &QueryParameters::new(posts))?
+                .content;
+
+            assert_eq!(
+                store.peek_related_record(&post, "author")?,
+                Some(Identifier::Integer(7))
+            );
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_peek_related_record_has_one_returns_id() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_profile(manager, &connection, 5, 1, "hi")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert_eq!(
+                store.peek_related_record(&user, "profile")?,
+                Some(Identifier::Integer(5))
+            );
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_peek_related_record_empty_is_none() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert_eq!(store.peek_related_record(&user, "profile")?, None);
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_peek_related_record_on_to_many_is_kind_mismatch() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert!(matches!(
+                store.peek_related_record(&user, "posts"),
+                Err(Error::MismatchedRelationshipKind { .. })
+            ));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_peek_related_record_unknown_relationship_is_error() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert!(matches!(
+                store.peek_related_record(&user, "ghost"),
+                Err(Error::InvalidRelationshipAccess { .. })
+            ));
 
             Ok(())
         })
