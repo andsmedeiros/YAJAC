@@ -3,7 +3,7 @@ use crate::database::attributes::{ForeignKeys, Identifier};
 use crate::database::error::Error;
 use crate::database::record::Record;
 use crate::database::relationships::Relationship;
-use crate::database::schema::{IdentifierType, RelationshipKind, Schema};
+use crate::database::schema::{IdentifierType, RelationshipDescriptor, RelationshipKind, Schema};
 use crate::json_api::identifier::Identifier as JsonApiIdentifier;
 use crate::json_api::relationship::Linkage;
 use crate::{
@@ -174,57 +174,63 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
                 .relationships
                 .unwrap_or_default()
                 .into_iter()
-                .filter_map(|(name, relationship)| {
-                    (|| -> Result<Option<(_, _)>, RoutingError> {
-                        let (name, descriptor) = schema
-                            .relationships()
-                            .find(|(n, _)| *n == name.as_str())
-                            .ok_or_else(|| Error::ResourceValidationFailure {
-                                schema: schema.name().to_string(),
-                                attribute: name,
-                                message: "Attempted to attach unknown relationship".to_string(),
-                            })?;
-                        let related = &descriptor.related;
-                        let result = match (relationship.data, descriptor.kind) {
-                            (Some(Linkage::ToOne(identifier)), RelationshipKind::HasOne) => {
-                                Some(Relationship::HasOne(
-                                    self.materialise_id(identifier, related.resource)?,
-                                ))
-                            }
-                            (Some(Linkage::ToOne(identifier)), RelationshipKind::BelongsTo) => {
-                                Some(Relationship::BelongsTo(
-                                    self.materialise_id(identifier, related.resource)?,
-                                ))
-                            }
-                            (Some(Linkage::ToMany(ids)), RelationshipKind::HasMany) => {
-                                Some(Relationship::HasMany(
-                                    ids.into_iter()
-                                        .map(|identifier| {
-                                            self.materialise_id(identifier, related.resource)
-                                        })
-                                        .try_collect()?,
-                                ))
-                            }
-
-                            (None | Some(Linkage::Empty), _) => Some(Relationship::Empty),
-                            _ => Err(Error::ResourceValidationFailure {
-                                schema: schema.name().to_string(),
-                                attribute: name.to_string(),
-                                message: "Attempted to attach relationship with wrong linkage"
-                                    .to_string(),
-                            })?,
+                .map(|(name, relationship)| {
+                    let descriptor = schema.relationship(&name).ok_or_else(|| {
+                        Error::ResourceValidationFailure {
+                            schema: schema.name().to_string(),
+                            attribute: name,
+                            message: "Attempted to attach unknown relationship".to_string(),
                         }
-                        .map(|relationship| (name, relationship));
+                    })?;
 
-                        Ok(result)
-                    })()
-                    .transpose()
+                    Ok((
+                        descriptor.name,
+                        self.require_relationship(relationship.data, descriptor, schema)?,
+                    ))
                 })
-                .try_collect()?,
+                .try_collect::<_, _, RoutingError>()?,
             foreign_keys: ForeignKeys::new(),
         };
 
         Ok(record)
+    }
+
+    /// Resolves request-supplied linkage against the relationship it targets, materialising its
+    /// identifiers into the typed keys the record layer stores. Absent and explicitly null linkage
+    /// alike clear the relationship; linkage whose cardinality contradicts the relationship's
+    /// direction is rejected.
+    pub fn require_relationship(
+        &self,
+        linkage: Option<Linkage>,
+        descriptor: &RelationshipDescriptor<'sch>,
+        schema: &Schema,
+    ) -> Result<Relationship, RoutingError> {
+        let related = &descriptor.related;
+        let relationship = match (linkage, descriptor.kind) {
+            (Some(Linkage::ToOne(identifier)), RelationshipKind::HasOne) => {
+                Relationship::HasOne(self.materialise_id(identifier, related.resource)?)
+            }
+            (Some(Linkage::ToOne(identifier)), RelationshipKind::BelongsTo) => {
+                Relationship::BelongsTo(self.materialise_id(identifier, related.resource)?)
+            }
+            (Some(Linkage::ToMany(ids)), RelationshipKind::HasMany) => Relationship::HasMany(
+                ids.into_iter()
+                    .map(|identifier| self.materialise_id(identifier, related.resource))
+                    .try_collect()?,
+            ),
+            (None | Some(Linkage::Empty), _) => Relationship::Empty,
+
+            (Some(Linkage::ToOne(_)), RelationshipKind::HasMany)
+            | (Some(Linkage::ToMany(_)), RelationshipKind::HasOne | RelationshipKind::BelongsTo) => {
+                Err(Error::ResourceValidationFailure {
+                    schema: schema.name().to_string(),
+                    attribute: descriptor.name.to_string(),
+                    message: "Attempted to attach relationship with wrong linkage".to_string(),
+                })?
+            }
+        };
+
+        Ok(relationship)
     }
 
     /// Extracts the request body as relationship linkage, the counterpart of `require_resource`
