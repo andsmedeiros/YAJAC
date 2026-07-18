@@ -1,3 +1,5 @@
+use indexmap::IndexSet;
+
 use super::{
     attributes::{Attribute, Row},
     connection::Connection as ConnectionInterface,
@@ -6,7 +8,10 @@ use super::{
     query_parameters::QueryParameters,
     schema::Schema,
 };
-use crate::database::attributes::Identifier;
+use crate::database::{
+    attributes::Identifier,
+    query_parameters::{FieldsParameters, FilterParameters, FilterValue},
+};
 
 pub trait Table<
     'sch,
@@ -42,6 +47,36 @@ pub trait Table<
         let (query, bindings) = QueryBuilder::new(self.schema()).find(id, parameters)?;
 
         self.run_fetch_single(query, bindings)
+    }
+
+    fn find_by(
+        &self,
+        column: &'sch str,
+        value: Attribute,
+        fields: Option<IndexSet<&'sch str>>,
+    ) -> Result<Row<'sch>, Error> {
+        let (query, bindings) = QueryBuilder::new(self.schema()).query(&QueryParameters {
+            fields: FieldsParameters::from([(
+                self.schema().name(),
+                fields.unwrap_or_else(|| [column].into()),
+            )]),
+            filter: Some(FilterParameters::from([(
+                column,
+                vec![FilterValue::Equal(value)],
+            )])),
+            ..QueryParameters::new(self.schema())
+        })?;
+
+        let mut rows = self.run_fetch(query, bindings)?;
+
+        match rows.len() {
+            0 => Err(Error::RecordNotFound)?,
+            1 => Ok(rows.remove(0)),
+            _ => Err(Error::UnexpectedCollection {
+                schema: self.schema().name().into(),
+                message: format!("A 'find'  operation resulted in {} records.", rows.len()),
+            })?,
+        }
     }
 
     fn insert(&self, row: Row<'sch>, parameters: &QueryParameters) -> Result<Row<'sch>, Error> {

@@ -75,7 +75,7 @@ pub enum Error {
     },
     UnexpectedCollection {
         schema: String,
-        relationship: String,
+        message: String,
     },
     MismatchedRelationshipKind {
         schema: String,
@@ -189,7 +189,7 @@ impl Error {
             InvalidAttributeConversion { .. } => "An attribute could not be converted",
             InvalidAttributeAccess { .. } => "An undeclared attribute was accessed",
             InvalidRelationshipAccess { .. } => "An undeclared relationship was accessed",
-            UnexpectedCollection { .. } => "A single related record was expected",
+            UnexpectedCollection { .. } => "A single record was expected",
             MismatchedRelationshipKind { .. } => {
                 "The relationship kind is incompatible with the requested access"
             }
@@ -311,12 +311,9 @@ impl Display for Error {
                 f,
                 "Attempted to access relationship '{relationship}', which schema '{schema}' does not declare"
             ),
-            UnexpectedCollection {
-                schema,
-                relationship,
-            } => write!(
+            UnexpectedCollection { schema, message } => write!(
                 f,
-                "Expected a single related record for relationship '{relationship}' on schema '{schema}', but it resolved to a collection"
+                "Expected a single record for schema '{schema}', but the query resolved to a collection: {message}"
             ),
             MismatchedRelationshipKind {
                 schema,
