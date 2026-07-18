@@ -27,12 +27,21 @@ pub enum Content<'sch: 'req, 'req> {
     Collection(Vec<&'req Record<'sch>>),
     LinkageToOne(Option<Identifier>),
     LinkageToMany(Vec<Identifier>),
+    /// Null primary data standing for a resource that is absent rather than missing: an
+    /// empty to-one related resource, which is served as `data: null` under a 200.
+    Empty,
     Errors(Vec<JsonApiError>),
 }
 
 impl<'sch: 'req, 'req> From<&'req Record<'sch>> for Content<'sch, 'req> {
     fn from(resourceful: &'req Record<'sch>) -> Self {
         Content::Resource(resourceful)
+    }
+}
+
+impl<'sch: 'req, 'req> From<Option<&'req Record<'sch>>> for Content<'sch, 'req> {
+    fn from(resourceful: Option<&'req Record<'sch>>) -> Self {
+        resourceful.map_or(Content::Empty, Content::Resource)
     }
 }
 
@@ -223,7 +232,7 @@ pub fn to_document<'sch: 'req, 'req>(
             .collect::<Result<Vec<_>, _>>()?
             .into(),
         Content::LinkageToOne(Some(identifier)) => make_linkage_resource(identifier).into(),
-        Content::LinkageToOne(None) => PrimaryContent::Empty { data: () },
+        Content::LinkageToOne(None) | Content::Empty => PrimaryContent::Empty { data: () },
         Content::LinkageToMany(identifiers) => identifiers
             .into_iter()
             .map(make_linkage_resource)
