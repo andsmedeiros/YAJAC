@@ -102,6 +102,10 @@ pub enum Error {
         schema: String,
         attribute: String,
     },
+    UnloadedRelationshipAccess {
+        schema: String,
+        relationship: String,
+    },
     MissingRecordId {
         schema: String,
     },
@@ -135,6 +139,7 @@ impl Error {
             | DatabaseFailure { .. }
             | DataLoadingError { .. }
             | UnloadedAttributeAccess { .. }
+            | UnloadedRelationshipAccess { .. }
             | MissingRecordId { .. }
             | InconsistentCollection
             | InvalidIndexAccess => StatusCode::INTERNAL_SERVER_ERROR,
@@ -166,6 +171,7 @@ impl Error {
             RelatedRecordNotFound => "RelatedRecordNotFound",
             DataLoadingError { .. } => "DataLoadingError",
             UnloadedAttributeAccess { .. } => "UnloadedAttributeAccess",
+            UnloadedRelationshipAccess { .. } => "UnloadedRelationshipAccess",
             MissingRecordId { .. } => "MissingRecordId",
             InconsistentCollection => "InconsistentCollection",
             InvalidIndexAccess => "InvalidIndexAccess",
@@ -200,6 +206,7 @@ impl Error {
             RelatedRecordNotFound => "A related record was not found",
             DataLoadingError { .. } => "Failed to load related data",
             UnloadedAttributeAccess { .. } => "An unloaded attribute was accessed",
+            UnloadedRelationshipAccess { .. } => "An unloaded relationship was accessed",
             MissingRecordId { .. } => "The record is missing an identifier",
             InconsistentCollection => "The collection is heterogeneous",
             InvalidIndexAccess => "An invalid index was accessed",
@@ -345,6 +352,13 @@ impl Display for Error {
             UnloadedAttributeAccess { schema, attribute } => write!(
                 f,
                 "Attempted to read attribute '{attribute}' of a record with schema '{schema}', but it was not loaded"
+            ),
+            UnloadedRelationshipAccess {
+                schema,
+                relationship,
+            } => write!(
+                f,
+                "Attempted to read relationship '{relationship}' of a record with schema '{schema}', but it was not loaded"
             ),
             MissingRecordId { schema } => write!(
                 f,
