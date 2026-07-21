@@ -25,9 +25,15 @@ Rules the codebase already follows. Keep new code homogeneous with them. This co
 
 ## Panics & fallibility
 
-- **Never `.unwrap()`.** Propagate with `?`, or use `.expect("message")` with a message stating the
-  invariant. (The one bare-`Response::new` fallback in `Router::handle` is a deliberate
-  last-resort infallible construction, not an `unwrap`.)
+- **No panicking inside the request path.** Nothing reachable from `Router::handle` may `.unwrap()`,
+  `.expect()`, `unreachable!()`, `panic!()`, or otherwise panic. A "can't happen" invariant or a
+  missing-but-expected value *there* is a broken server-side invariant, not grounds to abort the
+  process: return the fitting `5xx` `Error` variant — minting a dedicated internal-error variant in
+  preference to reusing an ill-fitting one — and let the router boundary redact + log it.
+- **Never `.unwrap()`, anywhere.** Off the request path — construction, startup, tests — propagate with
+  `?` or use `.expect("message")` with a message stating the invariant, and keep `expect` / `unreachable!`
+  scarce. (The one bare-`Response::new` fallback in `Router::handle` is a deliberate last-resort
+  infallible construction, not an `unwrap`.)
 
 ## Lifetimes
 
