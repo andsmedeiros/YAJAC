@@ -74,7 +74,7 @@ pub trait Table<
             1 => Ok(rows.remove(0)),
             _ => Err(Error::UnexpectedCollection {
                 schema: self.schema().name().into(),
-                message: format!("A 'find'  operation resulted in {} records.", rows.len()),
+                message: format!("A 'find' operation resulted in {} records.", rows.len()),
             })?,
         }
     }
