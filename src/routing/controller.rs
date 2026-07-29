@@ -96,72 +96,38 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> DerefMut
     }
 }
 
-pub trait ReadOnlyResourceController<'sch, Adapter: AdapterInterface + 'sch> {
-    fn index<'req>(context: ResourceContext<'sch, 'req, Adapter>) -> Result
-    where
-        'sch: 'req,
-    {
-        serve::index(context)
-    }
-
-    fn show<'req>(context: ResourceContext<'sch, 'req, Adapter>) -> Result
-    where
-        'sch: 'req,
-    {
-        serve::show(context)
-    }
-
-    fn linkage<'req>(
-        context: ResourceContext<'sch, 'req, Adapter>,
-        relationship: &'sch str,
-    ) -> Result
-    where
-        'sch: 'req,
-    {
-        serve::linkage(context, relationship)
-    }
-
-    fn related<'req>(
-        context: ResourceContext<'sch, 'req, Adapter>,
-        relationship: &'sch str,
-    ) -> Result
-    where
-        'sch: 'req,
-    {
-        serve::related(context, relationship)
-    }
-}
-
+/// The behaviour served at a resource's endpoints. Every method defaults to the
+/// framework's serving; an implementor overrides only the endpoints it customises.
 pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
-    fn index<'req>(context: ResourceContext<'sch, 'req, Adapter>) -> Result
+    fn index<'req>(&self, context: ResourceContext<'sch, 'req, Adapter>) -> Result
     where
         'sch: 'req,
     {
         serve::index(context)
     }
 
-    fn show<'req>(context: ResourceContext<'sch, 'req, Adapter>) -> Result
+    fn show<'req>(&self, context: ResourceContext<'sch, 'req, Adapter>) -> Result
     where
         'sch: 'req,
     {
         serve::show(context)
     }
 
-    fn create<'req>(context: ResourceContext<'sch, 'req, Adapter>) -> Result
+    fn create<'req>(&self, context: ResourceContext<'sch, 'req, Adapter>) -> Result
     where
         'sch: 'req,
     {
         serve::create(context)
     }
 
-    fn update<'req>(context: ResourceContext<'sch, 'req, Adapter>) -> Result
+    fn update<'req>(&self, context: ResourceContext<'sch, 'req, Adapter>) -> Result
     where
         'sch: 'req,
     {
         serve::update(context)
     }
 
-    fn delete<'req>(context: ResourceContext<'sch, 'req, Adapter>) -> Result
+    fn delete<'req>(&self, context: ResourceContext<'sch, 'req, Adapter>) -> Result
     where
         'sch: 'req,
     {
@@ -169,6 +135,7 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
     }
 
     fn linkage<'req>(
+        &self,
         context: ResourceContext<'sch, 'req, Adapter>,
         relationship: &'sch str,
     ) -> Result
@@ -179,6 +146,7 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
     }
 
     fn related<'req>(
+        &self,
         context: ResourceContext<'sch, 'req, Adapter>,
         relationship: &'sch str,
     ) -> Result
@@ -188,7 +156,11 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
         serve::related(context, relationship)
     }
 
-    fn link<'req>(context: ResourceContext<'sch, 'req, Adapter>, relationship: &'sch str) -> Result
+    fn link<'req>(
+        &self,
+        context: ResourceContext<'sch, 'req, Adapter>,
+        relationship: &'sch str,
+    ) -> Result
     where
         'sch: 'req,
     {
@@ -196,6 +168,7 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
     }
 
     fn unlink<'req>(
+        &self,
         context: ResourceContext<'sch, 'req, Adapter>,
         relationship: &'sch str,
     ) -> Result
@@ -206,6 +179,7 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
     }
 
     fn relink<'req>(
+        &self,
         context: ResourceContext<'sch, 'req, Adapter>,
         relationship: &'sch str,
     ) -> Result
@@ -214,6 +188,15 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
     {
         serve::relink(context, relationship)
     }
+}
+
+/// A controller that customises nothing — every endpoint uses the framework default.
+#[derive(Default)]
+pub struct DefaultController;
+
+impl<'sch, Adapter: AdapterInterface + 'sch> ResourceController<'sch, Adapter>
+    for DefaultController
+{
 }
 
 mod serve {
@@ -344,10 +327,49 @@ mod serve {
     }
 
     pub(super) fn related<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch>(
-        _context: ResourceContext<'sch, 'req, Adapter>,
-        _relationship: &'sch str,
+        context: ResourceContext<'sch, 'req, Adapter>,
+        relationship: &'sch str,
     ) -> Result {
-        unimplemented!("implement related endpoint")
+        let schema = context.schema();
+        let descriptor = schema.relationship(relationship).ok_or_else(|| {
+            DatabaseError::InvalidRelationshipAccess {
+                schema: schema.name().to_string(),
+                relationship: relationship.to_string(),
+            }
+        })?;
+
+        let registry = context.context.manager.registry();
+        let related_schema = registry.schema(descriptor.related.resource)?;
+        let store = context.store()?;
+
+        let id = context.require_id()?;
+        let parameters = QueryParameters {
+            fields: [(schema.name(), [descriptor.related.keys.own].into())].into(),
+            ..QueryParameters::new(schema)
+        };
+        let parent = store.fetch_record(schema, id, &parameters)?.content;
+
+        let uri = context.uri();
+        let related_parameters = QueryParameters::parse(uri, related_schema, registry)?;
+
+        let generator = DefaultUriGenerator::default();
+        let document = match descriptor.kind {
+            RelationshipKind::HasMany => {
+                let Composite { content, included } =
+                    store.fetch_related_collection(&parent, relationship, related_parameters)?;
+                to_document(&content, included, uri, &generator)?
+            }
+            RelationshipKind::BelongsTo | RelationshipKind::HasOne => {
+                match store.fetch_related_record(&parent, relationship, related_parameters)? {
+                    Some(Composite { content, included }) => {
+                        to_document(&content, included, uri, &generator)?
+                    }
+                    None => to_document(Content::Empty, Vec::new(), uri, &generator)?,
+                }
+            }
+        };
+
+        respond(Some(document))
     }
 
     pub(super) fn link<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch>(
@@ -528,6 +550,7 @@ mod tests {
     use crate::database::schema::{AttributeType, Related, Schema, SchemaBuilder};
     use crate::http_wrappers::Uri;
     use crate::json_api::document::Document;
+    use crate::routing::ControllerLookup;
     use crate::routing::{Context, Request, RouteParameters};
     use http::StatusCode;
     use serde_json::{Value, json};
@@ -815,14 +838,15 @@ mod tests {
     }
 
     #[test]
-    fn test_create_rejects_malformed_document() -> TestResult {
+    fn test_create_rejects_non_resource_document() -> TestResult {
         let manager = manager()?;
-        let request = build_request("POST", "/books", json!({ "title": "Naked" }))?;
+        // A well-formed document whose primary data is a collection, not a single resource.
+        let request = build_request("POST", "/books", json!({ "data": [] }))?;
         let uri: Uri = request.uri().clone().into();
         let context = Context::from_request(&manager, &uri, RouteParameters::new(), request);
 
         match Books::default().create(ResourceContext::new(schema(&manager, "books"), context)) {
-            Ok(_) => Err("a malformed document must error".into()),
+            Ok(_) => Err("a non-resource document must error".into()),
             Err(error) => {
                 let status: StatusCode = error.status_code().into();
                 assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
@@ -1406,7 +1430,7 @@ mod tests {
 
     // Maps each resource kind to its canonical controller — the resolution `related`
     // performs to forward to the related type's serving.
-    fn controllers() -> ControllerLookup<'static, SqliteAdapter> {
+    fn controllers<'sch>() -> ControllerLookup<'sch, SqliteAdapter> {
         ControllerLookup::default()
             .register::<Authors>("authors")
             .register::<Books>("books")
