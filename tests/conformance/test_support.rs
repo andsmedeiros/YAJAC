@@ -18,8 +18,8 @@ use yajac::database::adapters::sqlite::Pool;
 use yajac::database::connection_manager::ConnectionManager;
 use yajac::database::registry::Registry;
 use yajac::database::schema::{AttributeType, IdentifierType, Related, SchemaBuilder};
-use yajac::routing::RouterBuilder;
-use yajac::routing::controller::{ReadOnlyResourceController, ResourceController};
+use yajac::routing::Router;
+use yajac::routing::controller::ResourceController;
 
 pub type BoxError = Box<dyn std::error::Error>;
 pub type TestResult = Result<(), BoxError>;
@@ -33,16 +33,21 @@ pub const JSONAPI: &str = "application/vnd.api+json";
 // read-only resource, so it carries a `ReadOnlyResourceController`; the rest are
 // read-write.
 
+#[derive(Default)]
 pub struct Authors;
+#[derive(Default)]
 pub struct Articles;
+#[derive(Default)]
 pub struct Comments;
+#[derive(Default)]
 pub struct Profiles;
+#[derive(Default)]
 pub struct Tags;
 
 impl<'sch> ResourceController<'sch, SqliteAdapter> for Authors {}
 impl<'sch> ResourceController<'sch, SqliteAdapter> for Articles {}
 impl<'sch> ResourceController<'sch, SqliteAdapter> for Comments {}
-impl<'sch> ReadOnlyResourceController<'sch, SqliteAdapter> for Profiles {}
+impl<'sch> ResourceController<'sch, SqliteAdapter> for Profiles {}
 impl<'sch> ResourceController<'sch, SqliteAdapter> for Tags {}
 
 // --- Abstract schema set --------------------------------------------------
@@ -225,14 +230,18 @@ impl Api {
         headers: &[(&str, &str)],
     ) -> Result<Res, BoxError> {
         let registry = self.manager.registry();
-        let mut builder = RouterBuilder::new();
-        builder
-            .resource::<Authors>("authors", registry.schema("authors")?)
-            .resource::<Articles>("articles", registry.schema("articles")?)
-            .resource::<Comments>("comments", registry.schema("comments")?)
-            .read_only_resource::<Profiles>("profiles", registry.schema("profiles")?)
-            .resource::<Tags>("tags", registry.schema("tags")?);
-        let router = builder.build();
+        let authors = registry.schema("authors")?;
+        let articles = registry.schema("articles")?;
+        let comments = registry.schema("comments")?;
+        let profiles = registry.schema("profiles")?;
+        let tags = registry.schema("tags")?;
+        let router = Router::try_new(|root| {
+            root.resource::<Authors>("authors", authors)
+                .resource::<Articles>("articles", articles)
+                .resource::<Comments>("comments", comments)
+                .read_only_resource::<Profiles>("profiles", profiles)
+                .resource::<Tags>("tags", tags)
+        })?;
 
         let mut request = http::Request::builder()
             .method(Method::from_bytes(method.as_bytes())?)
