@@ -229,21 +229,70 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
             .transaction(|| self.table(schema)?.delete_batch(parameters))
     }
 
-    /// Resolves the to-one `relationship` of the already-loaded `record` to the identifier of the
-    /// record it targets, or `None` when the relationship is empty. Errors when `relationship` is
-    /// not declared on the record's schema, or when it is to-many — use `peek_related_collection`
-    /// for those.
-    pub fn peek_related_record(
+    /// Fetches the full records targeted by the already-loaded `record`'s `relationship`, scoped to
+    /// the relationship's foreign key and shaped by `parameters`. Empty when the relationship is
+    /// unset. Errors when `relationship` is not declared on the record's schema.
+    pub fn fetch_related_collection(
         &self,
-        record: &'req Record<'sch>,
+        record: &Record<'sch>,
         relationship: &'req str,
-    ) -> Result<Option<Identifier>, Error> {
+        mut parameters: QueryParameters<'sch, 'req>,
+    ) -> Result<CompositeCollection<'sch>, Error> {
+        let schema = record.schema();
+        let descriptor =
+            schema
+                .relationship(relationship)
+                .ok_or_else(|| Error::InvalidRelationshipAccess {
+                    schema: schema.name().into(),
+                    relationship: relationship.into(),
+                })?;
+        let keys = &descriptor.related.keys;
+        let related_schema = self
+            .manager
+            .registry()
+            .schema(descriptor.related.resource)?;
+
+        if related_schema != parameters.schema {
+            return Err(Error::MismatchedQueryParameters {
+                expected: related_schema.name().into(),
+                actual: parameters.schema.name().into(),
+            });
+        }
+
+        match record.require_owned(keys.own)? {
+            Attribute::Null => Ok(Composite {
+                content: Default::default(),
+                included: Default::default(),
+            }),
+
+            value => {
+                parameters
+                    .filter
+                    .get_or_insert_default()
+                    .entry(keys.related)
+                    .or_default()
+                    .push(FilterValue::Equal(value));
+
+                self.fetch_collection(related_schema, &parameters)
+            }
+        }
+    }
+
+    /// Fetches the single full record targeted by the already-loaded `record`'s to-one
+    /// `relationship`, or `None` when it is empty. Errors when `relationship` is not declared, or
+    /// when it resolves to more than one record.
+    pub fn fetch_related_record(
+        &self,
+        record: &Record<'sch>,
+        relationship: &'req str,
+        parameters: QueryParameters<'sch, 'req>,
+    ) -> Result<Option<CompositeRecord<'sch>>, Error> {
         let kind = record
             .schema
             .relationship(relationship)
             .ok_or_else(|| Error::InvalidRelationshipAccess {
-                schema: record.schema.name().to_string(),
-                relationship: relationship.to_string(),
+                schema: record.schema.name().into(),
+                relationship: relationship.into(),
             })?
             .kind;
 
@@ -254,21 +303,53 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
             });
         }
 
-        let mut related = self.peek_related_collection(record, relationship)?;
+        let mut collection = self.fetch_related_collection(record, relationship, parameters)?;
 
-        match related.len() {
+        match collection.content.len() {
             0 => Ok(None),
-            1 => Ok(Some(related.remove(0))),
+            1 => Ok(Some(Composite {
+                content: collection.content.remove(0),
+                included: collection.included,
+            })),
             _ => Err(Error::UnexpectedCollection {
-                schema: record.schema.name().into(),
-                message: "Multiple linkage resolved for to-one relationship".into(),
+                schema: record.schema().name().into(),
+                message: "Multiple records resolved for to-one relationship".into(),
             }),
         }
     }
 
+    /// Resolves the to-one `relationship` of the already-loaded `record` to the identifier of the
+    /// record it targets, or `None` when the relationship is empty. Errors when `relationship` is
+    /// not declared on the record's schema, or when it is to-many — use `peek_related_collection`
+    /// for those.
+    pub fn peek_related_record(
+        &self,
+        record: &'req Record<'sch>,
+        relationship: &'req str,
+    ) -> Result<Option<Identifier>, Error> {
+        let descriptor = record.schema.relationship(relationship).ok_or_else(|| {
+            Error::InvalidRelationshipAccess {
+                schema: record.schema.name().to_string(),
+                relationship: relationship.to_string(),
+            }
+        })?;
+
+        let related_schema = self
+            .manager
+            .registry()
+            .schema(descriptor.related.resource)?;
+        let parameters = QueryParameters {
+            fields: [(related_schema.name(), Default::default())].into(),
+            ..QueryParameters::new(related_schema)
+        };
+        self.fetch_related_record(record, relationship, parameters)?
+            .map(|mut composite| composite.content.pluck_id())
+            .transpose()
+    }
+
     /// Resolves `relationship` of the already-loaded `record` to the identifiers of the records it
-    /// targets, or an empty vector when the relationship is empty. Errors when `relationship` is
-    /// not declared on the record's schema.
+    /// targets, requesting only their ids. Empty when the relationship is unset. Errors when
+    /// `relationship` is not declared on the record's schema.
     pub fn peek_related_collection(
         &self,
         record: &Record<'sch>,
@@ -282,35 +363,19 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
                     schema: schema.name().to_string(),
                     relationship: relationship.to_string(),
                 })?;
-        let keys = &descriptor.related.keys;
         let related_schema = self
             .manager
             .registry()
             .schema(descriptor.related.resource)?;
-        let own_attribute = if let Some(attribute) = record.get_owned(keys.own)
-            && attribute != Attribute::Null
-        {
-            attribute
-        } else {
-            return Ok(Vec::new());
+        let parameters = QueryParameters {
+            fields: [(related_schema.name(), Default::default())].into(),
+            ..QueryParameters::new(related_schema)
         };
 
-        self.table(related_schema)?
-            .query(&QueryParameters {
-                filter: Some(FilterParameters::from([(
-                    keys.related,
-                    vec![FilterValue::Equal(own_attribute)],
-                )])),
-                ..QueryParameters::new(related_schema)
-            })?
+        self.fetch_related_collection(record, relationship, parameters)?
+            .content
             .into_iter()
-            .map(|mut row| {
-                row.shift_remove(&related_schema.primary_key().name)
-                    .ok_or_else(|| Error::MissingRecordId {
-                        schema: related_schema.name().into(),
-                    })
-                    .and_then(TryInto::try_into)
-            })
+            .map(|mut record| record.pluck_id())
             .collect()
     }
 
