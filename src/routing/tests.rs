@@ -6,7 +6,7 @@ use crate::database::schema::{AttributeType, Related, SchemaBuilder};
 use crate::json_api::document::Document;
 use crate::routing::controller::{ResourceContext, ResourceController};
 use crate::routing::responder::respond_with;
-use crate::routing::{Context, Result as RouteResult, Router, RouterError};
+use crate::routing::{Context, Result as RouteResult, Router, RouterError, UnboundVerbs};
 use http::{Response, StatusCode};
 use serde_json::{Value, json};
 use std::error::Error as StdError;
@@ -174,9 +174,9 @@ fn read_only_router(manager: &Manager) -> Result<Router<'_, SqliteAdapter>, Box<
     })?)
 }
 
-fn send(
-    manager: &Manager,
-    router: &Router<'_, SqliteAdapter>,
+fn send<'a>(
+    manager: &'a Manager,
+    router: &Router<'a, SqliteAdapter>,
     method: &str,
     uri: &str,
     body: Value,
@@ -415,11 +415,12 @@ fn test_link_reaches_handler() -> TestResult {
 #[test]
 fn test_relink_reaches_handler() -> TestResult {
     let manager = manager()?;
+    // `drafts.article_id` is nullable, so replacement can detach the dropped member.
     let response = serve(
         &manager,
         "PATCH",
-        "/articles/1/relationships/comments",
-        json!({ "data": [{ "type": "comments", "id": "2" }] }),
+        "/articles/1/relationships/drafts",
+        json!({ "data": [{ "type": "drafts", "id": "2" }] }),
     )?;
 
     assert_eq!(response.status(), StatusCode::OK);
@@ -430,11 +431,12 @@ fn test_relink_reaches_handler() -> TestResult {
 #[test]
 fn test_unlink_reaches_handler() -> TestResult {
     let manager = manager()?;
+    // `drafts.article_id` is nullable, so removal can detach the member.
     let response = serve(
         &manager,
         "DELETE",
-        "/articles/1/relationships/comments",
-        json!({ "data": [{ "type": "comments", "id": "1" }] }),
+        "/articles/1/relationships/drafts",
+        json!({ "data": [{ "type": "drafts", "id": "1" }] }),
     )?;
 
     assert_eq!(response.status(), StatusCode::OK);
