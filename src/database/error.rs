@@ -81,6 +81,10 @@ pub enum Error {
         schema: String,
         relationship: String,
     },
+    MismatchedQueryParameters {
+        expected: String,
+        actual: String,
+    },
     InvalidOperation {
         schema: String,
         operation: String,
@@ -136,6 +140,7 @@ impl Error {
             | InvalidRelationshipAccess { .. }
             | UnexpectedCollection { .. }
             | MismatchedRelationshipKind { .. }
+            | MismatchedQueryParameters { .. }
             | DatabaseFailure { .. }
             | DataLoadingError { .. }
             | UnloadedAttributeAccess { .. }
@@ -164,6 +169,7 @@ impl Error {
             InvalidRelationshipAccess { .. } => "InvalidRelationshipAccess",
             UnexpectedCollection { .. } => "UnexpectedCollection",
             MismatchedRelationshipKind { .. } => "MismatchedRelationshipKind",
+            MismatchedQueryParameters { .. } => "MismatchedQueryParameters",
             InvalidOperation { .. } => "InvalidOperation",
             DatabaseFailure { .. } => "DatabaseFailure",
             ConstraintViolation { .. } => "ConstraintViolation",
@@ -199,6 +205,7 @@ impl Error {
             MismatchedRelationshipKind { .. } => {
                 "The relationship kind is incompatible with the requested access"
             }
+            MismatchedQueryParameters { .. } => "The query parameters target a different schema",
             InvalidOperation { .. } => "The operation is invalid",
             DatabaseFailure { .. } => "The database operation failed",
             ConstraintViolation { .. } => "A database constraint was violated",
@@ -328,6 +335,10 @@ impl Display for Error {
             } => write!(
                 f,
                 "Relationship '{relationship}' on schema '{schema}' has a kind incompatible with the requested access"
+            ),
+            MismatchedQueryParameters { expected, actual } => write!(
+                f,
+                "Query parameters parsed for schema '{actual}' were supplied to an operation on schema '{expected}'"
             ),
             InvalidOperation {
                 schema,
