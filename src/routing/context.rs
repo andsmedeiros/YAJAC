@@ -17,7 +17,7 @@ use crate::{
         document::Document, identifier::Identifier as ResourceIdentifier,
         primary_content::PrimaryContent, resource::Resource,
     },
-    routing::{Error as RoutingError, RouteParameters},
+    routing::{ControllerLookup, Error as RoutingError, RouteParameters},
 };
 use http::HeaderMap;
 use itertools::Itertools;
@@ -36,6 +36,7 @@ where
     route: RouteParameters,
     query: OnceCell<QueryParameters<'sch, 'req>>,
     connection: OnceCell<Handle<'req, Adapter>>,
+    controllers: Option<&'req ControllerLookup<'sch, Adapter>>,
 }
 
 impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
@@ -57,7 +58,22 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
             route,
             query: OnceCell::new(),
             connection: OnceCell::new(),
+            controllers: None,
         }
+    }
+
+    /// Lends the router's controller lookup to this context for the duration of the request.
+    pub fn with_controllers(
+        mut self,
+        controllers: &'req ControllerLookup<'sch, Adapter>,
+    ) -> Self {
+        self.controllers = Some(controllers);
+        self
+    }
+
+    /// The router's controller lookup, absent when the context was not built by a router.
+    pub fn controllers(&self) -> Option<&'req ControllerLookup<'sch, Adapter>> {
+        self.controllers
     }
 
     /// Lazily acquires the request connection from the pool and lends it as a shared reference.
