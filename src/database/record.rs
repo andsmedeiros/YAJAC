@@ -89,6 +89,12 @@ impl<'sch> Record<'sch> {
         })
     }
 
+    pub fn pluck_id(&mut self) -> Result<Identifier, Error> {
+        self.id.take().ok_or_else(|| Error::MissingRecordId {
+            schema: self.schema.name().into(),
+        })
+    }
+
     pub fn get_owned(&self, name: &str) -> Option<Attribute> {
         if self.schema.is_primary_key(name) {
             self.get_id().cloned().map(Into::into)
@@ -102,6 +108,21 @@ impl<'sch> Record<'sch> {
             self.require_id().cloned().map(Into::into)
         } else {
             self.require(name).cloned()
+        }
+    }
+
+    pub fn pluck(&mut self, name: &str) -> Result<Attribute, Error> {
+        if self.schema.is_primary_key(name) {
+            self.pluck_id().map(Into::into)
+        } else {
+            self.attributes
+                .shift_remove_entry(name)
+                .or_else(|| self.foreign_keys.shift_remove_entry(name))
+                .map(|(_, value)| value)
+                .ok_or_else(|| Error::UnloadedAttributeAccess {
+                    schema: self.schema.name().into(),
+                    attribute: name.into(),
+                })
         }
     }
 
