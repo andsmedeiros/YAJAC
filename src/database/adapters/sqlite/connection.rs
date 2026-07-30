@@ -31,8 +31,9 @@ impl Connection {
         }
     }
 
-    /// Runs a batch of `;`-separated statements with no bindings. The setup path for DDL and seeding.
+    /// Runs a batch of `;`-separated statements with no bindings, logging the SQL it runs.
     pub fn execute_batch(&self, sql: &str) -> Result<(), Error> {
+        debug!("{sql}");
         self.handle.execute_batch(sql)?;
         Ok(())
     }
@@ -43,7 +44,7 @@ impl Connection {
             0 => "BEGIN".to_string(),
             level => format!("SAVEPOINT sp{level}"),
         };
-        self.handle.execute_batch(&sql)?;
+        self.execute_batch(&sql)?;
         self.depth.update(|level| level + 1);
         Ok(())
     }
@@ -54,7 +55,7 @@ impl Connection {
             0 => "COMMIT".to_string(),
             level => format!("RELEASE sp{level}"),
         };
-        self.handle.execute_batch(&sql)?;
+        self.execute_batch(&sql)?;
         self.depth.update(|level| level - 1);
         Ok(())
     }
@@ -66,7 +67,7 @@ impl Connection {
             0 => "ROLLBACK".to_string(),
             level => format!("ROLLBACK TO sp{level}; RELEASE sp{level}"),
         };
-        self.handle.execute_batch(&sql)?;
+        self.execute_batch(&sql)?;
         self.depth.update(|level| level - 1);
         Ok(())
     }
@@ -78,7 +79,7 @@ impl Drop for Connection {
     /// checkout.
     fn drop(&mut self) {
         if self.depth.get() > 0 {
-            if let Err(error) = self.handle.execute_batch("ROLLBACK") {
+            if let Err(error) = self.execute_batch("ROLLBACK") {
                 error!(
                     "Failed to roll back a dangling transaction before returning the \
                      connection to the pool: {error}"
