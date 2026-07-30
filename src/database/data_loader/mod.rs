@@ -179,7 +179,7 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
                     }
                 }
             } else {
-                let index = Self::index_by_unique_foreign_key(
+                let index = Self::index_by_unique_attribute(
                     related_collection.as_slice(),
                     descriptor.keys.related,
                     relationship,
@@ -365,6 +365,39 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
                 Ok::<_, Error>((
                     Self::require_foreign_key(record, key, relationship)?,
                     record.require_id()?.clone(),
+                ))
+            })
+            .map_err(Error::from)
+    }
+
+    /// Borrows a record's loaded attribute, erroring if the column was not materialised.
+    fn require_attribute<'a>(
+        record: &'a Record<'sch>,
+        key: &str,
+        relationship: &str,
+    ) -> Result<&'a Attribute, Error> {
+        record.attributes.get(key).ok_or_else(|| Error::DataLoadingError {
+            message: format!(
+                "Attribute '{}', necessary for loading the relationship '{}' on model '{}', is not loaded.",
+                key, relationship, record.schema.name()
+            ),
+        })
+    }
+
+    /// Indexes a related collection by each record's attribute, borrowing key and id in place. The
+    /// key is expected unique (a non-PK `BelongsTo` join), so a collision is an inconsistency; the id
+    /// is borrowed and cloned only when a lookup matches.
+    fn index_by_unique_attribute<'a>(
+        collection: &'a [Record<'sch>],
+        key: &str,
+        relationship: &str,
+    ) -> Result<HashMap<&'a Attribute, &'a Identifier>, Error> {
+        collection
+            .iter()
+            .try_index_with(|record| {
+                Ok::<_, Error>((
+                    Self::require_attribute(record, key, relationship)?,
+                    record.require_id()?,
                 ))
             })
             .map_err(Error::from)
