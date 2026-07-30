@@ -8,7 +8,7 @@ use crate::database::error::Error::{
     InvalidEncodingFailure, ParseParameterFailure, QueryValidationFailure,
 };
 use crate::database::registry::Registry;
-use crate::database::schema::{AttributeType, RelationshipDescriptor, RelationshipKind, Schema};
+use crate::database::schema::{AttributeType, RelationshipDescriptor, Schema};
 use crate::http_wrappers::Uri;
 use indexmap::{IndexMap, IndexSet};
 use regex::Regex;
@@ -228,13 +228,12 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
     ///
     /// 1. each serialised model that the request did not pin explicitly receives its full default
     ///    fieldset, so included resources are presented in full;
-    /// 2. for every `HasOne`/`HasMany` out of a serialised model, the join key (`keys.related`) is
-    ///    forced into the *related* model's fieldset -- creating a minimal, join-key-only entry for
-    ///    link-only targets. This key lives on a table the query builder never sees on its own (it
-    ///    is scoped to a single schema), so it has to be planted here. `BelongsTo` needs nothing:
-    ///    its key (`keys.own`) sits on the owning table and the builder already emits it when it
-    ///    expands the relationship name, and the related side is that table's primary key, which is
-    ///    always selected.
+    /// 2. for every relationship out of a serialised model, the join key (`keys.related`) is forced
+    ///    into the *related* model's fieldset -- a minimal, join-key-only entry for link-only
+    ///    targets. This key lives on a table the query builder never sees on its own (it is scoped
+    ///    to a single schema), so it has to be planted here. When it is the related table's primary
+    ///    key -- the usual case -- `fields_for_model` folds the duplicate away against the primary
+    ///    key it always selects.
     ///
     /// Because the keys are forced for every relationship regardless of whether it ends up loaded,
     /// no `should_load`/include-context bookkeeping is needed here.
@@ -250,13 +249,11 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
 
         for (_, schema) in models_to_serialise {
             for (_, relationship) in schema.relationships() {
-                if let RelationshipKind::HasOne | RelationshipKind::HasMany = relationship.kind {
-                    let related = &relationship.related;
-                    self.fields
-                        .entry(related.resource)
-                        .or_default()
-                        .insert(related.keys.related);
-                }
+                let related = &relationship.related;
+                self.fields
+                    .entry(related.resource)
+                    .or_default()
+                    .insert(related.keys.related);
             }
         }
     }
@@ -708,7 +705,7 @@ mod tests {
         let params = parse(&registry, &uri);
 
         assert_eq!(params.fields["articles"], IndexSet::from(["title"]));
-        assert_eq!(params.fields["users"], IndexSet::from(["name"]));
+        assert_eq!(params.fields["users"], IndexSet::from(["name", "id"]));
     }
 
     #[test]
