@@ -9,6 +9,7 @@ use crate::database::{
     },
     schema::{AttributeType, Schema},
 };
+use indexmap::IndexSet;
 use itertools::Itertools;
 
 struct ExtractedAttributes<'sch> {
@@ -278,33 +279,41 @@ impl<'sch> QueryBuilder<'sch> {
     /// Renders the comma-separated column list for the given model, primary key first. When
     /// `qualified` is set, each column is prefixed with the table name.
     fn fields_for_model(&self, fields: &FieldsParameters, qualified: bool) -> String {
-        let fields = fields
+        let rendered = fields
             .get(self.schema.name())
             .expect("Columns for all requested models should have been pre-loaded by the query parameters parser")
             .iter()
-            .map(|field| if self.schema.has_attribute(field) || self.schema.has_foreign_key(field) {
-                field
-            } else {
-                self.schema
-                    .relationship(field)
-                    .expect(
-                        "\
-                        All columns provided to the query builder should have been pre-validated by \
-                        the query parameters parser\
-                        "
-                    )
-                    .related
-                    .keys.own
+            .map(|field| {
+                if self.schema.is_primary_key(field)
+                    || self.schema.has_attribute(field)
+                    || self.schema.has_foreign_key(field)
+                {
+                    field
+                } else {
+                    self.schema
+                        .relationship(field)
+                        .expect(
+                            "\
+                            All columns provided to the query builder should have been pre-validated \
+                            by the query parameters parser\
+                            "
+                        )
+                        .related
+                        .keys.own
+                }
             });
 
-        let columns = || [self.schema.primary_key().name].into_iter().chain(fields);
+        let columns: IndexSet<&str> = std::iter::once(self.schema.primary_key().name)
+            .chain(rendered)
+            .collect();
 
         if qualified {
-            columns()
+            columns
+                .iter()
                 .map(|column| format!("{}.{}", self.schema.name(), column))
                 .join(", ")
         } else {
-            columns().join(", ")
+            columns.iter().join(", ")
         }
     }
 
