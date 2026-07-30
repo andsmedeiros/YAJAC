@@ -3,27 +3,24 @@ use crate::database::attributes::{ForeignKeys, Identifier};
 use crate::database::error::Error;
 use crate::database::record::Record;
 use crate::database::relationships::Relationship;
-use crate::database::schema::{IdentifierType, RelationshipKind, Schema};
+use crate::database::schema::{IdentifierType, RelationshipDescriptor, RelationshipKind, Schema};
 use crate::json_api::identifier::Identifier as JsonApiIdentifier;
 use crate::json_api::relationship::Linkage;
 use crate::{
     database::{
         adapters::Adapter as AdapterInterface, connection::Connection as ConnectionInterface,
-        connection_manager::ConnectionManager, pool::Pool as PoolInterface,
-        query_parameters::QueryParameters, store::Store,
+        connection_manager::ConnectionManager, query_parameters::QueryParameters, store::Store,
     },
     http_wrappers::{StatusCode, Uri},
     json_api::{
         document::Document, identifier::Identifier as ResourceIdentifier,
         primary_content::PrimaryContent, resource::Resource,
     },
-    routing::{Error as RoutingError, RouteParameters},
+    routing::{ControllerLookup, Error as RoutingError, RouteParameters},
 };
 use http::HeaderMap;
 use itertools::Itertools;
 use std::cell::OnceCell;
-
-type Handle<'req, Adapter> = <<Adapter as AdapterInterface>::Pool as PoolInterface>::Handle<'req>;
 
 pub struct Context<'sch, 'req, Adapter: AdapterInterface>
 where
@@ -35,7 +32,8 @@ where
     headers: HeaderMap,
     route: RouteParameters,
     query: OnceCell<QueryParameters<'sch, 'req>>,
-    connection: OnceCell<Handle<'req, Adapter>>,
+    connection: OnceCell<Adapter::Connection>,
+    controllers: Option<&'req ControllerLookup<'sch, Adapter>>,
 }
 
 impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
@@ -57,16 +55,31 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
             route,
             query: OnceCell::new(),
             connection: OnceCell::new(),
+            controllers: None,
         }
+    }
+
+    /// Lends the router's controller lookup to this context for the duration of the request.
+    pub fn with_controllers(
+        mut self,
+        controllers: &'req ControllerLookup<'sch, Adapter>,
+    ) -> Self {
+        self.controllers = Some(controllers);
+        self
+    }
+
+    /// The router's controller lookup, absent when the context was not built by a router.
+    pub fn controllers(&self) -> Option<&'req ControllerLookup<'sch, Adapter>> {
+        self.controllers
     }
 
     /// Lazily acquires the request connection from the pool and lends it as a shared reference.
     pub fn connection(&self) -> Result<&Adapter::Connection, Error> {
         match self.connection.get() {
-            Some(handle) => Ok(handle),
+            Some(connection) => Ok(connection),
             None => {
-                let handle = self.manager.acquire()?;
-                Ok(self.connection.get_or_init(|| handle))
+                let connection = self.manager.acquire()?;
+                Ok(self.connection.get_or_init(|| connection))
             }
         }
     }
@@ -84,7 +97,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
             RoutingError::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "MissingBody",
-                "the request requires a body",
+                "This request requires a body containing a resource object",
             )
         })?;
 
@@ -92,7 +105,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
             return Err(RoutingError::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "InvalidDocument",
-                "the request body must contain a single resource object",
+                "The request body must contain a single resource object as its primary data",
             ));
         };
         let resource = *data;
@@ -106,7 +119,10 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
             return Err(RoutingError::new(
                 StatusCode::CONFLICT,
                 "ResourceTypeMismatch",
-                format!("expected resource type '{}', got '{kind}'", schema.name()),
+                format!(
+                    "The resource type '{kind}' does not match the '{}' resource served at this endpoint",
+                    schema.name()
+                ),
             ));
         }
 
@@ -116,14 +132,18 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
                     return Err(RoutingError::new(
                         StatusCode::CONFLICT,
                         "ResourceIdMismatch",
-                        format!("resource id '{sent}' does not match endpoint id '{expected}'"),
+                        format!(
+                            "The resource id '{sent}' does not match the id '{expected}' targeted by this endpoint"
+                        ),
                     ));
                 }
                 None => {
                     return Err(RoutingError::new(
                         StatusCode::CONFLICT,
                         "ResourceIdMissing",
-                        format!("the resource is missing the id required by endpoint '{expected}'"),
+                        format!(
+                            "The submitted resource must carry the id '{expected}' targeted by this endpoint"
+                        ),
                     ));
                 }
                 _ => {}
@@ -154,7 +174,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
                             StatusCode::UNPROCESSABLE_ENTITY,
                             "UnknownAttribute",
                             format!(
-                                "Unknown attribute '{name}' for resource type '{}'",
+                                "The resource type '{}' has no attribute named '{name}'",
                                 schema.name()
                             ),
                         )
@@ -167,57 +187,114 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
                 .relationships
                 .unwrap_or_default()
                 .into_iter()
-                .filter_map(|(name, relationship)| {
-                    (|| -> Result<Option<(_, _)>, RoutingError> {
-                        let (name, descriptor) = schema
-                            .relationships()
-                            .find(|(n, _)| *n == name.as_str())
-                            .ok_or_else(|| Error::ResourceValidationFailure {
-                                schema: schema.name().to_string(),
-                                attribute: name,
-                                message: "Attempted to attach unknown relationship".to_string(),
-                            })?;
-                        let related = &descriptor.related;
-                        let result = match (relationship.data, descriptor.kind) {
-                            (Some(Linkage::ToOne(identifier)), RelationshipKind::HasOne) => {
-                                Some(Relationship::HasOne(
-                                    self.materialise_id(identifier, related.resource)?,
-                                ))
-                            }
-                            (Some(Linkage::ToOne(identifier)), RelationshipKind::BelongsTo) => {
-                                Some(Relationship::BelongsTo(
-                                    self.materialise_id(identifier, related.resource)?,
-                                ))
-                            }
-                            (Some(Linkage::ToMany(ids)), RelationshipKind::HasMany) => {
-                                Some(Relationship::HasMany(
-                                    ids.into_iter()
-                                        .map(|identifier| {
-                                            self.materialise_id(identifier, related.resource)
-                                        })
-                                        .try_collect()?,
-                                ))
-                            }
-
-                            (None | Some(Linkage::Empty), _) => Some(Relationship::Empty),
-                            _ => Err(Error::ResourceValidationFailure {
-                                schema: schema.name().to_string(),
-                                attribute: name.to_string(),
-                                message: "Attempted to attach relationship with wrong linkage"
-                                    .to_string(),
-                            })?,
+                .map(|(name, relationship)| {
+                    let descriptor = schema.relationship(&name).ok_or_else(|| {
+                        Error::ResourceValidationFailure {
+                            schema: schema.name().to_string(),
+                            attribute: name,
+                            message: "Attempted to attach unknown relationship".to_string(),
                         }
-                        .map(|relationship| (name, relationship));
+                    })?;
 
-                        Ok(result)
-                    })()
-                    .transpose()
+                    Ok((
+                        descriptor.name,
+                        self.require_relationship(relationship.data, descriptor, schema)?,
+                    ))
                 })
-                .try_collect()?,
+                .try_collect::<_, _, RoutingError>()?,
             foreign_keys: ForeignKeys::new(),
         };
 
         Ok(record)
+    }
+
+    /// Resolves request-supplied linkage against the relationship it targets, materialising its
+    /// identifiers into the typed keys the record layer stores. Absent and explicitly null linkage
+    /// alike clear the relationship; linkage whose cardinality contradicts the relationship's
+    /// direction is rejected.
+    pub fn require_relationship(
+        &self,
+        linkage: Option<Linkage>,
+        descriptor: &RelationshipDescriptor<'sch>,
+        schema: &Schema,
+    ) -> Result<Relationship, RoutingError> {
+        let related = &descriptor.related;
+        let relationship = match (linkage, descriptor.kind) {
+            (Some(Linkage::ToOne(identifier)), RelationshipKind::HasOne) => {
+                Relationship::HasOne(self.materialise_id(identifier, related.resource)?)
+            }
+            (Some(Linkage::ToOne(identifier)), RelationshipKind::BelongsTo) => {
+                Relationship::BelongsTo(self.materialise_id(identifier, related.resource)?)
+            }
+            (Some(Linkage::ToMany(ids)), RelationshipKind::HasMany) => Relationship::HasMany(
+                ids.into_iter()
+                    .map(|identifier| self.materialise_id(identifier, related.resource))
+                    .try_collect()?,
+            ),
+            (None | Some(Linkage::Empty), _) => Relationship::Empty,
+
+            (Some(Linkage::ToOne(_)), RelationshipKind::HasMany)
+            | (Some(Linkage::ToMany(_)), RelationshipKind::HasOne | RelationshipKind::BelongsTo) => {
+                Err(Error::ResourceValidationFailure {
+                    schema: schema.name().to_string(),
+                    attribute: descriptor.name.to_string(),
+                    message: "Attempted to attach relationship with wrong linkage".to_string(),
+                })?
+            }
+        };
+
+        Ok(relationship)
+    }
+
+    /// Extracts the request body as relationship linkage, the counterpart of `require_resource`
+    /// for the relationship-endpoint family. Each resource object must be a bare identifier:
+    /// carrying attributes, relationships, or links makes it a resource rather than linkage and is
+    /// rejected. Type and id validation against the target resource is deferred to materialisation,
+    /// where the relationship descriptor is known.
+    pub fn require_linkage(&mut self) -> Result<Linkage, RoutingError> {
+        let document = self.body.take().ok_or_else(|| {
+            RoutingError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "MissingBody",
+                "This request requires a body containing relationship linkage",
+            )
+        })?;
+
+        match document.content {
+            PrimaryContent::Empty { .. } => Ok(Linkage::Empty),
+            PrimaryContent::Record { data } => Ok(Linkage::ToOne(Self::require_identifier(*data)?)),
+            PrimaryContent::Collection { data } => Ok(Linkage::ToMany(
+                data.into_iter()
+                    .map(Self::require_identifier)
+                    .try_collect()?,
+            )),
+            PrimaryContent::Errors { .. } => Err(RoutingError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "InvalidDocument",
+                "The request body must contain relationship linkage as its primary data",
+            )),
+        }
+    }
+
+    /// Unwraps a resource object into its identifier, asserting it is a resource identifier object
+    /// — no attributes, relationships, or links. Meta is permitted and discarded.
+    fn require_identifier(resource: Resource) -> Result<ResourceIdentifier, RoutingError> {
+        if let Resource {
+            identifier,
+            attributes: None,
+            relationships: None,
+            links: None,
+            ..
+        } = resource
+        {
+            Ok(identifier)
+        } else {
+            Err(RoutingError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "InvalidLinkage",
+                "Relationship linkage must contain resource identifier objects, not full resources",
+            ))
+        }
     }
 
     /// Resolves a request-supplied identifier into a typed primary key. As it validates client
@@ -235,14 +312,14 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
                 return Err(RoutingError::new(
                     StatusCode::UNPROCESSABLE_ENTITY,
                     "UnresolvableLinkage",
-                    "A relationship linkage must reference an existing resource by id",
+                    "Relationship linkage must reference an existing resource by its id",
                 ));
             }
             _ => {
                 return Err(RoutingError::new(
                     StatusCode::UNPROCESSABLE_ENTITY,
                     "RelationshipTypeMismatch",
-                    "A relationship linkage references the wrong resource type",
+                    "Relationship linkage references a resource of the wrong type for this relationship",
                 ));
             }
         };
@@ -253,7 +330,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
                 RoutingError::new(
                     StatusCode::UNPROCESSABLE_ENTITY,
                     "InvalidIdentifier",
-                    format!("Identifier '{identifier}' is not a valid integer"),
+                    format!("The id '{identifier}' is not a valid integer identifier"),
                 )
             }),
         }

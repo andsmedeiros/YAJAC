@@ -89,6 +89,12 @@ impl<'sch> Record<'sch> {
         })
     }
 
+    pub fn pluck_id(&mut self) -> Result<Identifier, Error> {
+        self.id.take().ok_or_else(|| Error::MissingRecordId {
+            schema: self.schema.name().into(),
+        })
+    }
+
     pub fn get_owned(&self, name: &str) -> Option<Attribute> {
         if self.schema.is_primary_key(name) {
             self.get_id().cloned().map(Into::into)
@@ -102,6 +108,21 @@ impl<'sch> Record<'sch> {
             self.require_id().cloned().map(Into::into)
         } else {
             self.require(name).cloned()
+        }
+    }
+
+    pub fn pluck(&mut self, name: &str) -> Result<Attribute, Error> {
+        if self.schema.is_primary_key(name) {
+            self.pluck_id().map(Into::into)
+        } else {
+            self.attributes
+                .shift_remove_entry(name)
+                .or_else(|| self.foreign_keys.shift_remove_entry(name))
+                .map(|(_, value)| value)
+                .ok_or_else(|| Error::UnloadedAttributeAccess {
+                    schema: self.schema.name().into(),
+                    attribute: name.into(),
+                })
         }
     }
 
@@ -248,7 +269,7 @@ pub trait Refreshable {
     fn refresh_with(
         &mut self,
         producer: impl FnOnce(Self::Content) -> Result<Self::Content, Error>,
-    ) -> Result<(), Error>;
+    ) -> Result<&mut Self, Error>;
 }
 
 impl<'sch> Refreshable for Record<'sch> {
@@ -257,12 +278,12 @@ impl<'sch> Refreshable for Record<'sch> {
     fn refresh_with(
         &mut self,
         producer: impl FnOnce(Row<'sch>) -> Result<Row<'sch>, Error>,
-    ) -> Result<(), Error> {
+    ) -> Result<&mut Self, Error> {
         let row = producer(self.take_row())?;
         let refreshed = Record::try_from_row(self.schema, row)?;
         (self.id, self.attributes, self.foreign_keys) =
             (refreshed.id, refreshed.attributes, refreshed.foreign_keys);
-        Ok(())
+        Ok(self)
     }
 }
 
@@ -272,7 +293,7 @@ impl<'sch> Refreshable for Vec<Record<'sch>> {
     fn refresh_with(
         &mut self,
         producer: impl FnOnce(Vec<Row<'sch>>) -> Result<Vec<Row<'sch>>, Error>,
-    ) -> Result<(), Error> {
+    ) -> Result<&mut Self, Error> {
         let rows = producer(self.iter_mut().map(Record::take_row).collect())?;
         if rows.len() != self.len() {
             return Err(Error::InconsistentCollection);
@@ -282,7 +303,7 @@ impl<'sch> Refreshable for Vec<Record<'sch>> {
             (record.id, record.attributes, record.foreign_keys) =
                 (refreshed.id, refreshed.attributes, refreshed.foreign_keys);
         }
-        Ok(())
+        Ok(self)
     }
 }
 

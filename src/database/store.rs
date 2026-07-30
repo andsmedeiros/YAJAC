@@ -17,25 +17,42 @@ use crate::utils::indexing::Indexable;
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 
-/// Recasts the foreign-key violation a write raises into `RelatedRecordNotFound`. When persisting a
-/// resource, a failed foreign key means the referenced resource does not exist -- a 404, not the
-/// bare 409 a constraint violation carries at the database layer. Every other error passes through.
-fn map_fk_violation_to_missing_reference(error: Error) -> Error {
-    match error {
-        Error::ConstraintViolation {
-            kind: ConstraintKind::ForeignKey,
-            ..
-        } => Error::RelatedRecordNotFound,
-        other => other,
+/// Recasts a foreign-key violation into the reference-aware `Error` the record writers surface. Which
+/// resource is missing depends on the key's side: a belongs-to write's key points at the target
+/// (`RelatedRecordNotFound`); a has-one/has-many write's key points back at the primary
+/// (`RecordNotFound`).
+mod error_mapper {
+    use super::{ConstraintKind, Error};
+
+    /// A foreign-key violation whose key points at the target: the referenced resource is missing.
+    pub(super) fn fk_violation_to_missing_reference(error: Error) -> Error {
+        match error {
+            Error::ConstraintViolation {
+                kind: ConstraintKind::ForeignKey,
+                ..
+            } => Error::RelatedRecordNotFound,
+            other => other,
+        }
+    }
+
+    /// A foreign-key violation whose key points back at the primary: the primary record is missing.
+    pub(super) fn fk_violation_to_missing_record(error: Error) -> Error {
+        match error {
+            Error::ConstraintViolation {
+                kind: ConstraintKind::ForeignKey,
+                ..
+            } => Error::RecordNotFound,
+            other => other,
+        }
     }
 }
 
-pub struct Store<'sch, 'req, Adapter: AdapterInterface> {
+pub struct Store<'sch: 'req, 'req, Adapter: AdapterInterface> {
     manager: &'sch ConnectionManager<'sch, Adapter>,
     connection: &'req Adapter::Connection,
 }
 
-impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
+impl<'sch: 'req, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
     pub fn new(
         manager: &'sch ConnectionManager<'sch, Adapter>,
         connection: &'req Adapter::Connection,
@@ -81,6 +98,605 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
         })
     }
 
+    pub fn create_record(
+        &self,
+        mut record: Record<'sch>,
+        parameters: &QueryParameters<'sch, 'req>,
+    ) -> Result<CompositeRecord<'sch>, Error> {
+        self.connection
+            .transaction(|| {
+                let schema = record.schema;
+                self.attach_belongs_to(slice::from_mut(&mut record))?;
+                record.refresh_with(|row| self.table(schema)?.insert(row, parameters))?;
+                self.attach_has_one_many(slice::from_ref(&record), false)?;
+                let included = self.loader().load_for_record(&mut record, parameters)?;
+
+                Ok(Composite {
+                    content: record,
+                    included,
+                })
+            })
+            .map_err(error_mapper::fk_violation_to_missing_reference)
+    }
+
+    pub fn update_record(
+        &self,
+        mut record: Record<'sch>,
+        parameters: &QueryParameters<'sch, 'req>,
+    ) -> Result<CompositeRecord<'sch>, Error> {
+        self.connection
+            .transaction(|| {
+                let schema = record.schema;
+                self.attach_belongs_to(slice::from_mut(&mut record))?;
+                let id = record.require_id()?.clone();
+                record.refresh_with(|row| {
+                    if row.is_empty() {
+                        self.table(schema)?.find(id, parameters)
+                    } else {
+                        self.table(schema)?.update(id, row, parameters)
+                    }
+                })?;
+                self.attach_has_one_many(slice::from_ref(&record), true)?;
+                let included = self.loader().load_for_record(&mut record, parameters)?;
+
+                Ok(Composite {
+                    content: record,
+                    included,
+                })
+            })
+            .map_err(error_mapper::fk_violation_to_missing_reference)
+    }
+
+    pub fn delete_record(&self, schema: &'sch Schema<'sch>, id: Identifier) -> Result<(), Error> {
+        self.connection
+            .transaction(|| self.table(schema)?.delete(id))
+    }
+
+    pub fn create_collection(
+        &self,
+        mut records: Vec<Record<'sch>>,
+        parameters: &QueryParameters<'sch, 'req>,
+    ) -> Result<CompositeCollection<'sch>, Error> {
+        let schema = if let Some(first) = records.first() {
+            first.schema
+        } else {
+            return Ok(Composite {
+                content: Vec::new(),
+                included: Vec::new(),
+            });
+        };
+
+        if records.iter().any(|record| record.schema != schema) {
+            return Err(Error::InconsistentCollection);
+        }
+
+        self.connection
+            .transaction(|| {
+                self.attach_belongs_to(&mut records)?;
+                records.refresh_with(|rows| self.table(schema)?.insert_batch(rows, parameters))?;
+                self.attach_has_one_many(&records, false)?;
+                let included = self
+                    .loader()
+                    .load_for_collection(&mut records, parameters)?;
+
+                Ok(Composite {
+                    content: records,
+                    included,
+                })
+            })
+            .map_err(error_mapper::fk_violation_to_missing_reference)
+    }
+
+    pub fn update_collection(
+        &self,
+        patch: RecordPatch<'sch>,
+        parameters: &QueryParameters<'sch, 'req>,
+    ) -> Result<CompositeCollection<'sch>, Error> {
+        let schema = patch.schema;
+        let mut patch = Record::from(patch);
+        self.connection
+            .transaction(|| {
+                self.attach_belongs_to(slice::from_mut(&mut patch))?;
+                let row = patch.take_row();
+                let mut records = self
+                    .table(schema)?
+                    .update_batch(row, parameters)?
+                    .into_iter()
+                    .map(|row| {
+                        Record::try_from_row(schema, row)
+                            .map(|record| record.with_relationships(patch.relationships.clone()))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.attach_has_one_many(&records, true)?;
+                let included = self
+                    .loader()
+                    .load_for_collection(&mut records, parameters)?;
+
+                Ok(Composite {
+                    content: records,
+                    included,
+                })
+            })
+            .map_err(error_mapper::fk_violation_to_missing_reference)
+    }
+
+    pub fn delete_collection(
+        &self,
+        schema: &'sch Schema<'sch>,
+        parameters: &QueryParameters<'sch, 'req>,
+    ) -> Result<(), Error> {
+        self.connection
+            .transaction(|| self.table(schema)?.delete_batch(parameters))
+    }
+
+    /// Fetches the full records targeted by the already-loaded `record`'s `relationship`, scoped to
+    /// the relationship's foreign key and shaped by `parameters`. Empty when the relationship is
+    /// unset. Errors when `relationship` is not declared on the record's schema.
+    pub fn fetch_related_collection(
+        &self,
+        record: &Record<'sch>,
+        relationship: &'req str,
+        mut parameters: QueryParameters<'sch, 'req>,
+    ) -> Result<CompositeCollection<'sch>, Error> {
+        let schema = record.schema();
+        let descriptor =
+            schema
+                .relationship(relationship)
+                .ok_or_else(|| Error::InvalidRelationshipAccess {
+                    schema: schema.name().into(),
+                    relationship: relationship.into(),
+                })?;
+        let keys = &descriptor.related.keys;
+        let related_schema = self
+            .manager
+            .registry()
+            .schema(descriptor.related.resource)?;
+
+        if related_schema != parameters.schema {
+            return Err(Error::MismatchedQueryParameters {
+                expected: related_schema.name().into(),
+                actual: parameters.schema.name().into(),
+            });
+        }
+
+        match record.require_owned(keys.own)? {
+            Attribute::Null => Ok(Composite {
+                content: Default::default(),
+                included: Default::default(),
+            }),
+
+            value => {
+                parameters
+                    .filter
+                    .get_or_insert_default()
+                    .entry(keys.related)
+                    .or_default()
+                    .push(FilterValue::Equal(value));
+
+                self.fetch_collection(related_schema, &parameters)
+            }
+        }
+    }
+
+    /// Fetches the single full record targeted by the already-loaded `record`'s to-one
+    /// `relationship`, or `None` when it is empty. Errors when `relationship` is not declared, or
+    /// when it resolves to more than one record.
+    pub fn fetch_related_record(
+        &self,
+        record: &Record<'sch>,
+        relationship: &'req str,
+        parameters: QueryParameters<'sch, 'req>,
+    ) -> Result<Option<CompositeRecord<'sch>>, Error> {
+        let kind = record
+            .schema
+            .relationship(relationship)
+            .ok_or_else(|| Error::InvalidRelationshipAccess {
+                schema: record.schema.name().into(),
+                relationship: relationship.into(),
+            })?
+            .kind;
+
+        if kind != RelationshipKind::BelongsTo && kind != RelationshipKind::HasOne {
+            return Err(Error::MismatchedRelationshipKind {
+                schema: record.schema.name().into(),
+                relationship: relationship.into(),
+            });
+        }
+
+        let mut collection = self.fetch_related_collection(record, relationship, parameters)?;
+
+        match collection.content.len() {
+            0 => Ok(None),
+            1 => Ok(Some(Composite {
+                content: collection.content.remove(0),
+                included: collection.included,
+            })),
+            _ => Err(Error::UnexpectedCollection {
+                schema: record.schema().name().into(),
+                message: "Multiple records resolved for to-one relationship".into(),
+            }),
+        }
+    }
+
+    /// Resolves the to-one `relationship` of the already-loaded `record` to the identifier of the
+    /// record it targets, or `None` when the relationship is empty. Errors when `relationship` is
+    /// not declared on the record's schema, or when it is to-many — use `peek_related_collection`
+    /// for those.
+    pub fn peek_related_record(
+        &self,
+        record: &'req Record<'sch>,
+        relationship: &'req str,
+    ) -> Result<Option<Identifier>, Error> {
+        let descriptor = record.schema.relationship(relationship).ok_or_else(|| {
+            Error::InvalidRelationshipAccess {
+                schema: record.schema.name().to_string(),
+                relationship: relationship.to_string(),
+            }
+        })?;
+
+        let related_schema = self
+            .manager
+            .registry()
+            .schema(descriptor.related.resource)?;
+        let parameters = QueryParameters {
+            fields: [(related_schema.name(), Default::default())].into(),
+            ..QueryParameters::new(related_schema)
+        };
+        self.fetch_related_record(record, relationship, parameters)?
+            .map(|mut composite| composite.content.pluck_id())
+            .transpose()
+    }
+
+    /// Resolves `relationship` of the already-loaded `record` to the identifiers of the records it
+    /// targets, requesting only their ids. Empty when the relationship is unset. Errors when
+    /// `relationship` is not declared on the record's schema.
+    pub fn peek_related_collection(
+        &self,
+        record: &Record<'sch>,
+        relationship: &'req str,
+    ) -> Result<Vec<Identifier>, Error> {
+        let schema = record.schema();
+        let descriptor =
+            schema
+                .relationship(relationship)
+                .ok_or_else(|| Error::InvalidRelationshipAccess {
+                    schema: schema.name().to_string(),
+                    relationship: relationship.to_string(),
+                })?;
+        let related_schema = self
+            .manager
+            .registry()
+            .schema(descriptor.related.resource)?;
+        let parameters = QueryParameters {
+            fields: [(related_schema.name(), Default::default())].into(),
+            ..QueryParameters::new(related_schema)
+        };
+
+        self.fetch_related_collection(record, relationship, parameters)?
+            .content
+            .into_iter()
+            .map(|mut record| record.pluck_id())
+            .collect()
+    }
+
+    /// Links the to-one `relationship` of `record` to `related_id`, without displacing an existing
+    /// target: a `has_one` whose target is already taken surfaces the related side's unique-key
+    /// violation. Returns the linked identifier. Errors when the relationship is unknown, to-many,
+    /// or the target does not exist.
+    pub fn link_record(
+        &self,
+        record: Record<'sch>,
+        relationship_name: &'req str,
+        related_id: Identifier,
+    ) -> Result<Option<Identifier>, Error> {
+        self.connection.transaction(|| {
+            let schema = record.schema();
+            let descriptor = schema.relationship(relationship_name).ok_or_else(|| {
+                Error::InvalidRelationshipAccess {
+                    schema: schema.name().into(),
+                    relationship: relationship_name.into(),
+                }
+            })?;
+
+            let mut record = match descriptor.kind {
+                RelationshipKind::BelongsTo => {
+                    let id = record.require_id()?.clone();
+                    let mut record = record.with_relationships(
+                        [(descriptor.name, DatabaseRelationship::BelongsTo(related_id))].into(),
+                    );
+                    self.attach_belongs_to(slice::from_mut(&mut record))?;
+                    self.table(schema)?
+                        .update(id, record.take_row(), &QueryParameters::new(schema))
+                        .map_err(error_mapper::fk_violation_to_missing_reference)?;
+                    record
+                }
+                RelationshipKind::HasOne => {
+                    let record = record.with_relationships(
+                        [(descriptor.name, DatabaseRelationship::HasOne(related_id))].into(),
+                    );
+                    self.attach_has_one_many(slice::from_ref(&record), false)?;
+                    record
+                }
+                RelationshipKind::HasMany => {
+                    return Err(Error::MismatchedRelationshipKind {
+                        schema: schema.name().into(),
+                        relationship: relationship_name.into(),
+                    });
+                }
+            };
+
+            let linkage = record
+                .relationships
+                .remove(descriptor.name)
+                .ok_or_else(|| Error::UnloadedRelationshipAccess {
+                    schema: schema.name().into(),
+                    relationship: relationship_name.into(),
+                })?;
+            let (DatabaseRelationship::BelongsTo(related_id)
+            | DatabaseRelationship::HasOne(related_id)) = linkage
+            else {
+                return Err(Error::MismatchedRelationshipKind {
+                    schema: schema.name().into(),
+                    relationship: relationship_name.into(),
+                });
+            };
+            Ok(Some(related_id))
+        })
+    }
+
+    /// Replaces the to-one `relationship` of `record` with `related_id`, detaching any current
+    /// target first. Returns the linked identifier. Errors when the relationship is unknown,
+    /// to-many, or the target does not exist.
+    pub fn relink_record(
+        &self,
+        record: Record<'sch>,
+        relationship_name: &'req str,
+        related_id: Identifier,
+    ) -> Result<Option<Identifier>, Error> {
+        self.connection.transaction(|| {
+            let schema = record.schema();
+            let descriptor = schema.relationship(relationship_name).ok_or_else(|| {
+                Error::InvalidRelationshipAccess {
+                    schema: schema.name().into(),
+                    relationship: relationship_name.into(),
+                }
+            })?;
+
+            let mut record = match descriptor.kind {
+                RelationshipKind::BelongsTo => {
+                    let id = record.require_id()?.clone();
+                    let mut record = record.with_relationships(
+                        [(descriptor.name, DatabaseRelationship::BelongsTo(related_id))].into(),
+                    );
+                    self.attach_belongs_to(slice::from_mut(&mut record))?;
+                    self.table(schema)?
+                        .update(id, record.take_row(), &QueryParameters::new(schema))
+                        .map_err(error_mapper::fk_violation_to_missing_reference)?;
+                    record
+                }
+                RelationshipKind::HasOne => {
+                    let record = record.with_relationships(
+                        [(descriptor.name, DatabaseRelationship::HasOne(related_id))].into(),
+                    );
+                    self.attach_has_one_many(slice::from_ref(&record), true)?;
+                    record
+                }
+                RelationshipKind::HasMany => {
+                    return Err(Error::MismatchedRelationshipKind {
+                        schema: schema.name().into(),
+                        relationship: relationship_name.into(),
+                    });
+                }
+            };
+
+            let linkage = record
+                .relationships
+                .remove(descriptor.name)
+                .ok_or_else(|| Error::UnloadedRelationshipAccess {
+                    schema: schema.name().into(),
+                    relationship: relationship_name.into(),
+                })?;
+            let (DatabaseRelationship::BelongsTo(related_id)
+            | DatabaseRelationship::HasOne(related_id)) = linkage
+            else {
+                return Err(Error::MismatchedRelationshipKind {
+                    schema: schema.name().into(),
+                    relationship: relationship_name.into(),
+                });
+            };
+            Ok(Some(related_id))
+        })
+    }
+
+    /// Clears the to-one `relationship` of `record`, detaching whichever side holds the foreign key.
+    /// Returns `None`. Idempotent. Errors when the relationship is unknown or to-many.
+    pub fn unlink_record(
+        &self,
+        record: Record<'sch>,
+        relationship_name: &'req str,
+    ) -> Result<Option<Identifier>, Error> {
+        self.connection.transaction(|| {
+            let schema = record.schema();
+            let descriptor = schema.relationship(relationship_name).ok_or_else(|| {
+                Error::InvalidRelationshipAccess {
+                    schema: schema.name().into(),
+                    relationship: relationship_name.into(),
+                }
+            })?;
+
+            match descriptor.kind {
+                RelationshipKind::BelongsTo => {
+                    let id = record.require_id()?.clone();
+                    let mut record = record.with_relationships(
+                        [(descriptor.name, DatabaseRelationship::Empty)].into(),
+                    );
+                    self.attach_belongs_to(slice::from_mut(&mut record))?;
+                    self.table(schema)?.update(
+                        id,
+                        record.take_row(),
+                        &QueryParameters::new(schema),
+                    )?;
+                }
+                RelationshipKind::HasOne => {
+                    let record = record.with_relationships(
+                        [(descriptor.name, DatabaseRelationship::Empty)].into(),
+                    );
+                    self.attach_has_one_many(slice::from_ref(&record), true)?;
+                }
+                RelationshipKind::HasMany => {
+                    return Err(Error::MismatchedRelationshipKind {
+                        schema: schema.name().into(),
+                        relationship: relationship_name.into(),
+                    });
+                }
+            }
+
+            Ok(None)
+        })
+    }
+
+    /// Adds `related_ids` to the to-many `relationship` of `record`, leaving existing members in
+    /// place, and returns the resulting membership. Errors when the relationship is unknown, to-one,
+    /// or any target does not exist.
+    pub fn link_collection(
+        &self,
+        record: Record<'sch>,
+        relationship_name: &'req str,
+        related_ids: Vec<Identifier>,
+    ) -> Result<Vec<Identifier>, Error> {
+        self.connection.transaction(|| {
+            let schema = record.schema();
+            let descriptor = schema.relationship(relationship_name).ok_or_else(|| {
+                Error::InvalidRelationshipAccess {
+                    schema: schema.name().into(),
+                    relationship: relationship_name.into(),
+                }
+            })?;
+
+            if descriptor.kind != RelationshipKind::HasMany {
+                return Err(Error::MismatchedRelationshipKind {
+                    schema: schema.name().into(),
+                    relationship: relationship_name.into(),
+                });
+            }
+
+            let record = record.with_relationships(
+                [(descriptor.name, DatabaseRelationship::HasMany(related_ids))].into(),
+            );
+            self.attach_has_one_many(slice::from_ref(&record), false)?;
+
+            self.peek_related_collection(&record, relationship_name)
+        })
+    }
+
+    /// Replaces the to-many `relationship` of `record` with `related_ids`, detaching any members not
+    /// in the set, and returns the resulting membership. Errors when the relationship is unknown,
+    /// to-one, or any target does not exist.
+    pub fn relink_collection(
+        &self,
+        record: Record<'sch>,
+        relationship_name: &'req str,
+        related_ids: Vec<Identifier>,
+    ) -> Result<Vec<Identifier>, Error> {
+        self.connection.transaction(|| {
+            let schema = record.schema();
+            let descriptor = schema.relationship(relationship_name).ok_or_else(|| {
+                Error::InvalidRelationshipAccess {
+                    schema: schema.name().into(),
+                    relationship: relationship_name.into(),
+                }
+            })?;
+
+            if descriptor.kind != RelationshipKind::HasMany {
+                return Err(Error::MismatchedRelationshipKind {
+                    schema: schema.name().into(),
+                    relationship: relationship_name.into(),
+                });
+            }
+
+            let mut record = record.with_relationships(
+                [(descriptor.name, DatabaseRelationship::HasMany(related_ids))].into(),
+            );
+            self.attach_has_one_many(slice::from_ref(&record), true)?;
+
+            let linkage = record
+                .relationships
+                .remove(descriptor.name)
+                .ok_or_else(|| Error::UnloadedRelationshipAccess {
+                    schema: schema.name().into(),
+                    relationship: relationship_name.into(),
+                })?;
+            let DatabaseRelationship::HasMany(related_ids) = linkage else {
+                return Err(Error::MismatchedRelationshipKind {
+                    schema: schema.name().into(),
+                    relationship: relationship_name.into(),
+                });
+            };
+            Ok(related_ids)
+        })
+    }
+
+    /// Removes `related_ids` from the to-many `relationship` of `record`, and returns the resulting
+    /// membership. Peeks the current members, then replaces with the remainder — so already-absent
+    /// members are a no-op. Errors when the relationship is unknown or to-one.
+    pub fn unlink_collection(
+        &self,
+        record: Record<'sch>,
+        relationship_name: &'req str,
+        related_ids: Vec<Identifier>,
+    ) -> Result<Vec<Identifier>, Error> {
+        self.connection.transaction(|| {
+            let schema = record.schema();
+            let descriptor = schema.relationship(relationship_name).ok_or_else(|| {
+                Error::InvalidRelationshipAccess {
+                    schema: schema.name().into(),
+                    relationship: relationship_name.into(),
+                }
+            })?;
+
+            if descriptor.kind != RelationshipKind::HasMany {
+                return Err(Error::MismatchedRelationshipKind {
+                    schema: schema.name().into(),
+                    relationship: relationship_name.into(),
+                });
+            }
+
+            let remaining: Vec<Identifier> = self
+                .peek_related_collection(&record, relationship_name)?
+                .into_iter()
+                .filter(|id| !related_ids.contains(id))
+                .collect();
+
+            let mut record = record.with_relationships(
+                [(descriptor.name, DatabaseRelationship::HasMany(remaining))].into(),
+            );
+            self.attach_has_one_many(slice::from_ref(&record), true)?;
+
+            let linkage = record
+                .relationships
+                .remove(descriptor.name)
+                .ok_or_else(|| Error::UnloadedRelationshipAccess {
+                    schema: schema.name().into(),
+                    relationship: relationship_name.into(),
+                })?;
+            let DatabaseRelationship::HasMany(remaining) = linkage else {
+                return Err(Error::MismatchedRelationshipKind {
+                    schema: schema.name().into(),
+                    relationship: relationship_name.into(),
+                });
+            };
+            Ok(remaining)
+        })
+    }
+
+    fn table(&self, schema: &'sch Schema<'sch>) -> Result<Adapter::Table<'sch, 'req>, Error> {
+        self.manager.table(schema.name(), self.connection)
+    }
+
+    fn loader(&self) -> DataLoader<'sch, 'req, Adapter> {
+        DataLoader::new(self.manager, self.connection)
+    }
+
     /// Populates each record's `foreign_keys` with whatever `belongs_to` relationships
     /// are specified.
     /// This prepares the records for inserting or updating and must be called prior to any
@@ -91,14 +707,15 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
         for record in records.iter_mut() {
             let schema = record.schema();
             for (&name, linkage) in &record.relationships {
-                let (name, descriptor) = schema
-                    .relationships()
-                    .find(|&entry| entry.0 == name)
-                    .ok_or_else(|| Error::ResourceValidationFailure {
-                        schema: schema.name().to_string(),
-                        attribute: name.to_string(),
-                        message: "Attempted to attach unknown relationship".to_string(),
-                    })?;
+                let descriptor =
+                    schema
+                        .relationship(name)
+                        .ok_or_else(|| Error::ResourceValidationFailure {
+                            schema: schema.name().to_string(),
+                            attribute: name.to_string(),
+                            message: "Attempted to attach unknown relationship".to_string(),
+                        })?;
+                let name = descriptor.name;
 
                 if descriptor.kind == RelationshipKind::BelongsTo {
                     let related = &descriptor.related;
@@ -176,6 +793,10 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
         Ok(())
     }
 
+    /// Writes the `has_one` and `has_many` linkages of `records` by setting the foreign key on the
+    /// related side. With `replace`, detaches the related records no longer in each set before
+    /// setting the new members. Errors with `RelatedRecordNotFound` when a targeted related record
+    /// does not exist, or `RecordNotFound` when the owning key is dangling (the primary is missing).
     fn attach_has_one_many(&self, records: &[Record<'sch>], replace: bool) -> Result<(), Error> {
         use DatabaseRelationship as Data;
         use RelationshipKind as Kind;
@@ -248,49 +869,6 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
             )
         });
 
-        for (name, patches) in queries {
-            let schema = self.manager.registry().schema(name)?;
-            let table = self.table(schema)?;
-            for (patch, ids) in &patches {
-                table.update_batch(
-                    Row::from_iter(patch.clone()),
-                    &QueryParameters {
-                        filter: Some(FilterParameters::from([(
-                            schema.primary_key().name,
-                            vec![FilterValue::In(ids.clone())],
-                        )])),
-                        ..QueryParameters::new(schema)
-                    },
-                )?;
-            }
-            if replace {
-                let patches = patches.into_iter().fold(
-                    HashMap::new(),
-                    |mut patches,
-                     (attributes, ids)|
-                     -> HashMap<(&str, Attribute), IndexSet<Attribute>> {
-                        for attribute in attributes {
-                            patches.entry(attribute).or_default().extend(ids.clone())
-                        }
-                        patches
-                    },
-                );
-
-                for ((name, value), ids) in patches {
-                    table.update_batch(
-                        Row::from([(name, Attribute::Null)]),
-                        &QueryParameters {
-                            filter: Some(FilterParameters::from([
-                                (name, vec![FilterValue::Equal(value)]),
-                                (schema.primary_key().name, vec![FilterValue::NotIn(ids)]),
-                            ])),
-                            ..QueryParameters::new(schema)
-                        },
-                    )?;
-                }
-            }
-        }
-
         if replace {
             for (schema, columns) in full_detachments {
                 let schema = self.manager.registry().schema(schema)?;
@@ -312,146 +890,68 @@ impl<'sch, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
             }
         }
 
-        Ok(())
-    }
+        for (name, patches) in queries {
+            let schema = self.manager.registry().schema(name)?;
+            let table = self.table(schema)?;
 
-    pub fn create_record(
-        &self,
-        mut record: Record<'sch>,
-        parameters: &QueryParameters<'sch, 'req>,
-    ) -> Result<CompositeRecord<'sch>, Error> {
-        self.connection
-            .transaction(|| {
-                let schema = record.schema;
-                self.attach_belongs_to(slice::from_mut(&mut record))?;
-                record.refresh_with(|row| self.table(schema)?.insert(row, parameters))?;
-                self.attach_has_one_many(slice::from_ref(&record), false)?;
-                let included = self.loader().load_for_record(&mut record, parameters)?;
+            if replace {
+                let complement = patches.iter().fold(
+                    HashMap::<(&str, Attribute), IndexSet<Attribute>>::new(),
+                    |mut complement, (patch, ids)| {
+                        for (column, value) in patch {
+                            complement
+                                .entry((*column, value.clone()))
+                                .or_default()
+                                .extend(ids.iter().cloned());
+                        }
+                        complement
+                    },
+                );
 
-                Ok(Composite {
-                    content: record,
-                    included,
-                })
-            })
-            .map_err(map_fk_violation_to_missing_reference)
-    }
+                for ((column, value), ids) in complement {
+                    table.update_batch(
+                        Row::from([(column, Attribute::Null)]),
+                        &QueryParameters {
+                            filter: Some(FilterParameters::from([
+                                (column, vec![FilterValue::Equal(value)]),
+                                (schema.primary_key().name, vec![FilterValue::NotIn(ids)]),
+                            ])),
+                            ..QueryParameters::new(schema)
+                        },
+                    )?;
+                }
+            }
 
-    pub fn update_record(
-        &self,
-        mut record: Record<'sch>,
-        parameters: &QueryParameters<'sch, 'req>,
-    ) -> Result<CompositeRecord<'sch>, Error> {
-        self.connection
-            .transaction(|| {
-                let schema = record.schema;
-                self.attach_belongs_to(slice::from_mut(&mut record))?;
-                let id = record.require_id()?.clone();
-                record.refresh_with(|row| {
-                    if row.is_empty() {
-                        self.table(schema)?.find(id, parameters)
-                    } else {
-                        self.table(schema)?.update(id, row, parameters)
-                    }
-                })?;
-                self.attach_has_one_many(slice::from_ref(&record), true)?;
-                let included = self.loader().load_for_record(&mut record, parameters)?;
+            for (patch, ids) in &patches {
+                let attached = table
+                    .update_batch(
+                        Row::from_iter(patch.clone()),
+                        &QueryParameters {
+                            filter: Some(FilterParameters::from([(
+                                schema.primary_key().name,
+                                vec![FilterValue::In(ids.clone())],
+                            )])),
+                            ..QueryParameters::new(schema)
+                        },
+                    )
+                    .map_err(error_mapper::fk_violation_to_missing_record)?
+                    .into_iter()
+                    .map(|mut row| {
+                        row.shift_remove(schema.primary_key().name).ok_or_else(|| {
+                            Error::MissingRecordId {
+                                schema: schema.name().into(),
+                            }
+                        })
+                    })
+                    .collect::<Result<IndexSet<Attribute>, _>>()?;
 
-                Ok(Composite {
-                    content: record,
-                    included,
-                })
-            })
-            .map_err(map_fk_violation_to_missing_reference)
-    }
-
-    pub fn delete_record(&self, schema: &'sch Schema<'sch>, id: Identifier) -> Result<(), Error> {
-        self.connection
-            .transaction(|| self.table(schema)?.delete(id))
-    }
-
-    pub fn create_collection(
-        &self,
-        mut records: Vec<Record<'sch>>,
-        parameters: &QueryParameters<'sch, 'req>,
-    ) -> Result<CompositeCollection<'sch>, Error> {
-        let schema = if let Some(first) = records.first() {
-            first.schema
-        } else {
-            return Ok(Composite {
-                content: Vec::new(),
-                included: Vec::new(),
-            });
-        };
-
-        if records.iter().any(|record| record.schema != schema) {
-            return Err(Error::InconsistentCollection);
+                if attached != *ids {
+                    return Err(Error::RelatedRecordNotFound);
+                }
+            }
         }
 
-        self.connection
-            .transaction(|| {
-                self.attach_belongs_to(&mut records)?;
-                records.refresh_with(|rows| self.table(schema)?.insert_batch(rows, parameters))?;
-                self.attach_has_one_many(&records, false)?;
-                let included = self
-                    .loader()
-                    .load_for_collection(&mut records, parameters)?;
-
-                Ok(Composite {
-                    content: records,
-                    included,
-                })
-            })
-            .map_err(map_fk_violation_to_missing_reference)
-    }
-
-    pub fn update_collection(
-        &self,
-        patch: RecordPatch<'sch>,
-        parameters: &QueryParameters<'sch, 'req>,
-    ) -> Result<CompositeCollection<'sch>, Error> {
-        let schema = patch.schema;
-        let mut patch = Record::from(patch);
-        self.connection
-            .transaction(|| {
-                self.attach_belongs_to(slice::from_mut(&mut patch))?;
-                let row = patch.take_row();
-                let mut records = self
-                    .table(schema)?
-                    .update_batch(row, parameters)?
-                    .into_iter()
-                    .map(|row| {
-                        Record::try_from_row(schema, row)
-                            .map(|record| record.with_relationships(patch.relationships.clone()))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                self.attach_has_one_many(&records, true)?;
-                let included = self
-                    .loader()
-                    .load_for_collection(&mut records, parameters)?;
-
-                Ok(Composite {
-                    content: records,
-                    included,
-                })
-            })
-            .map_err(map_fk_violation_to_missing_reference)
-    }
-
-    pub fn delete_collection(
-        &self,
-        schema: &'sch Schema<'sch>,
-        parameters: &QueryParameters<'sch, 'req>,
-    ) -> Result<(), Error> {
-        self.connection
-            .transaction(|| self.table(schema)?.delete_batch(parameters))
-    }
-
-    fn table(&self, schema: &'sch Schema<'sch>) -> Result<Adapter::Table<'sch, 'req>, Error> {
-        self.manager.table(schema.name(), self.connection)
-    }
-
-    fn loader(&self) -> DataLoader<'sch, 'req, Adapter> {
-        DataLoader::new(self.manager, self.connection)
+        Ok(())
     }
 }
 
@@ -517,6 +1017,31 @@ mod tests {
             )
     }
 
+    // A 1:1 pair keyed on a non-primary-key column (`orgs.code`), exercising the
+    // relationship branches whose own/related key is not the primary key.
+    fn orgs_schema() -> SchemaBuilder<'static> {
+        SchemaBuilder::table("orgs")
+            .attribute("code", AttributeType::Text)
+            .has_one(
+                "member",
+                Related::to("members")
+                    .pointing_related("org_code")
+                    .to_own("code"),
+            )
+    }
+
+    fn members_schema() -> SchemaBuilder<'static> {
+        SchemaBuilder::table("members")
+            .attribute("handle", AttributeType::Text)
+            .foreign_key("org_code", AttributeType::Text)
+            .belongs_to(
+                "org",
+                Related::to("orgs")
+                    .pointing_own("org_code")
+                    .to_related("code"),
+            )
+    }
+
     fn schema<'sch>(
         manager: &'sch ConnectionManager<SqliteAdapter>,
         name: &str,
@@ -532,7 +1057,13 @@ mod tests {
         F: FnOnce(&ConnectionManager<SqliteAdapter>) -> Result<(), Box<dyn StdError>>,
     {
         let manager: ConnectionManager<SqliteAdapter> = ConnectionManager::new(
-            Registry::try_new([users_schema(), posts_schema(), profiles_schema()])?,
+            Registry::try_new([
+                users_schema(),
+                posts_schema(),
+                profiles_schema(),
+                orgs_schema(),
+                members_schema(),
+            ])?,
             Pool::memory()?,
         );
 
@@ -555,6 +1086,18 @@ mod tests {
                 user_id INTEGER NOT NULL UNIQUE,
                 bio TEXT,
                 FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+
+            CREATE TABLE orgs (
+                id INTEGER PRIMARY KEY,
+                code TEXT NOT NULL UNIQUE
+            );
+
+            CREATE TABLE members (
+                id INTEGER PRIMARY KEY,
+                handle TEXT NOT NULL,
+                org_code TEXT UNIQUE,
+                FOREIGN KEY(org_code) REFERENCES orgs(code)
             );
             ",
         )?;
@@ -612,6 +1155,42 @@ mod tests {
                 ("bio", Attribute::Text(bio.to_string())),
             ]),
             &QueryParameters::new(schema(manager, "profiles")),
+        )?;
+
+        Ok(())
+    }
+
+    fn seed_org(
+        manager: &ConnectionManager<SqliteAdapter>,
+        connection: &Connection,
+        id: i64,
+        code: &str,
+    ) -> Result<(), Error> {
+        manager.table("orgs", connection)?.insert(
+            Row::from_iter([
+                ("id", Attribute::Integer(id)),
+                ("code", Attribute::Text(code.to_string())),
+            ]),
+            &QueryParameters::new(schema(manager, "orgs")),
+        )?;
+
+        Ok(())
+    }
+
+    fn seed_member(
+        manager: &ConnectionManager<SqliteAdapter>,
+        connection: &Connection,
+        id: i64,
+        handle: &str,
+        org_code: &str,
+    ) -> Result<(), Error> {
+        manager.table("members", connection)?.insert(
+            Row::from_iter([
+                ("id", Attribute::Integer(id)),
+                ("handle", Attribute::Text(handle.to_string())),
+                ("org_code", Attribute::Text(org_code.to_string())),
+            ]),
+            &QueryParameters::new(schema(manager, "members")),
         )?;
 
         Ok(())
@@ -1372,6 +1951,1038 @@ mod tests {
                     .query(&QueryParameters::new(schema(manager, "posts")))?
                     .is_empty()
             );
+
+            Ok(())
+        })
+    }
+
+    // --- peek_related_collection -------------------------------------------
+
+    #[test]
+    fn test_peek_related_collection_has_many_returns_all_ids() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_post(manager, &connection, 1, 1, "one")?;
+            seed_post(manager, &connection, 2, 1, "two")?;
+            seed_post(manager, &connection, 3, 1, "three")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            let mut ids = store
+                .peek_related_collection(&user, "posts")?
+                .iter()
+                .map(|id| id.to_i64())
+                .collect::<Result<Vec<_>, _>>()?;
+            ids.sort();
+
+            assert_eq!(ids, vec![1, 2, 3]);
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_peek_related_collection_has_many_empty_when_none() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert!(store.peek_related_collection(&user, "posts")?.is_empty());
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_peek_related_collection_belongs_to_returns_single_id() -> Result<(), Box<dyn StdError>>
+    {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 7, "alice")?;
+            seed_post(manager, &connection, 1, 7, "one")?;
+
+            let store = Store::new(manager, &connection);
+            let posts = schema(manager, "posts");
+            let post = store
+                .fetch_record(posts, Identifier::Integer(1), &QueryParameters::new(posts))?
+                .content;
+
+            assert_eq!(
+                store.peek_related_collection(&post, "author")?,
+                vec![Identifier::Integer(7)]
+            );
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_peek_related_collection_null_foreign_key_is_empty() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            let posts = schema(manager, "posts");
+            manager.table("posts", &connection)?.insert(
+                Row::from_iter([
+                    ("id", Attribute::Integer(1)),
+                    ("author_id", Attribute::Null),
+                    ("title", Attribute::Text("orphan".to_string())),
+                ]),
+                &QueryParameters::new(posts),
+            )?;
+
+            let store = Store::new(manager, &connection);
+            let post = store
+                .fetch_record(posts, Identifier::Integer(1), &QueryParameters::new(posts))?
+                .content;
+
+            assert!(store.peek_related_collection(&post, "author")?.is_empty());
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_peek_related_collection_unknown_relationship_is_error() -> Result<(), Box<dyn StdError>>
+    {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert!(matches!(
+                store.peek_related_collection(&user, "ghost"),
+                Err(Error::InvalidRelationshipAccess { .. })
+            ));
+
+            Ok(())
+        })
+    }
+
+    // --- peek_related_record -----------------------------------------------
+
+    #[test]
+    fn test_peek_related_record_belongs_to_returns_id() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 7, "alice")?;
+            seed_post(manager, &connection, 1, 7, "one")?;
+
+            let store = Store::new(manager, &connection);
+            let posts = schema(manager, "posts");
+            let post = store
+                .fetch_record(posts, Identifier::Integer(1), &QueryParameters::new(posts))?
+                .content;
+
+            assert_eq!(
+                store.peek_related_record(&post, "author")?,
+                Some(Identifier::Integer(7))
+            );
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_peek_related_record_has_one_returns_id() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_profile(manager, &connection, 5, 1, "hi")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert_eq!(
+                store.peek_related_record(&user, "profile")?,
+                Some(Identifier::Integer(5))
+            );
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_peek_related_record_empty_is_none() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert_eq!(store.peek_related_record(&user, "profile")?, None);
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_peek_related_record_on_to_many_is_kind_mismatch() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert!(matches!(
+                store.peek_related_record(&user, "posts"),
+                Err(Error::MismatchedRelationshipKind { .. })
+            ));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_peek_related_record_unknown_relationship_is_error() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert!(matches!(
+                store.peek_related_record(&user, "ghost"),
+                Err(Error::InvalidRelationshipAccess { .. })
+            ));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_link_record_belongs_to_sets_foreign_key_and_returns_related_id()
+    -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_user(manager, &connection, 2, "bob")?;
+            seed_post(manager, &connection, 10, 1, "hello")?;
+
+            let store = Store::new(manager, &connection);
+            let posts = schema(manager, "posts");
+            let post = store
+                .fetch_record(posts, Identifier::Integer(10), &QueryParameters::new(posts))?
+                .content;
+
+            let linked = store.link_record(post, "author", Identifier::Integer(2))?;
+            let stored = manager
+                .table("posts", &connection)?
+                .find(Identifier::Integer(10), &QueryParameters::new(posts))?;
+
+            assert_eq!(linked, Some(Identifier::Integer(2)));
+            assert_eq!(stored["author_id"], Attribute::Integer(2));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_link_record_has_one_sets_related_foreign_key_and_returns_related_id()
+    -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_user(manager, &connection, 2, "bob")?;
+            seed_profile(manager, &connection, 5, 2, "bob's page")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let profiles = schema(manager, "profiles");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            let linked = store.link_record(user, "profile", Identifier::Integer(5))?;
+            let stored = manager
+                .table("profiles", &connection)?
+                .find(Identifier::Integer(5), &QueryParameters::new(profiles))?;
+
+            assert_eq!(linked, Some(Identifier::Integer(5)));
+            assert_eq!(stored["user_id"], Attribute::Integer(1));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_link_record_has_one_conflicting_owner_is_a_unique_violation()
+    -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_user(manager, &connection, 2, "bob")?;
+            seed_profile(manager, &connection, 5, 1, "alice's page")?;
+            seed_profile(manager, &connection, 6, 2, "bob's page")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            // Alice already owns profile 5; claiming profile 6 collides on the UNIQUE user_id.
+            assert!(matches!(
+                store.link_record(user, "profile", Identifier::Integer(6)),
+                Err(Error::ConstraintViolation {
+                    kind: ConstraintKind::Unique,
+                    ..
+                })
+            ));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_link_record_on_to_many_is_kind_mismatch() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert!(matches!(
+                store.link_record(user, "posts", Identifier::Integer(1)),
+                Err(Error::MismatchedRelationshipKind { .. })
+            ));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_link_record_unknown_relationship_is_error() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert!(matches!(
+                store.link_record(user, "ghost", Identifier::Integer(1)),
+                Err(Error::InvalidRelationshipAccess { .. })
+            ));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_link_record_belongs_to_non_primary_key_relates_by_code() -> Result<(), Box<dyn StdError>>
+    {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_org(manager, &connection, 1, "acme")?;
+            seed_org(manager, &connection, 2, "globex")?;
+            seed_member(manager, &connection, 10, "root", "acme")?;
+
+            let store = Store::new(manager, &connection);
+            let members = schema(manager, "members");
+            let member = store
+                .fetch_record(
+                    members,
+                    Identifier::Integer(10),
+                    &QueryParameters::new(members),
+                )?
+                .content;
+
+            // The relationship is keyed on `orgs.code`, not the org's primary key.
+            let linked = store.link_record(member, "org", Identifier::Integer(2))?;
+            let stored = manager
+                .table("members", &connection)?
+                .find(Identifier::Integer(10), &QueryParameters::new(members))?;
+
+            assert_eq!(linked, Some(Identifier::Integer(2)));
+            assert_eq!(stored["org_code"], Attribute::Text("globex".to_string()));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_link_record_has_one_non_primary_key_relates_by_code() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_org(manager, &connection, 1, "acme")?;
+            seed_org(manager, &connection, 2, "globex")?;
+            seed_member(manager, &connection, 10, "root", "globex")?;
+
+            let store = Store::new(manager, &connection);
+            let orgs = schema(manager, "orgs");
+            let members = schema(manager, "members");
+            let org = store
+                .fetch_record(orgs, Identifier::Integer(1), &QueryParameters::new(orgs))?
+                .content;
+
+            // Own key is the non-primary `orgs.code`, read off the fetched org.
+            let linked = store.link_record(org, "member", Identifier::Integer(10))?;
+            let stored = manager
+                .table("members", &connection)?
+                .find(Identifier::Integer(10), &QueryParameters::new(members))?;
+
+            assert_eq!(linked, Some(Identifier::Integer(10)));
+            assert_eq!(stored["org_code"], Attribute::Text("acme".to_string()));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_link_record_belongs_to_missing_target_is_related_not_found()
+    -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_post(manager, &connection, 10, 1, "hello")?;
+
+            let store = Store::new(manager, &connection);
+            let posts = schema(manager, "posts");
+            let post = store
+                .fetch_record(posts, Identifier::Integer(10), &QueryParameters::new(posts))?
+                .content;
+
+            assert!(matches!(
+                store.link_record(post, "author", Identifier::Integer(999)),
+                Err(Error::RelatedRecordNotFound)
+            ));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_link_record_belongs_to_non_primary_key_missing_target_is_related_not_found()
+    -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_org(manager, &connection, 1, "acme")?;
+            seed_member(manager, &connection, 10, "root", "acme")?;
+
+            let store = Store::new(manager, &connection);
+            let members = schema(manager, "members");
+            let member = store
+                .fetch_record(
+                    members,
+                    Identifier::Integer(10),
+                    &QueryParameters::new(members),
+                )?
+                .content;
+
+            assert!(matches!(
+                store.link_record(member, "org", Identifier::Integer(999)),
+                Err(Error::RelatedRecordNotFound)
+            ));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_link_record_has_one_missing_target_is_related_not_found()
+    -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert!(matches!(
+                store.link_record(user, "profile", Identifier::Integer(999)),
+                Err(Error::RelatedRecordNotFound)
+            ));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_link_record_missing_primary_is_record_not_found() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+
+            let store = Store::new(manager, &connection);
+            // A post that was never persisted: the target user exists, the primary does not.
+            let post = Record::from_relationships(schema(manager, "posts"), Relationships::new())
+                .with_id(Some(Identifier::Integer(999)));
+
+            assert!(matches!(
+                store.link_record(post, "author", Identifier::Integer(1)),
+                Err(Error::RecordNotFound)
+            ));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_link_record_has_one_missing_primary_is_record_not_found()
+    -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_org(manager, &connection, 1, "acme")?;
+            seed_member(manager, &connection, 10, "root", "acme")?;
+
+            let store = Store::new(manager, &connection);
+            // An org whose code is absent from the table: writing it onto the member's foreign
+            // key violates, and for has-one that points back at a missing primary.
+            let ghost = Record::from_attributes(
+                schema(manager, "orgs"),
+                Attributes::from_iter([("code", Attribute::Text("ghost".to_string()))]),
+            );
+
+            assert!(matches!(
+                store.link_record(ghost, "member", Identifier::Integer(10)),
+                Err(Error::RecordNotFound)
+            ));
+
+            Ok(())
+        })
+    }
+
+    // --- relink_record -----------------------------------------------------
+
+    #[test]
+    fn test_relink_record_belongs_to_replaces_target() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_user(manager, &connection, 2, "bob")?;
+            seed_post(manager, &connection, 10, 1, "hello")?;
+
+            let store = Store::new(manager, &connection);
+            let posts = schema(manager, "posts");
+            let post = store
+                .fetch_record(posts, Identifier::Integer(10), &QueryParameters::new(posts))?
+                .content;
+
+            let linked = store.relink_record(post, "author", Identifier::Integer(2))?;
+            let stored = manager
+                .table("posts", &connection)?
+                .find(Identifier::Integer(10), &QueryParameters::new(posts))?;
+
+            assert_eq!(linked, Some(Identifier::Integer(2)));
+            assert_eq!(stored["author_id"], Attribute::Integer(2));
+
+            Ok(())
+        })
+    }
+
+    // Replacing a to-one detaches the prior owner before setting the new one, so the related side's
+    // UNIQUE key never collides mid-write (where `link_record` would).
+    #[test]
+    fn test_relink_record_has_one_detaches_prior_owner() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_org(manager, &connection, 1, "acme")?;
+            seed_org(manager, &connection, 2, "globex")?;
+            seed_member(manager, &connection, 10, "root", "acme")?;
+            seed_member(manager, &connection, 11, "admin", "globex")?;
+
+            let store = Store::new(manager, &connection);
+            let orgs = schema(manager, "orgs");
+            let members = schema(manager, "members");
+            let org = store
+                .fetch_record(orgs, Identifier::Integer(1), &QueryParameters::new(orgs))?
+                .content;
+
+            let linked = store.relink_record(org, "member", Identifier::Integer(11))?;
+
+            let member11 = manager
+                .table("members", &connection)?
+                .find(Identifier::Integer(11), &QueryParameters::new(members))?;
+            let member10 = manager
+                .table("members", &connection)?
+                .find(Identifier::Integer(10), &QueryParameters::new(members))?;
+
+            assert_eq!(linked, Some(Identifier::Integer(11)));
+            assert_eq!(member11["org_code"], Attribute::Text("acme".to_string()));
+            assert_eq!(member10["org_code"], Attribute::Null);
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_relink_record_missing_target_is_related_not_found() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert!(matches!(
+                store.relink_record(user, "profile", Identifier::Integer(999)),
+                Err(Error::RelatedRecordNotFound)
+            ));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_relink_record_on_to_many_is_kind_mismatch() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert!(matches!(
+                store.relink_record(user, "posts", Identifier::Integer(1)),
+                Err(Error::MismatchedRelationshipKind { .. })
+            ));
+
+            Ok(())
+        })
+    }
+
+    // --- unlink_record -----------------------------------------------------
+
+    #[test]
+    fn test_unlink_record_belongs_to_clears_foreign_key() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_post(manager, &connection, 10, 1, "hello")?;
+
+            let store = Store::new(manager, &connection);
+            let posts = schema(manager, "posts");
+            let post = store
+                .fetch_record(posts, Identifier::Integer(10), &QueryParameters::new(posts))?
+                .content;
+
+            let linked = store.unlink_record(post, "author")?;
+            let stored = manager
+                .table("posts", &connection)?
+                .find(Identifier::Integer(10), &QueryParameters::new(posts))?;
+
+            assert_eq!(linked, None);
+            assert_eq!(stored["author_id"], Attribute::Null);
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_unlink_record_has_one_detaches_owner() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_org(manager, &connection, 1, "acme")?;
+            seed_member(manager, &connection, 10, "root", "acme")?;
+
+            let store = Store::new(manager, &connection);
+            let orgs = schema(manager, "orgs");
+            let members = schema(manager, "members");
+            let org = store
+                .fetch_record(orgs, Identifier::Integer(1), &QueryParameters::new(orgs))?
+                .content;
+
+            let linked = store.unlink_record(org, "member")?;
+            let stored = manager
+                .table("members", &connection)?
+                .find(Identifier::Integer(10), &QueryParameters::new(members))?;
+
+            assert_eq!(linked, None);
+            assert_eq!(stored["org_code"], Attribute::Null);
+
+            Ok(())
+        })
+    }
+
+    // Clearing an already-empty to-one is a no-op success.
+    #[test]
+    fn test_unlink_record_when_empty_is_noop() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert_eq!(store.unlink_record(user, "profile")?, None);
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_unlink_record_on_to_many_is_kind_mismatch() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert!(matches!(
+                store.unlink_record(user, "posts"),
+                Err(Error::MismatchedRelationshipKind { .. })
+            ));
+
+            Ok(())
+        })
+    }
+
+    // --- link_collection ---------------------------------------------------
+
+    // JSON:API POST to a to-many adds the specified members, leaving existing ones in place.
+    #[test]
+    fn test_link_collection_adds_without_disturbing_existing() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_user(manager, &connection, 2, "bob")?;
+            seed_post(manager, &connection, 10, 1, "one")?;
+            seed_post(manager, &connection, 11, 2, "two")?;
+            seed_post(manager, &connection, 12, 2, "three")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            let mut membership = store
+                .link_collection(
+                    user,
+                    "posts",
+                    vec![Identifier::Integer(11), Identifier::Integer(12)],
+                )?
+                .iter()
+                .map(|id| id.to_i64())
+                .collect::<Result<Vec<_>, _>>()?;
+            membership.sort();
+
+            assert_eq!(membership, vec![10, 11, 12]);
+
+            Ok(())
+        })
+    }
+
+    // JSON:API: "If a given type and id is already in the relationship, the server MUST NOT add it
+    // again" — re-adding an existing member is a no-op success.
+    #[test]
+    fn test_link_collection_already_present_is_idempotent() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_post(manager, &connection, 10, 1, "one")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert_eq!(
+                store.link_collection(user, "posts", vec![Identifier::Integer(10)])?,
+                vec![Identifier::Integer(10)]
+            );
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_link_collection_missing_target_is_related_not_found() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert!(matches!(
+                store.link_collection(user, "posts", vec![Identifier::Integer(999)]),
+                Err(Error::RelatedRecordNotFound)
+            ));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_link_collection_on_to_one_is_kind_mismatch() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert!(matches!(
+                store.link_collection(user, "profile", vec![Identifier::Integer(1)]),
+                Err(Error::MismatchedRelationshipKind { .. })
+            ));
+
+            Ok(())
+        })
+    }
+
+    // --- relink_collection -------------------------------------------------
+
+    // JSON:API PATCH to a to-many "completely replace[s] every member of the relationship".
+    #[test]
+    fn test_relink_collection_replaces_membership() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_user(manager, &connection, 2, "bob")?;
+            seed_post(manager, &connection, 10, 1, "one")?;
+            seed_post(manager, &connection, 11, 1, "two")?;
+            seed_post(manager, &connection, 12, 2, "three")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let posts = schema(manager, "posts");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            let mut membership = store
+                .relink_collection(
+                    user,
+                    "posts",
+                    vec![Identifier::Integer(11), Identifier::Integer(12)],
+                )?
+                .iter()
+                .map(|id| id.to_i64())
+                .collect::<Result<Vec<_>, _>>()?;
+            membership.sort();
+
+            let detached = manager
+                .table("posts", &connection)?
+                .find(Identifier::Integer(10), &QueryParameters::new(posts))?;
+
+            assert_eq!(membership, vec![11, 12]);
+            assert_eq!(detached["author_id"], Attribute::Null);
+
+            Ok(())
+        })
+    }
+
+    // Replacing with an empty set clears the relationship.
+    #[test]
+    fn test_relink_collection_to_empty_clears() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_post(manager, &connection, 10, 1, "one")?;
+            seed_post(manager, &connection, 11, 1, "two")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let posts = schema(manager, "posts");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert!(store.relink_collection(user, "posts", vec![])?.is_empty());
+
+            let post10 = manager
+                .table("posts", &connection)?
+                .find(Identifier::Integer(10), &QueryParameters::new(posts))?;
+            let post11 = manager
+                .table("posts", &connection)?
+                .find(Identifier::Integer(11), &QueryParameters::new(posts))?;
+
+            assert_eq!(post10["author_id"], Attribute::Null);
+            assert_eq!(post11["author_id"], Attribute::Null);
+
+            Ok(())
+        })
+    }
+
+    // JSON:API: complete replacement MUST "return an appropriate error response if some resources
+    // cannot be found".
+    #[test]
+    fn test_relink_collection_missing_target_is_related_not_found() -> Result<(), Box<dyn StdError>>
+    {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_post(manager, &connection, 10, 1, "one")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert!(matches!(
+                store.relink_collection(
+                    user,
+                    "posts",
+                    vec![Identifier::Integer(10), Identifier::Integer(999)]
+                ),
+                Err(Error::RelatedRecordNotFound)
+            ));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_relink_collection_on_to_one_is_kind_mismatch() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert!(matches!(
+                store.relink_collection(user, "profile", vec![Identifier::Integer(1)]),
+                Err(Error::MismatchedRelationshipKind { .. })
+            ));
+
+            Ok(())
+        })
+    }
+
+    // --- unlink_collection -------------------------------------------------
+
+    // JSON:API DELETE from a to-many removes the specified members, leaving the rest.
+    #[test]
+    fn test_unlink_collection_removes_specified() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_post(manager, &connection, 10, 1, "one")?;
+            seed_post(manager, &connection, 11, 1, "two")?;
+            seed_post(manager, &connection, 12, 1, "three")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let posts = schema(manager, "posts");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            let mut membership = store
+                .unlink_collection(user, "posts", vec![Identifier::Integer(11)])?
+                .iter()
+                .map(|id| id.to_i64())
+                .collect::<Result<Vec<_>, _>>()?;
+            membership.sort();
+
+            let removed = manager
+                .table("posts", &connection)?
+                .find(Identifier::Integer(11), &QueryParameters::new(posts))?;
+
+            assert_eq!(membership, vec![10, 12]);
+            assert_eq!(removed["author_id"], Attribute::Null);
+
+            Ok(())
+        })
+    }
+
+    // JSON:API: removing a member "already missing from the relationship" MUST succeed.
+    #[test]
+    fn test_unlink_collection_absent_member_is_idempotent() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+            seed_post(manager, &connection, 10, 1, "one")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert_eq!(
+                store.unlink_collection(user, "posts", vec![Identifier::Integer(99)])?,
+                vec![Identifier::Integer(10)]
+            );
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_unlink_collection_on_to_one_is_kind_mismatch() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+            seed_user(manager, &connection, 1, "alice")?;
+
+            let store = Store::new(manager, &connection);
+            let users = schema(manager, "users");
+            let user = store
+                .fetch_record(users, Identifier::Integer(1), &QueryParameters::new(users))?
+                .content;
+
+            assert!(matches!(
+                store.unlink_collection(user, "profile", vec![Identifier::Integer(1)]),
+                Err(Error::MismatchedRelationshipKind { .. })
+            ));
 
             Ok(())
         })

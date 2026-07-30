@@ -69,6 +69,22 @@ pub enum Error {
         schema: String,
         attribute: String,
     },
+    InvalidRelationshipAccess {
+        schema: String,
+        relationship: String,
+    },
+    UnexpectedCollection {
+        schema: String,
+        message: String,
+    },
+    MismatchedRelationshipKind {
+        schema: String,
+        relationship: String,
+    },
+    MismatchedQueryParameters {
+        expected: String,
+        actual: String,
+    },
     InvalidOperation {
         schema: String,
         operation: String,
@@ -89,6 +105,10 @@ pub enum Error {
     UnloadedAttributeAccess {
         schema: String,
         attribute: String,
+    },
+    UnloadedRelationshipAccess {
+        schema: String,
+        relationship: String,
     },
     MissingRecordId {
         schema: String,
@@ -117,9 +137,14 @@ impl Error {
             | UnknownSchema { .. }
             | InvalidAttributeConversion { .. }
             | InvalidAttributeAccess { .. }
+            | InvalidRelationshipAccess { .. }
+            | UnexpectedCollection { .. }
+            | MismatchedRelationshipKind { .. }
+            | MismatchedQueryParameters { .. }
             | DatabaseFailure { .. }
             | DataLoadingError { .. }
             | UnloadedAttributeAccess { .. }
+            | UnloadedRelationshipAccess { .. }
             | MissingRecordId { .. }
             | InconsistentCollection
             | InvalidIndexAccess => StatusCode::INTERNAL_SERVER_ERROR,
@@ -141,6 +166,10 @@ impl Error {
             InvalidAttribute { .. } => "InvalidAttribute",
             InvalidAttributeConversion { .. } => "InvalidAttributeConversion",
             InvalidAttributeAccess { .. } => "InvalidAttributeAccess",
+            InvalidRelationshipAccess { .. } => "InvalidRelationshipAccess",
+            UnexpectedCollection { .. } => "UnexpectedCollection",
+            MismatchedRelationshipKind { .. } => "MismatchedRelationshipKind",
+            MismatchedQueryParameters { .. } => "MismatchedQueryParameters",
             InvalidOperation { .. } => "InvalidOperation",
             DatabaseFailure { .. } => "DatabaseFailure",
             ConstraintViolation { .. } => "ConstraintViolation",
@@ -148,6 +177,7 @@ impl Error {
             RelatedRecordNotFound => "RelatedRecordNotFound",
             DataLoadingError { .. } => "DataLoadingError",
             UnloadedAttributeAccess { .. } => "UnloadedAttributeAccess",
+            UnloadedRelationshipAccess { .. } => "UnloadedRelationshipAccess",
             MissingRecordId { .. } => "MissingRecordId",
             InconsistentCollection => "InconsistentCollection",
             InvalidIndexAccess => "InvalidIndexAccess",
@@ -170,6 +200,12 @@ impl Error {
             InvalidAttribute { .. } => "An attribute is invalid",
             InvalidAttributeConversion { .. } => "An attribute could not be converted",
             InvalidAttributeAccess { .. } => "An undeclared attribute was accessed",
+            InvalidRelationshipAccess { .. } => "An undeclared relationship was accessed",
+            UnexpectedCollection { .. } => "A single record was expected",
+            MismatchedRelationshipKind { .. } => {
+                "The relationship kind is incompatible with the requested access"
+            }
+            MismatchedQueryParameters { .. } => "The query parameters target a different schema",
             InvalidOperation { .. } => "The operation is invalid",
             DatabaseFailure { .. } => "The database operation failed",
             ConstraintViolation { .. } => "A database constraint was violated",
@@ -177,6 +213,7 @@ impl Error {
             RelatedRecordNotFound => "A related record was not found",
             DataLoadingError { .. } => "Failed to load related data",
             UnloadedAttributeAccess { .. } => "An unloaded attribute was accessed",
+            UnloadedRelationshipAccess { .. } => "An unloaded relationship was accessed",
             MissingRecordId { .. } => "The record is missing an identifier",
             InconsistentCollection => "The collection is heterogeneous",
             InvalidIndexAccess => "An invalid index was accessed",
@@ -281,6 +318,28 @@ impl Display for Error {
                 f,
                 "Attempted to access attribute '{attribute}', which schema '{schema}' does not declare"
             ),
+            InvalidRelationshipAccess {
+                schema,
+                relationship,
+            } => write!(
+                f,
+                "Attempted to access relationship '{relationship}', which schema '{schema}' does not declare"
+            ),
+            UnexpectedCollection { schema, message } => write!(
+                f,
+                "Expected a single record for schema '{schema}', but the query resolved to a collection: {message}"
+            ),
+            MismatchedRelationshipKind {
+                schema,
+                relationship,
+            } => write!(
+                f,
+                "Relationship '{relationship}' on schema '{schema}' has a kind incompatible with the requested access"
+            ),
+            MismatchedQueryParameters { expected, actual } => write!(
+                f,
+                "Query parameters parsed for schema '{actual}' were supplied to an operation on schema '{expected}'"
+            ),
             InvalidOperation {
                 schema,
                 operation,
@@ -304,6 +363,13 @@ impl Display for Error {
             UnloadedAttributeAccess { schema, attribute } => write!(
                 f,
                 "Attempted to read attribute '{attribute}' of a record with schema '{schema}', but it was not loaded"
+            ),
+            UnloadedRelationshipAccess {
+                schema,
+                relationship,
+            } => write!(
+                f,
+                "Attempted to read relationship '{relationship}' of a record with schema '{schema}', but it was not loaded"
             ),
             MissingRecordId { schema } => write!(
                 f,
