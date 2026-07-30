@@ -1,12 +1,12 @@
 use super::Connection;
 use crate::database::{error::Error, pool::Pool as PoolInterface};
-use r2d2::PooledConnection;
 use r2d2_sqlite::SqliteConnectionManager;
 use std::path::Path;
 
 /// Statements run on every new connection before it enters the pool: enables write-ahead logging,
-/// foreign-key enforcement and a busy timeout.
-pub fn default_preamble(connection: &mut Connection) -> rusqlite::Result<()> {
+/// foreign-key enforcement and a busy timeout. Runs against the raw connection, before it is
+/// wrapped, since it configures the connection rather than issuing application queries.
+pub fn default_preamble(connection: &mut rusqlite::Connection) -> rusqlite::Result<()> {
     connection.execute_batch(
         "PRAGMA journal_mode = WAL; \
          PRAGMA foreign_keys = ON; \
@@ -28,10 +28,10 @@ impl Pool {
         )
     }
 
-    /// Opens a file-backed pool, running `preamble` on each connection.
+    /// Opens a file-backed pool, running `preamble` on each connection as it is created.
     pub fn open_with(
         path: impl AsRef<Path>,
-        preamble: impl Fn(&mut Connection) -> rusqlite::Result<()> + Send + Sync + 'static,
+        preamble: impl Fn(&mut rusqlite::Connection) -> rusqlite::Result<()> + Send + Sync + 'static,
     ) -> Result<Self, Error> {
         Self::from_manager(
             SqliteConnectionManager::file(path).with_init(preamble),
@@ -70,11 +70,12 @@ impl Pool {
 
 impl PoolInterface for Pool {
     type Connection = Connection;
-    type Handle<'req> = PooledConnection<SqliteConnectionManager>;
 
-    fn acquire(&self) -> Result<Self::Handle<'_>, Error> {
-        self.inner.get().map_err(|error| Error::DatabaseFailure {
+    fn acquire(&self) -> Result<Connection, Error> {
+        let handle = self.inner.get().map_err(|error| Error::DatabaseFailure {
             message: error.to_string(),
-        })
+        })?;
+
+        Ok(Connection::new(handle))
     }
 }

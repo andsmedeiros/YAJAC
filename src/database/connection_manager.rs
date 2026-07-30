@@ -23,7 +23,7 @@ impl<'sch, Adapter: AdapterInterface> ConnectionManager<'sch, Adapter> {
     }
 
     /// Acquires a connection from the pool, held for the request.
-    pub fn acquire(&self) -> Result<<Adapter::Pool as PoolInterface>::Handle<'_>, Error> {
+    pub fn acquire(&self) -> Result<Adapter::Connection, Error> {
         self.pool.acquire()
     }
 

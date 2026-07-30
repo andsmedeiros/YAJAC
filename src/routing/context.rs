@@ -9,8 +9,7 @@ use crate::json_api::relationship::Linkage;
 use crate::{
     database::{
         adapters::Adapter as AdapterInterface, connection::Connection as ConnectionInterface,
-        connection_manager::ConnectionManager, pool::Pool as PoolInterface,
-        query_parameters::QueryParameters, store::Store,
+        connection_manager::ConnectionManager, query_parameters::QueryParameters, store::Store,
     },
     http_wrappers::{StatusCode, Uri},
     json_api::{
@@ -23,8 +22,6 @@ use http::HeaderMap;
 use itertools::Itertools;
 use std::cell::OnceCell;
 
-type Handle<'req, Adapter> = <<Adapter as AdapterInterface>::Pool as PoolInterface>::Handle<'req>;
-
 pub struct Context<'sch, 'req, Adapter: AdapterInterface>
 where
     'sch: 'req,
@@ -35,7 +32,7 @@ where
     headers: HeaderMap,
     route: RouteParameters,
     query: OnceCell<QueryParameters<'sch, 'req>>,
-    connection: OnceCell<Handle<'req, Adapter>>,
+    connection: OnceCell<Adapter::Connection>,
     controllers: Option<&'req ControllerLookup<'sch, Adapter>>,
 }
 
@@ -79,10 +76,10 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
     /// Lazily acquires the request connection from the pool and lends it as a shared reference.
     pub fn connection(&self) -> Result<&Adapter::Connection, Error> {
         match self.connection.get() {
-            Some(handle) => Ok(handle),
+            Some(connection) => Ok(connection),
             None => {
-                let handle = self.manager.acquire()?;
-                Ok(self.connection.get_or_init(|| handle))
+                let connection = self.manager.acquire()?;
+                Ok(self.connection.get_or_init(|| connection))
             }
         }
     }

@@ -1,16 +1,12 @@
 use super::{connection::Connection as ConnectionInterface, error::Error};
-use std::ops::Deref;
 
-/// Source of database connections for a request.
-///
-/// `acquire` yields a handle held for the duration of a request (`'req`) and dereferenced to a
-/// `Connection`. The handle may borrow the pool (a single shared connection) or own its
-/// connection (a real pool), so it is generic over `'req`.
+/// A pool of reusable database connections, lent out one at a time and reclaimed for reuse once a
+/// caller is done with them.
 pub trait Pool {
     type Connection: ConnectionInterface;
-    type Handle<'req>: Deref<Target = Self::Connection>
-    where
-        Self: 'req;
 
-    fn acquire(&self) -> Result<Self::Handle<'_>, Error>;
+    /// Borrows a connection from the pool for exclusive use, returning it wrapped for the request
+    /// path. The connection rejoins the pool when the wrapper is dropped; fails when none can be
+    /// obtained (for example, an exhausted pool or a broken connection).
+    fn acquire(&self) -> Result<Self::Connection, Error>;
 }

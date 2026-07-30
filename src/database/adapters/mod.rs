@@ -22,7 +22,7 @@ pub struct SqliteAdapter;
 #[cfg(feature = "sqlite")]
 impl Adapter for SqliteAdapter {
     // type Migrator<'a> = sqlite::Migrator<'a>;
-    type Connection = rusqlite::Connection;
+    type Connection = sqlite::Connection;
     type Pool = sqlite::Pool;
     type QueryBuilder<'sch> = sqlite::QueryBuilder<'sch>;
     type Table<'sch, 'req> = sqlite::Table<'sch, 'req>;

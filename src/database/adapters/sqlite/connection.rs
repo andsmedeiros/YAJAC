@@ -6,14 +6,87 @@ use crate::database::{
     error::Error,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as b64};
-use log::debug;
+use log::{debug, error};
+use r2d2::PooledConnection;
+use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{
     self, Row,
     types::{ToSql, ToSqlOutput, Value as DatabaseValue, ValueRef},
 };
+use std::cell::Cell;
 use std::fmt::Display;
 
-pub type Connection = rusqlite::Connection;
+/// A pooled SQLite connection together with the current depth of transaction nesting open on it.
+/// Owns the pooled handle and returns it to the pool when dropped.
+pub struct Connection {
+    handle: PooledConnection<SqliteConnectionManager>,
+    depth: Cell<usize>,
+}
+
+impl Connection {
+    pub(super) fn new(handle: PooledConnection<SqliteConnectionManager>) -> Self {
+        Self {
+            handle,
+            depth: Cell::new(0),
+        }
+    }
+
+    /// Runs a batch of `;`-separated statements with no bindings. The setup path for DDL and seeding.
+    pub fn execute_batch(&self, sql: &str) -> Result<(), Error> {
+        self.handle.execute_batch(sql)?;
+        Ok(())
+    }
+
+    /// Opens a transaction level: `BEGIN` at the outermost, a savepoint below it.
+    fn begin_transaction(&self) -> Result<(), Error> {
+        let sql = match self.depth.get() {
+            0 => "BEGIN".to_string(),
+            level => format!("SAVEPOINT sp{level}"),
+        };
+        self.handle.execute_batch(&sql)?;
+        self.depth.update(|level| level + 1);
+        Ok(())
+    }
+
+    /// Closes the current transaction level successfully: `COMMIT` at the outermost, `RELEASE` below.
+    fn commit_transaction(&self) -> Result<(), Error> {
+        let sql = match self.depth.get() - 1 {
+            0 => "COMMIT".to_string(),
+            level => format!("RELEASE sp{level}"),
+        };
+        self.handle.execute_batch(&sql)?;
+        self.depth.update(|level| level - 1);
+        Ok(())
+    }
+
+    /// Discards the current transaction level: `ROLLBACK` at the outermost, `ROLLBACK TO`/`RELEASE`
+    /// below.
+    fn rollback_transaction(&self) -> Result<(), Error> {
+        let sql = match self.depth.get() - 1 {
+            0 => "ROLLBACK".to_string(),
+            level => format!("ROLLBACK TO sp{level}; RELEASE sp{level}"),
+        };
+        self.handle.execute_batch(&sql)?;
+        self.depth.update(|level| level - 1);
+        Ok(())
+    }
+}
+
+impl Drop for Connection {
+    /// Rolls back a transaction still open at drop — the panic path, where neither arm of
+    /// `transaction` ran — so the connection rejoins the pool clean instead of poisoning the next
+    /// checkout.
+    fn drop(&mut self) {
+        if self.depth.get() > 0 {
+            if let Err(error) = self.handle.execute_batch("ROLLBACK") {
+                error!(
+                    "Failed to roll back a dangling transaction before returning the \
+                     connection to the pool: {error}"
+                );
+            }
+        }
+    }
+}
 
 impl ToSql for Attribute {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'static>> {
@@ -136,7 +209,7 @@ impl ConnectionInterface for Connection {
         debug!("{}, {:?}", query, bindings);
 
         let bindings = build_bindings(&bindings);
-        let mut statement = self.prepare(&query)?;
+        let mut statement = self.handle.prepare(&query)?;
         let rows = statement
             .query_and_then(bindings.as_slice(), |row| {
                 materialise_attributes(schema, row)
@@ -151,19 +224,29 @@ impl ConnectionInterface for Connection {
         debug!("{}, {:?}", query, bindings);
 
         let bindings = build_bindings(&bindings);
-        let mut statement = self.prepare(&query)?;
+        let mut statement = self.handle.prepare(&query)?;
         let row_count = statement.execute(bindings.as_slice())?;
 
         debug!("Affected {} rows", row_count);
         Ok(())
     }
 
+    /// Runs `operation` inside a transaction level: commits it on `Ok`, rolls it back on `Err`. The
+    /// level nests — the outermost is a real transaction, inner ones savepoints — so composing store
+    /// calls stays atomic. A panic inside `operation` leaves the level open; `Drop` clears it.
     fn transaction<R>(&self, operation: impl FnOnce() -> Result<R, Error>) -> Result<R, Error> {
-        let transaction = self.unchecked_transaction()?;
-        let value = operation()?;
-        transaction.commit()?;
+        self.begin_transaction()?;
 
-        Ok(value)
+        match operation() {
+            Ok(value) => {
+                self.commit_transaction()?;
+                Ok(value)
+            }
+            Err(error) => {
+                self.rollback_transaction()?;
+                Err(error)
+            }
+        }
     }
 }
 
