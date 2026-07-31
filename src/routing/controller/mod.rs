@@ -19,7 +19,10 @@ use crate::{
     json_api::{
         identifier::Identifier as JsonApiIdentifier, relationship::Linkage, resource::Resource,
     },
-    routing::{Context, DefaultUriGenerator, Error, Result, responder::*},
+    routing::{
+        Context, DefaultUriGenerator, Error, Result, error::ClientGeneratedIdNotSupportedError,
+        responder::*,
+    },
 };
 use http::StatusCode;
 
@@ -99,115 +102,27 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> DerefMut
     }
 }
 
-/// The behaviour served at a resource's endpoints. Every method defaults to the
-/// framework's serving; an implementor overrides only the endpoints it customises.
+/// A controller's behaviour configuration: the knobs it exposes to shape how the framework serves
+/// its resource. Expands as new hooks are added; today it governs only client-generated ids.
+#[derive(Default)]
+pub struct Configuration {
+    /// Whether a create request may carry a client-generated id. When false the server assigns
+    /// every id and a client-supplied id is refused with 403 Forbidden.
+    pub accepts_client_ids: bool,
+}
+
+/// The behaviour served at a resource's endpoints. Every method defaults to the framework's
+/// serving; an implementor overrides only the endpoints and configuration it customises.
 pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
+    /// This controller's behaviour configuration; override to opt out of the framework defaults.
+    fn configuration(&self) -> Configuration {
+        Configuration::default()
+    }
+
     fn index<'req>(&self, context: ResourceContext<'sch, 'req, Adapter>) -> Result
     where
         'sch: 'req,
     {
-        serve::index(context)
-    }
-
-    fn show<'req>(&self, context: ResourceContext<'sch, 'req, Adapter>) -> Result
-    where
-        'sch: 'req,
-    {
-        serve::show(context)
-    }
-
-    fn create<'req>(&self, context: ResourceContext<'sch, 'req, Adapter>) -> Result
-    where
-        'sch: 'req,
-    {
-        serve::create(context)
-    }
-
-    fn update<'req>(&self, context: ResourceContext<'sch, 'req, Adapter>) -> Result
-    where
-        'sch: 'req,
-    {
-        serve::update(context)
-    }
-
-    fn delete<'req>(&self, context: ResourceContext<'sch, 'req, Adapter>) -> Result
-    where
-        'sch: 'req,
-    {
-        serve::delete(context)
-    }
-
-    fn linkage<'req>(
-        &self,
-        context: ResourceContext<'sch, 'req, Adapter>,
-        relationship: &'sch str,
-    ) -> Result
-    where
-        'sch: 'req,
-    {
-        serve::linkage(context, relationship)
-    }
-
-    fn related<'req>(
-        &self,
-        context: ResourceContext<'sch, 'req, Adapter>,
-        relationship: &'sch str,
-    ) -> Result
-    where
-        'sch: 'req,
-    {
-        serve::related(context, relationship)
-    }
-
-    fn link<'req>(
-        &self,
-        context: ResourceContext<'sch, 'req, Adapter>,
-        relationship: &'sch str,
-    ) -> Result
-    where
-        'sch: 'req,
-    {
-        serve::link(context, relationship)
-    }
-
-    fn unlink<'req>(
-        &self,
-        context: ResourceContext<'sch, 'req, Adapter>,
-        relationship: &'sch str,
-    ) -> Result
-    where
-        'sch: 'req,
-    {
-        serve::unlink(context, relationship)
-    }
-
-    fn relink<'req>(
-        &self,
-        context: ResourceContext<'sch, 'req, Adapter>,
-        relationship: &'sch str,
-    ) -> Result
-    where
-        'sch: 'req,
-    {
-        serve::relink(context, relationship)
-    }
-}
-
-/// A controller that customises nothing — every endpoint uses the framework default.
-#[derive(Default)]
-pub struct DefaultController;
-
-impl<'sch, Adapter: AdapterInterface + 'sch> ResourceController<'sch, Adapter>
-    for DefaultController
-{
-}
-
-mod serve {
-    use super::*;
-
-    pub(super) fn index<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch>(
-        context: ResourceContext<'sch, 'req, Adapter>,
-    ) -> Result {
         let parameters = context.query_parameters()?;
         let Composite { content, included } = context
             .store()?
@@ -222,9 +137,10 @@ mod serve {
         respond(Some(document))
     }
 
-    pub(super) fn show<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch>(
-        context: ResourceContext<'sch, 'req, Adapter>,
-    ) -> Result {
+    fn show<'req>(&self, context: ResourceContext<'sch, 'req, Adapter>) -> Result
+    where
+        'sch: 'req,
+    {
         let parameters = context.query_parameters()?;
         let id = context.require_id()?;
         let Composite { content, included } =
@@ -241,13 +157,18 @@ mod serve {
         respond(Some(document))
     }
 
-    pub(super) fn create<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch>(
-        mut context: ResourceContext<'sch, 'req, Adapter>,
-    ) -> Result {
-        let new_record = context.require_record()?;
+    fn create<'req>(&self, mut context: ResourceContext<'sch, 'req, Adapter>) -> Result
+    where
+        'sch: 'req,
+    {
+        let record = context.require_record()?;
+
+        if record.id.is_some() && !self.configuration().accepts_client_ids {
+            return Err(ClientGeneratedIdNotSupportedError.into());
+        }
+
         let parameters = context.query_parameters()?;
-        let Composite { content, included } =
-            context.store()?.create_record(new_record, parameters)?;
+        let Composite { content, included } = context.store()?.create_record(record, parameters)?;
         let document = to_document(
             &content,
             included,
@@ -258,9 +179,10 @@ mod serve {
         respond_with(StatusCode::CREATED, Some(document))
     }
 
-    pub(super) fn update<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch>(
-        mut context: ResourceContext<'sch, 'req, Adapter>,
-    ) -> Result {
+    fn update<'req>(&self, mut context: ResourceContext<'sch, 'req, Adapter>) -> Result
+    where
+        'sch: 'req,
+    {
         let record = context.require_record()?;
         let parameters = context.query_parameters()?;
         let Composite { content, included } = context.store()?.update_record(record, parameters)?;
@@ -274,19 +196,24 @@ mod serve {
         respond(Some(document))
     }
 
-    pub(super) fn delete<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch>(
-        context: ResourceContext<'sch, 'req, Adapter>,
-    ) -> Result {
+    fn delete<'req>(&self, context: ResourceContext<'sch, 'req, Adapter>) -> Result
+    where
+        'sch: 'req,
+    {
         let id = context.require_id()?;
         context.store()?.delete_record(context.schema(), id)?;
 
         no_content()
     }
 
-    pub(super) fn linkage<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch>(
+    fn linkage<'req>(
+        &self,
         context: ResourceContext<'sch, 'req, Adapter>,
         relationship: &'sch str,
-    ) -> Result {
+    ) -> Result
+    where
+        'sch: 'req,
+    {
         let schema = context.schema();
         let descriptor = schema.relationship(relationship).ok_or_else(|| {
             DatabaseError::InvalidRelationshipAccess {
@@ -329,10 +256,14 @@ mod serve {
         respond(Some(document))
     }
 
-    pub(super) fn related<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch>(
+    fn related<'req>(
+        &self,
         context: ResourceContext<'sch, 'req, Adapter>,
         relationship: &'sch str,
-    ) -> Result {
+    ) -> Result
+    where
+        'sch: 'req,
+    {
         let schema = context.schema();
         let descriptor = schema.relationship(relationship).ok_or_else(|| {
             DatabaseError::InvalidRelationshipAccess {
@@ -375,10 +306,14 @@ mod serve {
         respond(Some(document))
     }
 
-    pub(super) fn link<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch>(
+    fn link<'req>(
+        &self,
         mut context: ResourceContext<'sch, 'req, Adapter>,
         relationship: &'sch str,
-    ) -> Result {
+    ) -> Result
+    where
+        'sch: 'req,
+    {
         let schema = context.schema();
         let descriptor = schema.relationship(relationship).ok_or_else(|| {
             DatabaseError::InvalidRelationshipAccess {
@@ -428,10 +363,14 @@ mod serve {
         respond(Some(document))
     }
 
-    pub(super) fn unlink<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch>(
+    fn unlink<'req>(
+        &self,
         mut context: ResourceContext<'sch, 'req, Adapter>,
         relationship: &'sch str,
-    ) -> Result {
+    ) -> Result
+    where
+        'sch: 'req,
+    {
         let schema = context.schema();
         let descriptor = schema.relationship(relationship).ok_or_else(|| {
             DatabaseError::InvalidRelationshipAccess {
@@ -481,10 +420,14 @@ mod serve {
         respond(Some(document))
     }
 
-    pub(super) fn relink<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch>(
+    fn relink<'req>(
+        &self,
         mut context: ResourceContext<'sch, 'req, Adapter>,
         relationship: &'sch str,
-    ) -> Result {
+    ) -> Result
+    where
+        'sch: 'req,
+    {
         let schema = context.schema();
         let descriptor = schema.relationship(relationship).ok_or_else(|| {
             DatabaseError::InvalidRelationshipAccess {
@@ -541,4 +484,13 @@ mod serve {
 
         respond(Some(document))
     }
+}
+
+/// A controller that customises nothing — every endpoint uses the framework default.
+#[derive(Default)]
+pub struct DefaultController;
+
+impl<'sch, Adapter: AdapterInterface + 'sch> ResourceController<'sch, Adapter>
+    for DefaultController
+{
 }
