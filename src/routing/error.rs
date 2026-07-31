@@ -47,6 +47,18 @@ impl Display for FailedToParseParameterError {
 
 impl StdError for FailedToParseParameterError {}
 
+/// A create request carried a client-generated id for a resource whose ids are server-assigned.
+#[derive(Debug, Clone, Serialize)]
+pub struct ClientGeneratedIdNotSupportedError;
+
+impl Display for ClientGeneratedIdNotSupportedError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "This resource does not accept a client-generated id")
+    }
+}
+
+impl StdError for ClientGeneratedIdNotSupportedError {}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ApiErrorKind {
     ModelValidationFailed,
@@ -123,6 +135,16 @@ impl From<FailedToParseParameterError> for Error {
         Error::new(
             StatusCode::BAD_REQUEST,
             "FailedToParseParameterError",
+            error.to_string(),
+        )
+    }
+}
+
+impl From<ClientGeneratedIdNotSupportedError> for Error {
+    fn from(error: ClientGeneratedIdNotSupportedError) -> Self {
+        Error::new(
+            StatusCode::FORBIDDEN,
+            "ClientGeneratedIdNotSupported",
             error.to_string(),
         )
     }

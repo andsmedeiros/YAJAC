@@ -221,7 +221,7 @@ impl ConnectionInterface for Connection {
         Ok(rows)
     }
 
-    fn execute(&self, query: String, bindings: Vec<Attribute>) -> Result<(), Error> {
+    fn execute(&self, query: String, bindings: Vec<Attribute>) -> Result<usize, Error> {
         debug!("{}, {:?}", query, bindings);
 
         let bindings = build_bindings(&bindings);
@@ -229,7 +229,7 @@ impl ConnectionInterface for Connection {
         let row_count = statement.execute(bindings.as_slice())?;
 
         debug!("Affected {} rows", row_count);
-        Ok(())
+        Ok(row_count)
     }
 
     /// Runs `operation` inside a transaction level: commits it on `Ok`, rolls it back on `Err`. The

@@ -38,6 +38,10 @@ fn comment(id: &str) -> (String, String) {
     ("comments".to_owned(), id.to_owned())
 }
 
+fn article(id: &str) -> (String, String) {
+    ("articles".to_owned(), id.to_owned())
+}
+
 // "The PATCH request MUST include a top-level member named data containing [...]
 // a resource identifier object corresponding to the new related resource." "If
 // the relationship is updated successfully then the server MUST return a
@@ -141,8 +145,9 @@ fn adding_an_existing_member_does_not_duplicate_it() -> TestResult {
 #[test]
 fn replacing_a_to_many_relationship_takes_effect() -> TestResult {
     let api = Api::new()?;
-    let body = json!({ "data": [{ "type": "comments", "id": "3" }] });
-    let response = api.patch(&relationship_url("articles", "1", "comments"), body)?;
+    // `authors/3/edited` is nullable, so full replacement can actually take effect.
+    let body = json!({ "data": [{ "type": "articles", "id": "2" }] });
+    let response = api.patch(&relationship_url("authors", "3", "edited"), body)?;
 
     if response.status() == 403 && !enforced(Affordance::FullReplacement) {
         log::info!("full to-many replacement unsupported (403); skipping");
@@ -156,8 +161,8 @@ fn replacing_a_to_many_relationship_takes_effect() -> TestResult {
     );
     assert_eq!(validate_document(response.doc()), None);
 
-    let after = api.get(&relationship_url("articles", "1", "comments"))?;
-    assert_eq!(linkage_set(&after), BTreeSet::from([comment("3")]));
+    let after = api.get(&relationship_url("authors", "3", "edited"))?;
+    assert_eq!(linkage_set(&after), BTreeSet::from([article("2")]));
     Ok(())
 }
 
@@ -169,7 +174,7 @@ fn replacing_a_to_many_relationship_takes_effect() -> TestResult {
 fn clearing_a_to_many_relationship_takes_effect() -> TestResult {
     let api = Api::new()?;
     let response = api.patch(
-        &relationship_url("articles", "1", "comments"),
+        &relationship_url("authors", "3", "edited"),
         json!({ "data": [] }),
     )?;
 
@@ -185,7 +190,7 @@ fn clearing_a_to_many_relationship_takes_effect() -> TestResult {
     );
     assert_eq!(validate_document(response.doc()), None);
 
-    let after = api.get(&relationship_url("articles", "1", "comments"))?;
+    let after = api.get(&relationship_url("authors", "3", "edited"))?;
     assert_eq!(after.at("/data"), Some(&json!([])));
     Ok(())
 }
@@ -196,10 +201,10 @@ fn clearing_a_to_many_relationship_takes_effect() -> TestResult {
 #[test]
 fn deleting_named_members_leaves_the_rest() -> TestResult {
     let api = Api::new()?;
-    let body = json!({ "data": [{ "type": "comments", "id": "1" }] });
+    let body = json!({ "data": [{ "type": "articles", "id": "1" }] });
     let response = api.request(
         "DELETE",
-        &relationship_url("articles", "1", "comments"),
+        &relationship_url("authors", "3", "edited"),
         body,
     )?;
 
@@ -215,9 +220,9 @@ fn deleting_named_members_leaves_the_rest() -> TestResult {
     );
     assert_eq!(validate_document(response.doc()), None);
 
-    // Only comment 1 is removed; comment 2 remains.
-    let after = api.get(&relationship_url("articles", "1", "comments"))?;
-    assert_eq!(linkage_set(&after), BTreeSet::from([comment("2")]));
+    // Only article 1 is removed; article 2 remains.
+    let after = api.get(&relationship_url("authors", "3", "edited"))?;
+    assert_eq!(linkage_set(&after), BTreeSet::from([article("2")]));
     Ok(())
 }
 

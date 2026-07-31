@@ -107,7 +107,13 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
             .transaction(|| {
                 let schema = record.schema;
                 self.attach_belongs_to(slice::from_mut(&mut record))?;
-                record.refresh_with(|row| self.table(schema)?.insert(row, parameters))?;
+                let id = record.id.take();
+                record.refresh_with(|mut row| {
+                    if let Some(id) = id {
+                        row.insert(schema.primary_key().name, id.into());
+                    }
+                    self.table(schema)?.insert(row, parameters)
+                })?;
                 self.attach_has_one_many(slice::from_ref(&record), false)?;
                 let included = self.loader().load_for_record(&mut record, parameters)?;
 
@@ -173,7 +179,15 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
         self.connection
             .transaction(|| {
                 self.attach_belongs_to(&mut records)?;
-                records.refresh_with(|rows| self.table(schema)?.insert_batch(rows, parameters))?;
+                let ids: Vec<_> = records.iter_mut().map(|record| record.id.take()).collect();
+                records.refresh_with(|mut rows| {
+                    for (row, id) in rows.iter_mut().zip(ids) {
+                        if let Some(id) = id {
+                            row.insert(schema.primary_key().name, id.into());
+                        }
+                    }
+                    self.table(schema)?.insert_batch(rows, parameters)
+                })?;
                 self.attach_has_one_many(&records, false)?;
                 let included = self
                     .loader()
@@ -227,6 +241,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
     ) -> Result<(), Error> {
         self.connection
             .transaction(|| self.table(schema)?.delete_batch(parameters))
+            .and(Ok(()))
     }
 
     /// Fetches the full records targeted by the already-loaded `record`'s `relationship`, scoped to
@@ -1491,6 +1506,34 @@ mod tests {
                 .query(&QueryParameters::new(schema(manager, "posts")))?;
             assert_eq!(persisted.len(), 1);
             assert_eq!(persisted[0]["author_id"], Attribute::Null);
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_create_record_honours_client_generated_id() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+
+            let store = Store::new(manager, &connection);
+            // 42 is an id the autoincrement would never assign the first row, so persisting it
+            // proves the client-supplied id was written rather than generated.
+            let user = Record::from_attributes(
+                schema(manager, "users"),
+                Attributes::from_iter([("name", Attribute::Text("alice".to_string()))]),
+            )
+            .with_id(Identifier::Integer(42).into());
+
+            let parameters = QueryParameters::new(schema(manager, "users"));
+            let created = store.create_record(user, &parameters)?;
+            assert_eq!(created.content.require_id()?, &Identifier::Integer(42));
+
+            let persisted = manager
+                .table("users", &connection)?
+                .query(&QueryParameters::new(schema(manager, "users")))?;
+            assert_eq!(persisted.len(), 1);
+            assert_eq!(persisted[0]["id"], Attribute::Integer(42));
 
             Ok(())
         })

@@ -19,7 +19,7 @@ use yajac::database::connection_manager::ConnectionManager;
 use yajac::database::registry::Registry;
 use yajac::database::schema::{AttributeType, IdentifierType, Related, SchemaBuilder};
 use yajac::routing::Router;
-use yajac::routing::controller::ResourceController;
+use yajac::routing::controller::{Configuration, ResourceController};
 
 pub type BoxError = Box<dyn std::error::Error>;
 pub type TestResult = Result<(), BoxError>;
@@ -48,7 +48,17 @@ impl<'sch> ResourceController<'sch, SqliteAdapter> for Authors {}
 impl<'sch> ResourceController<'sch, SqliteAdapter> for Articles {}
 impl<'sch> ResourceController<'sch, SqliteAdapter> for Comments {}
 impl<'sch> ResourceController<'sch, SqliteAdapter> for Profiles {}
-impl<'sch> ResourceController<'sch, SqliteAdapter> for Tags {}
+// `tags` has a text primary key with no server-side source, so it accepts the
+// client-generated ids the spec's `Client-Generated IDs` section provides for.
+impl<'sch> ResourceController<'sch, SqliteAdapter> for Tags {
+    #[allow(clippy::needless_update)]
+    fn configuration(&self) -> Configuration {
+        Configuration {
+            accepts_client_ids: true,
+            ..Default::default()
+        }
+    }
+}
 
 // --- Abstract schema set --------------------------------------------------
 
@@ -71,6 +81,12 @@ fn authors_schema() -> SchemaBuilder<'static> {
                 .pointing_related("author_id")
                 .to_own("id"),
         )
+        .has_many(
+            "edited",
+            Related::to("articles")
+                .pointing_related("editor_id")
+                .to_own("id"),
+        )
 }
 
 fn articles_schema() -> SchemaBuilder<'static> {
@@ -79,10 +95,17 @@ fn articles_schema() -> SchemaBuilder<'static> {
         .attribute("body", AttributeType::Text)
         .attribute("published", AttributeType::Boolean)
         .foreign_key("author_id", AttributeType::Integer)
+        .foreign_key("editor_id", AttributeType::Integer)
         .belongs_to(
             "author",
             Related::to("authors")
                 .pointing_own("author_id")
+                .to_related("id"),
+        )
+        .belongs_to(
+            "editor",
+            Related::to("authors")
+                .pointing_own("editor_id")
                 .to_related("id"),
         )
         .has_many(
@@ -167,9 +190,10 @@ const SCHEMA_AND_SEED: &str = "
         FOREIGN KEY(author_id) REFERENCES authors(id)
     );
     CREATE TABLE articles (
-        id INTEGER PRIMARY KEY, author_id INTEGER NOT NULL,
+        id INTEGER PRIMARY KEY, author_id INTEGER NOT NULL, editor_id INTEGER,
         title TEXT NOT NULL, body TEXT, published BOOLEAN,
-        FOREIGN KEY(author_id) REFERENCES authors(id)
+        FOREIGN KEY(author_id) REFERENCES authors(id),
+        FOREIGN KEY(editor_id) REFERENCES authors(id)
     );
     CREATE TABLE comments (
         id INTEGER PRIMARY KEY, article_id INTEGER NOT NULL,
@@ -188,10 +212,11 @@ const SCHEMA_AND_SEED: &str = "
         (5, 'Dave',  20, 5.0, 1, '2022-01-01T00:00:00Z');
     INSERT INTO profiles (id, author_id, bio) VALUES
         (1, 1, 'Carol bio'), (2, 2, 'Alice bio');
-    INSERT INTO articles (id, author_id, title, body, published) VALUES
-        (1, 1, 'First',  'Body one',   1),
-        (2, 1, 'Second', 'Body two',   0),
-        (3, 2, 'Third',  'Body three', 1);
+    -- Author 3 edits articles 1 and 2, giving `authors/3/edited` a clearable to-many.
+    INSERT INTO articles (id, author_id, editor_id, title, body, published) VALUES
+        (1, 1, 3,    'First',  'Body one',   1),
+        (2, 1, 3,    'Second', 'Body two',   0),
+        (3, 2, NULL, 'Third',  'Body three', 1);
     INSERT INTO comments (id, article_id, author_id, parent_id, content) VALUES
         (1, 1, 2, NULL, 'Nice'),
         (2, 1, 1, 1,    'Thanks'),

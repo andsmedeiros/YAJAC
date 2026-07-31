@@ -131,12 +131,17 @@ pub trait Table<
         Ok(())
     }
 
+    /// Deletes the record at `id`, reporting `RecordNotFound` when no such record exists.
     fn delete(&self, id: Identifier) -> Result<(), Error> {
         let (query, bindings) = QueryBuilder::new(self.schema()).delete(id);
-        self.connection().execute(query, bindings)
+        match self.connection().execute(query, bindings)? {
+            0 => Err(Error::RecordNotFound),
+            _ => Ok(()),
+        }
     }
 
-    fn delete_batch(&self, parameters: &QueryParameters) -> Result<(), Error> {
+    /// Deletes the records matched by `parameters`, reporting how many were removed.
+    fn delete_batch(&self, parameters: &QueryParameters) -> Result<usize, Error> {
         let (query, bindings) = QueryBuilder::new(self.schema()).delete_batch(parameters)?;
         self.connection().execute(query, bindings)
     }
