@@ -107,7 +107,13 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
             .transaction(|| {
                 let schema = record.schema;
                 self.attach_belongs_to(slice::from_mut(&mut record))?;
-                record.refresh_with(|row| self.table(schema)?.insert(row, parameters))?;
+                let id = record.id.take();
+                record.refresh_with(|mut row| {
+                    if let Some(id) = id {
+                        row.insert(schema.primary_key().name, id.into());
+                    }
+                    self.table(schema)?.insert(row, parameters)
+                })?;
                 self.attach_has_one_many(slice::from_ref(&record), false)?;
                 let included = self.loader().load_for_record(&mut record, parameters)?;
 
@@ -173,7 +179,15 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
         self.connection
             .transaction(|| {
                 self.attach_belongs_to(&mut records)?;
-                records.refresh_with(|rows| self.table(schema)?.insert_batch(rows, parameters))?;
+                let ids: Vec<_> = records.iter_mut().map(|record| record.id.take()).collect();
+                records.refresh_with(|mut rows| {
+                    for (row, id) in rows.iter_mut().zip(ids) {
+                        if let Some(id) = id {
+                            row.insert(schema.primary_key().name, id.into());
+                        }
+                    }
+                    self.table(schema)?.insert_batch(rows, parameters)
+                })?;
                 self.attach_has_one_many(&records, false)?;
                 let included = self
                     .loader()

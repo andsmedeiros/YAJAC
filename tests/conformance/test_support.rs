@@ -19,7 +19,7 @@ use yajac::database::connection_manager::ConnectionManager;
 use yajac::database::registry::Registry;
 use yajac::database::schema::{AttributeType, IdentifierType, Related, SchemaBuilder};
 use yajac::routing::Router;
-use yajac::routing::controller::ResourceController;
+use yajac::routing::controller::{Configuration, ResourceController};
 
 pub type BoxError = Box<dyn std::error::Error>;
 pub type TestResult = Result<(), BoxError>;
@@ -48,7 +48,17 @@ impl<'sch> ResourceController<'sch, SqliteAdapter> for Authors {}
 impl<'sch> ResourceController<'sch, SqliteAdapter> for Articles {}
 impl<'sch> ResourceController<'sch, SqliteAdapter> for Comments {}
 impl<'sch> ResourceController<'sch, SqliteAdapter> for Profiles {}
-impl<'sch> ResourceController<'sch, SqliteAdapter> for Tags {}
+// `tags` has a text primary key with no server-side source, so it accepts the
+// client-generated ids the spec's `Client-Generated IDs` section provides for.
+impl<'sch> ResourceController<'sch, SqliteAdapter> for Tags {
+    #[allow(clippy::needless_update)]
+    fn configuration(&self) -> Configuration {
+        Configuration {
+            accepts_client_ids: true,
+            ..Default::default()
+        }
+    }
+}
 
 // --- Abstract schema set --------------------------------------------------
 
