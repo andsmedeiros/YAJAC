@@ -1,4 +1,4 @@
-use super::{ResourceContext, ResourceController};
+use super::{Configuration, ResourceContext, ResourceController};
 use crate::database::adapters::SqliteAdapter;
 use crate::database::adapters::sqlite::Pool;
 use crate::database::connection_manager::ConnectionManager;
@@ -217,6 +217,68 @@ fn test_create_persists_record() -> TestResult {
 
     let fetched =
         Books::default().show(ResourceContext::new(schema(&manager, "books"), context))?;
+    assert_eq!(body(&fetched)["data"]["attributes"]["title"], json!("Four"));
+
+    Ok(())
+}
+
+// A controller that accepts client-generated ids, for the two tests below.
+#[derive(Default)]
+struct ClientIdBooks;
+impl<'sch> ResourceController<'sch, SqliteAdapter> for ClientIdBooks {
+    fn configuration(&self) -> Configuration {
+        Configuration {
+            accepts_client_ids: true,
+        }
+    }
+}
+
+#[test]
+fn test_create_refuses_unaccepted_client_generated_id() -> TestResult {
+    let manager = manager()?;
+    let request = build_request(
+        "POST",
+        "/books",
+        json!({ "data": { "type": "books", "id": "42", "attributes": { "title": "Four" } } }),
+    )?;
+    let uri: Uri = request.uri().clone().into();
+    let context = Context::from_request(&manager, &uri, RouteParameters::new(), request);
+
+    match Books::default().create(ResourceContext::new(schema(&manager, "books"), context)) {
+        Ok(_) => Err("an unaccepted client-generated id must be refused".into()),
+        Err(error) => {
+            let status: StatusCode = error.status_code().into();
+            assert_eq!(status, StatusCode::FORBIDDEN);
+            Ok(())
+        }
+    }
+}
+
+#[test]
+fn test_create_honours_accepted_client_generated_id() -> TestResult {
+    let manager = manager()?;
+    let request = build_request(
+        "POST",
+        "/books",
+        json!({ "data": { "type": "books", "id": "42", "attributes": { "title": "Four" } } }),
+    )?;
+    let uri: Uri = request.uri().clone().into();
+    let context = Context::from_request(&manager, &uri, RouteParameters::new(), request);
+
+    let created =
+        ClientIdBooks::default().create(ResourceContext::new(schema(&manager, "books"), context))?;
+
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(body(&created)["data"]["id"], json!("42"));
+
+    // The client's id resolves to the stored record on a fresh read.
+    let request = build_request("GET", "/books/42", Value::Null)?;
+    let uri: Uri = request.uri().clone().into();
+    let context = Context::from_request(&manager, &uri, route_id("42"), request);
+    let fetched =
+        Books::default().show(ResourceContext::new(schema(&manager, "books"), context))?;
+
+    assert_eq!(fetched.status(), StatusCode::OK);
     assert_eq!(body(&fetched)["data"]["attributes"]["title"], json!("Four"));
 
     Ok(())

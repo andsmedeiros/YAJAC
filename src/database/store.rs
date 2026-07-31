@@ -1511,6 +1511,34 @@ mod tests {
         })
     }
 
+    #[test]
+    fn test_create_record_honours_client_generated_id() -> Result<(), Box<dyn StdError>> {
+        with_manager(|manager| {
+            let connection = manager.acquire()?;
+
+            let store = Store::new(manager, &connection);
+            // 42 is an id the autoincrement would never assign the first row, so persisting it
+            // proves the client-supplied id was written rather than generated.
+            let user = Record::from_attributes(
+                schema(manager, "users"),
+                Attributes::from_iter([("name", Attribute::Text("alice".to_string()))]),
+            )
+            .with_id(Identifier::Integer(42).into());
+
+            let parameters = QueryParameters::new(schema(manager, "users"));
+            let created = store.create_record(user, &parameters)?;
+            assert_eq!(created.content.require_id()?, &Identifier::Integer(42));
+
+            let persisted = manager
+                .table("users", &connection)?
+                .query(&QueryParameters::new(schema(manager, "users")))?;
+            assert_eq!(persisted.len(), 1);
+            assert_eq!(persisted[0]["id"], Attribute::Integer(42));
+
+            Ok(())
+        })
+    }
+
     // --- update_record -----------------------------------------------------
 
     #[test]
