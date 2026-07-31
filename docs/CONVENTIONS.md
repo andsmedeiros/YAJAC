@@ -16,6 +16,13 @@ Rules the codebase already follows. Keep new code homogeneous with them. This co
   schema-consistency faults → 500 (`InconsistentSchema`), generic bad accessor input → 500
   (`InvalidAttributeAccess`), and so on. Pick the variant by *who caused it and what it means*, not by
   the current call site.
+- **Named error types over inline construction.** An error raised at a call site gets a **named type
+  defined in the error module** — a payload struct with `Display` + `StdError` + `From<…> for Error`
+  (the sole place its status/code/title live), used via `?` / `.into()` (e.g. `routing::error`'s
+  `RequiredParameterMissingError`, `ClientGeneratedIdNotSupportedError`). Don't inline
+  `Error::new(status, code, title)` where the error is raised; keep construction in the error module,
+  and prefer a chain that breaks on it (`cond.then_some(x).ok_or(TheError)?`) over an imperative
+  `if !cond { return Err(…) }`.
 - **Lossless outward, redacted at the boundary.** `From<database::Error> for routing::Error` preserves
   status/code/title/detail. 5xx **detail redaction** (to a generic `InternalServerError`) and
   **logging** happen *only* at the router response boundary (`Router::handle`), and only in non-debug
@@ -69,7 +76,8 @@ should key them at `'sch`.
 Two layers, with different remits:
 
 - **In-crate unit tests — per-module.** Tests live in a `#[cfg(test)] mod tests` in the same file, or a
-  sibling `tests.rs` for larger suites (`routing/tests.rs`, `database/data_loader/tests.rs`). They
+  sibling `tests.rs` for larger suites (`routing/tests.rs`, `routing/controller/tests.rs`,
+  `database/data_loader/tests.rs`). They
   assert **exact** collection contents and exact error *variants* — not inclusion checks, not "is an
   error." A test that accepts a superset has a hole. Cover the whole public surface of the entity.
 - **Black-box conformance suite — `tests/conformance/`.** A separate integration target (registered as

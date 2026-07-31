@@ -25,21 +25,33 @@ The crate root (`src/lib.rs`) exposes six top-level modules, layered from the wi
 
 The embedder-facing layer.
 
-- **`router`** — `Router` / `RouterBuilder`. Routes are `(Method, path segments, handler)`; a segment
-  prefixed `:` captures a `RouteParameters` entry. `RouterBuilder::resource::<T>(scope, schema)` wires
-  the full CRUD set (`index`/`show`/`create`/`update` on both PUT and PATCH/`delete`);
-  `read_only_resource::<T>(scope, schema)` wires only `index`/`show`. The `schema` — obtained from the
-  connection manager's registry at wiring — is captured into each handler, which builds a per-request
-  `ResourceContext` from it. `Router::handle` is the single request→response boundary (see *Request
-  lifecycle*).
-- **`controller`** — `ResourceController` / `ReadOnlyResourceController`, traits an embedder implements
-  per resource as a **stateless marker type**. Their default handler methods receive a
-  `ResourceContext<'sch, 'req, Adapter>` — the resource's schema paired with the request `Context` — and
-  reach record parsing, query parameters, the store and id resolution through it, already bound to the
-  schema. Overriding a method customises one action.
+- **`router`** — `Router`, assembled by `Router::try_new(|root| …)` which runs a `PrimaryRouteBuilder`.
+  `root.resource::<T>(scope, schema)` wires a resource's full CRUD (`index`/`show`/`create`/`update` on
+  both PUT and PATCH/`delete`) **and** its relationship endpoints — the `/:id/relationships/:rel` linkage
+  route and the `/:id/:rel` related-resource route; `read_only_resource::<T>` mounts the reads and refuses
+  writes with `403`. The `schema` — obtained from the connection manager's registry at wiring — is
+  captured into each handler, which builds a per-request `ResourceContext` from it. Routes are **eagerly
+  built and validated** (a resource mounted twice, or a relationship name the schema doesn't declare, is a
+  build-time `RouterError`). The router is **schema-aware**: alongside its route list it holds a
+  `ControllerLookup`, so a related-resource fetch can resolve the target type's controller. `Router::handle`
+  is the single request→response boundary (see *Request lifecycle*).
+- **`builders`** — the route-builder DSL behind `Router::try_new`: `PrimaryRouteBuilder` (mounts resources
+  and opens nested scopes), `ResourceRouteBuilder` (a resource's relationship endpoints and custom
+  member/collection routes), and `SubordinateRouteBuilder`, with `RelationshipConfig` /
+  `RelationshipsConfig` for per-relationship options (read-only, path/keyword relocation via `*_with`
+  closures).
+- **`controller`** (a directory module — `controller/{mod.rs, tests.rs}`) — `ResourceController`, the trait
+  an embedder implements per resource as a **stateless marker type**. `DefaultController` is the
+  no-customisation impl, and read-only mounting is a route-builder choice, not a separate trait. Its
+  default handler methods receive a `ResourceContext<'sch, 'req, Adapter>` — the resource's schema paired
+  with the request `Context` — and reach record parsing, query parameters, the store and id resolution
+  through it, already bound to the schema. Overriding a method customises one action; overriding
+  `configuration()` returns a `Configuration` that shapes framework behaviour — today whether the resource
+  accepts **client-generated ids** (otherwise `create` refuses a client-supplied id with `403`).
 - **`context`** — `Context<'sch, 'req, Adapter>`, the per-request bundle (connection manager, uri,
-  route params, parsed request), wrapped by a `ResourceContext` before it reaches a handler. Where
-  request identifiers are materialised against the schema.
+  route params, parsed request, and — lent by the router — the controller lookup), wrapped by a
+  `ResourceContext` before it reaches a handler. Where request identifiers are materialised against the
+  schema.
 - **`request` / `responder` / `result` / `route_parameters` / `uri_generator` / `error`** — the
   request wrapper, response builders, the routing `Result`/`Error`, captured path params, link
   generation, and the routing error type.
@@ -71,11 +83,15 @@ The engine. Schema-driven and adapter-generic.
   in, pre-built) to a connection pool. The request path's single handle: it lends schemas (through
   `registry()`) and hands out request-scoped connections and `Table`s. Must be `Send + Sync` (asserted
   in `adapters::tests`) so the borrowing request path can run on any worker thread.
-- **`store`** — record/collection create/update/delete, including relationship persistence.
+- **`store`** — the read/write engine over `Table`: `fetch_record`/`fetch_collection`, record and
+  collection `create`/`update`/`delete`, the related-resource fetches (`fetch_related_*`, plus id-only
+  `peek_related_*`), and relationship persistence (`{link,relink,unlink}_{record,collection}`). Writes
+  self-wrap a **re-entrant transaction** (depth 0 → `BEGIN`, deeper → `SAVEPOINT`) so composed store
+  calls stay atomic. A create honours a client-supplied `record.id` by writing it into the insert row.
 - **`record` / `attributes` / `relationships` / `composite`** — materialised rows and their
   field/relationship data.
-- **`query_parameters`** — parses JSON:API query params (`include`, `fields`, `filter`, `sort`)
-  against a schema.
+- **`query_parameters`** — parses JSON:API query params — `include`, `fields`, `filter`, `sort`, `page`,
+  and the impl-defined `search` — against a schema.
 - **`query_builder` / `connection` / `pool` / `table`** — adapter-facing interfaces (traits).
 - **`data_loader`** — relationship/include resolution.
 - **`migrator`** — migration machinery (feature-gated; see *Features*).
@@ -105,7 +121,9 @@ feature. `type Migrator` is intentionally commented out — migrations are not y
 
 1. Extract `uri`, `method`, and non-empty path segments.
 2. Find the first `Route` matching method + arity, capturing `:param` segments into `RouteParameters`.
-3. Deserialise the body (`serde_json::from_slice`) into a `Request`; build a `Context`.
+3. Deserialise the body (`serde_json::from_slice`) into a `Request`; build a `Context`, lending it the
+   router's `ControllerLookup` (`with_controllers`) so a related-resource handler can resolve the target
+   controller.
 4. Invoke the matched handler → `routing::Result`.
 5. **Response boundary (`.or_else`)** — on error: read the status; if it is 5xx, log it with full
    `Debug` detail (`error!`), and in **non-debug** builds redact it to a generic
@@ -141,7 +159,10 @@ Three error types, each translating outward toward the wire:
 
 - `database::Error` is **source-classified**: each variant carries a single HTTP meaning exposed via
   `status()` / `code()` / `title()`, and a consumer-facing `Display` message.
-- `From<database::Error> for routing::Error` is **lossless** (status/code/title/detail preserved).
+- `routing::Error` is built either from a `database::Error` (a **lossless** `From`, status/code/title/
+  detail preserved) or from a **named payload type** defined in `routing::error` (e.g.
+  `RequiredParameterMissingError`, `ClientGeneratedIdNotSupportedError`) via its `From` impl — call sites
+  raise the named type rather than inlining `Error::new`.
 - Redaction of 5xx detail happens at the router boundary, never in the `From`.
 
 See [CONVENTIONS.md](CONVENTIONS.md) for the error-message rules.
@@ -177,15 +198,17 @@ response falls through and is asserted. Enforcement is per-affordance — set `Y
 a comma-separated list of affordance keys (`include`, `sort`, `client-ids`, `full-replacement`,
 `relationship-delete`) or `all` to turn a skip into a failure.
 
-**Layout.** `test_support` is the fixture (a `ConnectionManager` + `RouterBuilder` over an abstract
-five-resource schema, one read-only); `validations` holds the generic, reusable validators (JSON:API
+**Layout.** `test_support` is the fixture (a `ConnectionManager` + a `Router::try_new` mount over an
+abstract five-resource schema, one read-only, one accepting client-generated ids, with a nullable
+to-many for clearing/replacement tests); `validations` holds the generic, reusable validators (JSON:API
 grammar, full linkage, application URL set); the `mandatory` and `recommended` modules hold the tests.
 
-**Current state — red by design.** The suite runs partially red on `main`: the mandatory failures are
-this implementation's known conformance gaps (e.g. relationship/related-URL routing is not yet wired,
-so those URLs return `404`, and self-links are emitted relative rather than absolute). Those reds are an
-accepted, tracked liability until the implementation is conformed — the work belongs to Phase A (see
-*Known rework*).
+**Current state — partially red by design.** The suite runs partially red: the remaining failures are
+this implementation's tracked conformance gaps — self-links are emitted **relative** rather than
+absolute (the router does not yet project an absolute URL set), content-negotiation (`Accept` /
+`Content-Type`) is not enforced, and a couple of `recommended` niceties (the `Location` header on a
+`201`, human-readable `detail` on a conflict) are unimplemented. These are an accepted, tracked
+liability (see *Known rework* and the roadmap), not regressions.
 
 ## Features
 
@@ -205,8 +228,11 @@ The near-term plan reshapes parts of this document; treat the following as in-fl
   did not justify the machinery. Likewise a `Cow<'static, str>` error payload was dropped: every error
   funnels into the owned wire type (`json_api::error::Error`) and is re-owned there, so an upstream
   borrow only relocates the allocation rather than removing it.
+- **Absolute URL generation.** The router still mints links through an ad-hoc
+  `DefaultUriGenerator::default()` with an empty host/namespace, so `self`/related links come out
+  **relative**. Making the router hold the canonical, absolute URL set (scheme/host/namespace from
+  embedder config or the request `Host`) is the outstanding half of the schema-aware-routing work and
+  turns the remaining URL-shaped conformance reds green.
+- **Content negotiation** (`Accept` / `Content-Type` validation → `406` / `415`) is not yet enforced.
 - The **controller model** will grow: `ResourceContext` becomes a user-extensible per-request
   controller (`new(schema, context)` + user fields), and `Context` is renamed `RoutingContext`.
-- **Relationship endpoints** (`/:type/:id/relationships/:rel`) are not yet implemented; only resource
-  endpoints exist. Wiring them (and the related-resource URLs) is what turns much of the conformance
-  suite's mandatory tier green.
