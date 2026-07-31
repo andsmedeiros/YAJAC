@@ -305,6 +305,18 @@ mod tests {
     }
 
     #[test]
+    fn test_delete_missing_is_not_found() {
+        let manager = manager();
+        let connection = manager.acquire().unwrap();
+        let result = manager
+            .table("my_table", &connection)
+            .unwrap()
+            .delete(Identifier::Integer(404));
+
+        assert!(matches!(result.unwrap_err(), Error::RecordNotFound));
+    }
+
+    #[test]
     fn test_insert_batch() -> Result<(), Box<dyn StdError>> {
         let manager = manager();
         let connection = manager.acquire()?;

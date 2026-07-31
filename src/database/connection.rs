@@ -12,7 +12,8 @@ pub trait Connection {
         schema: &'sch Schema<'sch>,
     ) -> Result<Vec<Attributes<'sch>>, Error>;
 
-    fn execute(&self, query: String, bindings: Vec<Attribute>) -> Result<(), Error>;
+    /// Runs a non-returning statement and reports how many rows it affected.
+    fn execute(&self, query: String, bindings: Vec<Attribute>) -> Result<usize, Error>;
 
     /// Runs `operation` inside a database transaction, committing on `Ok` and rolling back on
     /// `Err` or panic.

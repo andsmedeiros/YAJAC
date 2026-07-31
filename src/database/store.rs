@@ -227,6 +227,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Store<'sch, 'req, Adapter> {
     ) -> Result<(), Error> {
         self.connection
             .transaction(|| self.table(schema)?.delete_batch(parameters))
+            .and(Ok(()))
     }
 
     /// Fetches the full records targeted by the already-loaded `record`'s `relationship`, scoped to
