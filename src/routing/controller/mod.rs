@@ -20,11 +20,14 @@ use crate::{
         identifier::Identifier as JsonApiIdentifier, relationship::Linkage, resource::Resource,
     },
     routing::{
-        Context, DefaultUriGenerator, Error, Result, error::ClientGeneratedIdNotSupportedError,
+        Context, DefaultUriGenerator, Error, Result, RouteParameters,
+        error::{ClientGeneratedIdNotSupportedError, UnresolvedRouteParameterError},
         responder::*,
     },
 };
-use http::StatusCode;
+use http::{HeaderMap, StatusCode};
+use std::borrow::Cow;
+use std::collections::HashMap;
 
 /// A request narrowed to a single resource: the resource's schema paired with the
 /// routing context. It lends the context's request operations already bound to that
@@ -117,6 +120,43 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
     /// This controller's behaviour configuration; override to opt out of the framework defaults.
     fn configuration(&self) -> Configuration {
         Configuration::default()
+    }
+
+    /// Resolves a route's required parameters to concrete, request-scoped values, for the router to
+    /// render a link against. The default takes the `:id` parameter from `record` — the resource's
+    /// identifier is always mounted as `:id`, regardless of the primary key's column name — and
+    /// echoes every other parameter from the request's route parameters, failing when one has no
+    /// such value. Override to resolve a parameter from the request headers or query parameters.
+    fn parameters_for_route<'req>(
+        &self,
+        record: &'req Record<'sch>,
+        route: &'req RouteParameters,
+        _query: &'req QueryParameters<'sch, 'req>,
+        _headers: &'req HeaderMap,
+        required_parameters: &[&'sch str],
+    ) -> std::result::Result<HashMap<&'sch str, Cow<'req, str>>, Error>
+    where
+        'sch: 'req,
+    {
+        required_parameters
+            .iter()
+            .map(|&parameter| {
+                let value = if parameter == "id" {
+                    match record.require_id()? {
+                        Identifier::Integer(id) => Cow::Owned(id.to_string()),
+                        Identifier::Text(id) => Cow::Borrowed(id.as_str()),
+                    }
+                } else {
+                    route
+                        .get(parameter)
+                        .map(|value| Cow::Borrowed(value.as_str()))
+                        .ok_or_else(|| UnresolvedRouteParameterError {
+                            parameter: parameter.to_string(),
+                        })?
+                };
+                Ok((parameter, value))
+            })
+            .collect()
     }
 
     fn index<'req>(&self, context: ResourceContext<'sch, 'req, Adapter>) -> Result
