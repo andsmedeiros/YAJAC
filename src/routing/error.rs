@@ -75,6 +75,25 @@ impl Display for LinkGenerationError {
 
 impl StdError for LinkGenerationError {}
 
+/// A link template's dynamic route parameter could not be resolved from the request. Internal: the
+/// router mounted the template, so a parameter it cannot fill is a framework fault, not a client one.
+#[derive(Debug, Clone, Serialize)]
+pub struct UnresolvedRouteParameterError {
+    pub parameter: String,
+}
+
+impl Display for UnresolvedRouteParameterError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Could not resolve the route parameter '{}'",
+            self.parameter
+        )
+    }
+}
+
+impl StdError for UnresolvedRouteParameterError {}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ApiErrorKind {
     ModelValidationFailed,
@@ -171,6 +190,16 @@ impl From<LinkGenerationError> for Error {
         Error::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "LinkGenerationFailed",
+            error.to_string(),
+        )
+    }
+}
+
+impl From<UnresolvedRouteParameterError> for Error {
+    fn from(error: UnresolvedRouteParameterError) -> Self {
+        Error::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "UnresolvedRouteParameter",
             error.to_string(),
         )
     }
