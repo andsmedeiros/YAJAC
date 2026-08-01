@@ -6,10 +6,11 @@ use crate::database::registry::Registry;
 use crate::database::schema::{AttributeType, Related, Schema, SchemaBuilder};
 use crate::http_wrappers::Uri;
 use crate::json_api::document::Document;
-use crate::routing::MountTable;
-use crate::routing::{Context, Request, RouteParameters};
+use crate::routing::router::{RelationshipMounts, ResourceMount};
+use crate::routing::{Context, MountTable, Request, RouteParameters};
 use http::StatusCode;
 use serde_json::{Value, json};
+use std::borrow::Cow;
 use std::error::Error as StdError;
 use test_log::test;
 
@@ -946,13 +947,52 @@ fn test_unlink_on_to_one_is_kind_mismatch() -> TestResult {
 struct Bios;
 impl<'sch> ResourceController<'sch, SqliteAdapter> for Bios {}
 
-// Maps each resource kind to its canonical controller — the resolution `related`
-// performs to forward to the related type's serving.
+// A hand-crafted mount for `kind` with canonical templates — collection, resource, and a linkage +
+// related template per named relationship. A truthful table entry the router could produce, so the
+// fixture never confuses the controller; these tests resolve the controller `related` forwards to,
+// not the templates.
+fn mount<'sch, T>(kind: &'sch str, relationships: &[&'sch str]) -> ResourceMount<'sch, SqliteAdapter>
+where
+    T: ResourceController<'sch, SqliteAdapter> + Default + 'sch,
+{
+    ResourceMount {
+        kind,
+        factory: || Box::new(T::default()) as Box<dyn ResourceController<'sch, SqliteAdapter>>,
+        base: vec![Cow::Borrowed(kind)],
+        relationships: relationships
+            .iter()
+            .map(|&name| {
+                (
+                    name,
+                    RelationshipMounts {
+                        linkage: Some(vec![
+                            Cow::Borrowed(kind),
+                            Cow::Borrowed(":id"),
+                            Cow::Borrowed("relationships"),
+                            Cow::Borrowed(name),
+                        ]),
+                        related: Some(vec![
+                            Cow::Borrowed(kind),
+                            Cow::Borrowed(":id"),
+                            Cow::Borrowed(name),
+                        ]),
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+
+// Maps each resource kind to its mount — the resolution `related` performs to forward to the
+// related type's serving.
 fn mount_table<'sch>() -> MountTable<'sch, SqliteAdapter> {
-    MountTable::default()
-        .register::<Authors>("authors")
-        .register::<Books>("books")
-        .register::<Bios>("bios")
+    [
+        mount::<Authors>("authors", &["books", "bio"]),
+        mount::<Books>("books", &["author"]),
+        mount::<Bios>("bios", &["author"]),
+    ]
+    .into_iter()
+    .collect()
 }
 
 #[test]
