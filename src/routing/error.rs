@@ -59,6 +59,22 @@ impl Display for ClientGeneratedIdNotSupportedError {
 
 impl StdError for ClientGeneratedIdNotSupportedError {}
 
+/// Link generation could not produce a valid URI — an unresolved dynamic segment or a path that
+/// fails to parse. Always internal: the router owns every template and resolver, so a failure here
+/// is a framework fault, not a client one.
+#[derive(Debug, Clone, Serialize)]
+pub struct LinkGenerationError {
+    pub message: String,
+}
+
+impl Display for LinkGenerationError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Failed to generate a link: {}", self.message)
+    }
+}
+
+impl StdError for LinkGenerationError {}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ApiErrorKind {
     ModelValidationFailed,
@@ -145,6 +161,16 @@ impl From<ClientGeneratedIdNotSupportedError> for Error {
         Error::new(
             StatusCode::FORBIDDEN,
             "ClientGeneratedIdNotSupported",
+            error.to_string(),
+        )
+    }
+}
+
+impl From<LinkGenerationError> for Error {
+    fn from(error: LinkGenerationError) -> Self {
+        Error::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "LinkGenerationFailed",
             error.to_string(),
         )
     }
