@@ -135,11 +135,11 @@ pub(crate) type ControllerFactory<'sch, Adapter> =
 
 /// Resolves a resource kind to its canonical controller. A kind with no mounted controller
 /// resolves to `DefaultController`.
-pub struct ControllerLookup<'sch, Adapter: AdapterInterface> {
+pub struct MountTable<'sch, Adapter: AdapterInterface> {
     factories: IndexMap<&'sch str, ControllerFactory<'sch, Adapter>>,
 }
 
-impl<'sch, Adapter: AdapterInterface + 'sch> ControllerLookup<'sch, Adapter> {
+impl<'sch, Adapter: AdapterInterface + 'sch> MountTable<'sch, Adapter> {
     pub fn register<T>(mut self, kind: &'sch str) -> Self
     where
         T: ResourceController<'sch, Adapter> + Default + 'sch,
@@ -157,7 +157,7 @@ impl<'sch, Adapter: AdapterInterface + 'sch> ControllerLookup<'sch, Adapter> {
     }
 }
 
-impl<'sch, Adapter: AdapterInterface> Default for ControllerLookup<'sch, Adapter> {
+impl<'sch, Adapter: AdapterInterface> Default for MountTable<'sch, Adapter> {
     fn default() -> Self {
         Self {
             factories: IndexMap::new(),
@@ -166,7 +166,7 @@ impl<'sch, Adapter: AdapterInterface> Default for ControllerLookup<'sch, Adapter
 }
 
 impl<'sch, Adapter: AdapterInterface> FromIterator<(&'sch str, ControllerFactory<'sch, Adapter>)>
-    for ControllerLookup<'sch, Adapter>
+    for MountTable<'sch, Adapter>
 {
     fn from_iter<I: IntoIterator<Item = (&'sch str, ControllerFactory<'sch, Adapter>)>>(
         iter: I,
@@ -217,7 +217,7 @@ impl<'sch, Adapter: AdapterInterface + 'sch> MaterialisedRoutes<'sch, Adapter> {
     /// (surfacing a duplicate resource) into the finished routes and controller lookup.
     fn resolve(
         self,
-    ) -> StdResult<(Vec<Route<'sch, Adapter>>, ControllerLookup<'sch, Adapter>), RouterError> {
+    ) -> StdResult<(Vec<Route<'sch, Adapter>>, MountTable<'sch, Adapter>), RouterError> {
         let routes = self.routes.into_iter().collect::<StdResult<Vec<_>, _>>()?;
 
         let mut factories: IndexMap<&'sch str, ControllerFactory<'sch, Adapter>> = IndexMap::new();
@@ -229,7 +229,7 @@ impl<'sch, Adapter: AdapterInterface + 'sch> MaterialisedRoutes<'sch, Adapter> {
             }
         }
 
-        Ok((routes, ControllerLookup { factories }))
+        Ok((routes, MountTable { factories }))
     }
 }
 
@@ -237,7 +237,7 @@ impl<'sch, Adapter: AdapterInterface + 'sch> MaterialisedRoutes<'sch, Adapter> {
 /// handlers resolve related resources through.
 pub struct Router<'sch, Adapter: AdapterInterface> {
     routes: Vec<Route<'sch, Adapter>>,
-    controllers: ControllerLookup<'sch, Adapter>,
+    mount_table: MountTable<'sch, Adapter>,
 }
 
 impl<'sch, Adapter: AdapterInterface + 'sch> Router<'sch, Adapter> {
@@ -246,8 +246,8 @@ impl<'sch, Adapter: AdapterInterface + 'sch> Router<'sch, Adapter> {
     pub fn try_new(
         configure: impl FnOnce(PrimaryRouteBuilder<'sch, Adapter>) -> PrimaryRouteBuilder<'sch, Adapter>,
     ) -> StdResult<Self, RouterError> {
-        let (routes, controllers) = configure(PrimaryRouteBuilder::root()).into_routes().resolve()?;
-        Ok(Router { routes, controllers })
+        let (routes, mount_table) = configure(PrimaryRouteBuilder::root()).into_routes().resolve()?;
+        Ok(Router { routes, mount_table })
     }
 
     pub fn handle(
@@ -271,7 +271,7 @@ impl<'sch, Adapter: AdapterInterface + 'sch> Router<'sch, Adapter> {
                 let (parts, body) = request.into_parts();
                 let request = Request::from_parts(parts, serde_json::from_slice(&body)?);
                 let context = Context::from_request(database, &uri, parameters, request)
-                    .with_controllers(&self.controllers);
+                    .with_mount_table(&self.mount_table);
                 (route.handler)(context)
             })
             .unwrap_or_else(|| {

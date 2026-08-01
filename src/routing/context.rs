@@ -16,7 +16,7 @@ use crate::{
         document::Document, identifier::Identifier as ResourceIdentifier,
         primary_content::PrimaryContent, resource::Resource,
     },
-    routing::{ControllerLookup, Error as RoutingError, RouteParameters},
+    routing::{MountTable, Error as RoutingError, RouteParameters},
 };
 use http::HeaderMap;
 use itertools::Itertools;
@@ -33,7 +33,7 @@ where
     route: RouteParameters,
     query: OnceCell<QueryParameters<'sch, 'req>>,
     connection: OnceCell<Adapter::Connection>,
-    controllers: Option<&'req ControllerLookup<'sch, Adapter>>,
+    mount_table: Option<&'req MountTable<'sch, Adapter>>,
 }
 
 impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
@@ -55,22 +55,22 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
             route,
             query: OnceCell::new(),
             connection: OnceCell::new(),
-            controllers: None,
+            mount_table: None,
         }
     }
 
     /// Lends the router's controller lookup to this context for the duration of the request.
-    pub fn with_controllers(
+    pub fn with_mount_table(
         mut self,
-        controllers: &'req ControllerLookup<'sch, Adapter>,
+        mount_table: &'req MountTable<'sch, Adapter>,
     ) -> Self {
-        self.controllers = Some(controllers);
+        self.mount_table = Some(mount_table);
         self
     }
 
     /// The router's controller lookup, absent when the context was not built by a router.
-    pub fn controllers(&self) -> Option<&'req ControllerLookup<'sch, Adapter>> {
-        self.controllers
+    pub fn mount_table(&self) -> Option<&'req MountTable<'sch, Adapter>> {
+        self.mount_table
     }
 
     /// Lazily acquires the request connection from the pool and lends it as a shared reference.

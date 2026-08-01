@@ -6,7 +6,7 @@ use crate::database::registry::Registry;
 use crate::database::schema::{AttributeType, Related, Schema, SchemaBuilder};
 use crate::http_wrappers::Uri;
 use crate::json_api::document::Document;
-use crate::routing::ControllerLookup;
+use crate::routing::MountTable;
 use crate::routing::{Context, Request, RouteParameters};
 use http::StatusCode;
 use serde_json::{Value, json};
@@ -948,8 +948,8 @@ impl<'sch> ResourceController<'sch, SqliteAdapter> for Bios {}
 
 // Maps each resource kind to its canonical controller — the resolution `related`
 // performs to forward to the related type's serving.
-fn controllers<'sch>() -> ControllerLookup<'sch, SqliteAdapter> {
-    ControllerLookup::default()
+fn mount_table<'sch>() -> MountTable<'sch, SqliteAdapter> {
+    MountTable::default()
         .register::<Authors>("authors")
         .register::<Books>("books")
         .register::<Bios>("bios")
@@ -958,11 +958,11 @@ fn controllers<'sch>() -> ControllerLookup<'sch, SqliteAdapter> {
 #[test]
 fn test_related_to_many_serves_collection() -> TestResult {
     let manager = manager()?;
-    let lookup = controllers();
+    let lookup = mount_table();
     let request = build_request("GET", "/authors/1/books", Value::Null)?;
     let uri: Uri = request.uri().clone().into();
     let context =
-        Context::from_request(&manager, &uri, route_id("1"), request).with_controllers(&lookup);
+        Context::from_request(&manager, &uri, route_id("1"), request).with_mount_table(&lookup);
 
     let response = Authors::default().related(
         ResourceContext::new(schema(&manager, "authors"), context),
@@ -986,11 +986,11 @@ fn test_related_to_many_serves_collection() -> TestResult {
 #[test]
 fn test_related_to_one_serves_record() -> TestResult {
     let manager = manager()?;
-    let lookup = controllers();
+    let lookup = mount_table();
     let request = build_request("GET", "/books/1/author", Value::Null)?;
     let uri: Uri = request.uri().clone().into();
     let context =
-        Context::from_request(&manager, &uri, route_id("1"), request).with_controllers(&lookup);
+        Context::from_request(&manager, &uri, route_id("1"), request).with_mount_table(&lookup);
 
     let response = Books::default().related(
         ResourceContext::new(schema(&manager, "books"), context),
@@ -1008,11 +1008,11 @@ fn test_related_to_one_serves_record() -> TestResult {
 #[test]
 fn test_related_empty_to_one_is_null() -> TestResult {
     let manager = manager()?;
-    let lookup = controllers();
+    let lookup = mount_table();
     let request = build_request("GET", "/books/3/author", Value::Null)?;
     let uri: Uri = request.uri().clone().into();
     let context =
-        Context::from_request(&manager, &uri, route_id("3"), request).with_controllers(&lookup);
+        Context::from_request(&manager, &uri, route_id("3"), request).with_mount_table(&lookup);
 
     let response = Books::default().related(
         ResourceContext::new(schema(&manager, "books"), context),
@@ -1028,11 +1028,11 @@ fn test_related_empty_to_one_is_null() -> TestResult {
 #[test]
 fn test_related_has_one_serves_record() -> TestResult {
     let manager = manager()?;
-    let lookup = controllers();
+    let lookup = mount_table();
     let request = build_request("GET", "/authors/1/bio", Value::Null)?;
     let uri: Uri = request.uri().clone().into();
     let context =
-        Context::from_request(&manager, &uri, route_id("1"), request).with_controllers(&lookup);
+        Context::from_request(&manager, &uri, route_id("1"), request).with_mount_table(&lookup);
 
     let response = Authors::default().related(
         ResourceContext::new(schema(&manager, "authors"), context),
@@ -1049,11 +1049,11 @@ fn test_related_has_one_serves_record() -> TestResult {
 #[test]
 fn test_related_supports_primary_content_include() -> TestResult {
     let manager = manager()?;
-    let lookup = controllers();
+    let lookup = mount_table();
     let request = build_request("GET", "/authors/1/books?include=author", Value::Null)?;
     let uri: Uri = request.uri().clone().into();
     let context =
-        Context::from_request(&manager, &uri, route_id("1"), request).with_controllers(&lookup);
+        Context::from_request(&manager, &uri, route_id("1"), request).with_mount_table(&lookup);
 
     let response = Authors::default().related(
         ResourceContext::new(schema(&manager, "authors"), context),
@@ -1075,11 +1075,11 @@ fn test_related_supports_primary_content_include() -> TestResult {
 #[test]
 fn test_related_unknown_relationship_is_internal_error() -> TestResult {
     let manager = manager()?;
-    let lookup = controllers();
+    let lookup = mount_table();
     let request = build_request("GET", "/authors/1/ghost", Value::Null)?;
     let uri: Uri = request.uri().clone().into();
     let context =
-        Context::from_request(&manager, &uri, route_id("1"), request).with_controllers(&lookup);
+        Context::from_request(&manager, &uri, route_id("1"), request).with_mount_table(&lookup);
 
     match Authors::default().related(
         ResourceContext::new(schema(&manager, "authors"), context),
