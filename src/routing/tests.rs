@@ -9,6 +9,7 @@ use crate::routing::responder::respond_with;
 use crate::routing::{Context, Result as RouteResult, Router, RouterError, UnboundVerbs};
 use http::{Response, StatusCode};
 use serde_json::{Value, json};
+use std::borrow::Cow;
 use std::error::Error as StdError;
 
 type Manager = ConnectionManager<'static, SqliteAdapter>;
@@ -223,6 +224,46 @@ fn data_ids(response: &Response<Option<Document>>) -> Vec<Value> {
 }
 
 // --- resourceful routes: CRUD dispatch -------------------------------------
+
+#[test]
+fn test_mount_captures_link_templates() -> TestResult {
+    let manager = manager()?;
+    let router = standard_router(&manager)?;
+    let mount = router
+        .mount_table()
+        .mount("articles")
+        .expect("articles is mounted");
+
+    // The base is the collection prefix; the resource path is the base plus `:id`, derived at render.
+    assert_eq!(mount.base, vec![Cow::Borrowed("articles")]);
+
+    // Every relationship the schema declares is captured, in definition order.
+    assert_eq!(
+        mount.relationships.keys().copied().collect::<Vec<_>>(),
+        vec!["comments", "drafts", "summary"]
+    );
+
+    // Each mounted slot's template mirrors its route's path exactly.
+    let comments = &mount.relationships["comments"];
+    assert_eq!(
+        comments.linkage,
+        Some(vec![
+            Cow::Borrowed("articles"),
+            Cow::Borrowed(":id"),
+            Cow::Borrowed("relationships"),
+            Cow::Borrowed("comments"),
+        ])
+    );
+    assert_eq!(
+        comments.related,
+        Some(vec![
+            Cow::Borrowed("articles"),
+            Cow::Borrowed(":id"),
+            Cow::Borrowed("comments"),
+        ])
+    );
+    Ok(())
+}
 
 #[test]
 fn test_index_yields_collection() -> TestResult {
