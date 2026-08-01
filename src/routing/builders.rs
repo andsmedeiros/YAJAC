@@ -2,7 +2,8 @@ use super::{
     Context, Error, Result,
     controller::{ResourceContext, ResourceController},
     router::{
-        Handler, MaterialisedRoutes, MountSlot, ResourceMount, Route, RouterError, split_segments,
+        Handler, MaterialisedRoutes, MountSlot, RelationshipMounts, ResourceMount, Route,
+        RouterError, split_segments,
     },
 };
 use crate::database::{
@@ -11,6 +12,7 @@ use crate::database::{
 };
 use crate::http_wrappers::StatusCode;
 use http::Method;
+use indexmap::IndexMap;
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::marker::PhantomData;
@@ -313,6 +315,7 @@ pub struct ResourceRouteBuilder<'sch, T, Adapter: AdapterInterface> {
     read_only: bool,
     routes: MaterialisedRoutes<'sch, Adapter>,
     mounted: HashSet<(&'sch str, MountSlot)>,
+    relationships: IndexMap<&'sch str, RelationshipMounts<'sch>>,
     controller: PhantomData<fn() -> T>,
 }
 
@@ -338,6 +341,7 @@ impl<'sch, T, Adapter: AdapterInterface + 'sch> RouteBuilder<'sch, Adapter>
             read_only: self.read_only,
             routes: MaterialisedRoutes::new(),
             mounted: HashSet::new(),
+            relationships: IndexMap::new(),
             controller: PhantomData,
         }
     }
@@ -364,6 +368,7 @@ where
             read_only,
             routes: MaterialisedRoutes::new(),
             mounted: HashSet::new(),
+            relationships: IndexMap::new(),
             controller: PhantomData,
         }
     }
@@ -375,6 +380,8 @@ where
         self.routes.push_mount(ResourceMount {
             kind: self.schema.name(),
             factory: || Box::new(T::default()) as Box<dyn ResourceController<'sch, Adapter>>,
+            base: self.prefix.clone(),
+            relationships: self.relationships,
         });
         self.routes
     }
@@ -467,6 +474,8 @@ where
         let segment = config.segment.clone().unwrap_or(Cow::Borrowed(relationship));
         let keyword = config.keyword.clone().unwrap_or(Cow::Borrowed("relationships"));
         let path = || [Cow::Borrowed(":id"), keyword.clone(), segment.clone()];
+        self.relationships.entry(relationship).or_default().linkage =
+            Some(self.prefix.iter().cloned().chain(path()).collect());
         let to_many = kind == RelationshipKind::HasMany;
 
         self.mount(Method::GET, path(), move |context| {
@@ -501,6 +510,13 @@ where
 
         let schema = self.schema;
         let segment = config.segment.clone().unwrap_or(Cow::Borrowed(relationship));
+        self.relationships.entry(relationship).or_default().related = Some(
+            self.prefix
+                .iter()
+                .cloned()
+                .chain([Cow::Borrowed(":id"), segment.clone()])
+                .collect(),
+        );
 
         self.mount(Method::GET, [Cow::Borrowed(":id"), segment], move |context| {
             T::default().related(ResourceContext::new(schema, context), relationship)
