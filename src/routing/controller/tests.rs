@@ -1,16 +1,21 @@
 use super::{Configuration, ResourceContext, ResourceController};
 use crate::database::adapters::SqliteAdapter;
 use crate::database::adapters::sqlite::Pool;
+use crate::database::attributes::{Attribute, Attributes, Identifier};
 use crate::database::connection_manager::ConnectionManager;
+use crate::database::query_parameters::QueryParameters;
+use crate::database::record::{Builder, Record};
 use crate::database::registry::Registry;
 use crate::database::schema::{AttributeType, Related, Schema, SchemaBuilder};
 use crate::http_wrappers::Uri;
 use crate::json_api::document::Document;
+use crate::routing::error::UnresolvedRouteParameterError;
 use crate::routing::router::{RelationshipMounts, ResourceMount};
-use crate::routing::{Context, MountTable, Request, RouteParameters};
-use http::StatusCode;
+use crate::routing::{Context, Error, MountTable, Request, RouteParameters};
+use http::{HeaderMap, StatusCode};
 use serde_json::{Value, json};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::error::Error as StdError;
 use test_log::test;
 
@@ -995,6 +1000,114 @@ fn mount_table<'sch>() -> MountTable<'sch, SqliteAdapter> {
     ]
     .into_iter()
     .collect()
+}
+
+#[test]
+fn test_parameters_for_route_resolves_id_and_echoes_others() -> TestResult {
+    let manager = manager()?;
+    let authors = schema(&manager, "authors");
+    let record = Record::from_attributes(
+        authors,
+        Attributes::from_iter([("name", Attribute::Text("Ann".to_string()))]),
+    )
+    .with_id(Some(Identifier::Integer(7)));
+
+    let mut route = RouteParameters::new();
+    route.insert("tenant", "acme");
+    let query = QueryParameters::new(authors);
+    let headers = HeaderMap::new();
+
+    let resolved = Authors::default().parameters_for_route(
+        &record,
+        &route,
+        &query,
+        &headers,
+        &["id", "tenant"],
+    )?;
+
+    // `:id` resolves from the record's identifier; every other parameter echoes the request.
+    assert_eq!(resolved["id"], Cow::Borrowed("7"));
+    assert_eq!(resolved["tenant"], Cow::Borrowed("acme"));
+    Ok(())
+}
+
+#[test]
+fn test_parameters_for_route_unresolved_is_internal_error() -> TestResult {
+    let manager = manager()?;
+    let authors = schema(&manager, "authors");
+    let record = Record::from_attributes(
+        authors,
+        Attributes::from_iter([("name", Attribute::Text("Ann".to_string()))]),
+    )
+    .with_id(Some(Identifier::Integer(7)));
+
+    let route = RouteParameters::new();
+    let query = QueryParameters::new(authors);
+    let headers = HeaderMap::new();
+
+    let error = Authors::default()
+        .parameters_for_route(&record, &route, &query, &headers, &["tenant"])
+        .expect_err("an unresolvable parameter must fail");
+    assert_eq!(
+        error.status_code().as_u16(),
+        StatusCode::INTERNAL_SERVER_ERROR.as_u16()
+    );
+    Ok(())
+}
+
+// A controller whose links embed a record field: it resolves every route parameter from the
+// record's text attribute of that name (a slug, say), overriding the request-echoing default.
+#[derive(Default)]
+struct SluggedBooks;
+impl<'sch> ResourceController<'sch, SqliteAdapter> for SluggedBooks {
+    fn parameters_for_route<'req>(
+        &self,
+        record: &'req Record<'sch>,
+        _route: &'req RouteParameters,
+        _query: &'req QueryParameters<'sch, 'req>,
+        _headers: &'req HeaderMap,
+        required_parameters: &[&'sch str],
+    ) -> std::result::Result<HashMap<&'sch str, Cow<'req, str>>, Error>
+    where
+        'sch: 'req,
+    {
+        required_parameters
+            .iter()
+            .map(|&parameter| match record.require(parameter)? {
+                Attribute::Text(value) => Ok((parameter, Cow::Borrowed(value.as_str()))),
+                _ => Err(UnresolvedRouteParameterError {
+                    parameter: parameter.to_string(),
+                }
+                .into()),
+            })
+            .collect()
+    }
+}
+
+#[test]
+fn test_parameters_for_route_override_resolves_from_record() -> TestResult {
+    let manager = manager()?;
+    let books = schema(&manager, "books");
+    let record = Record::from_attributes(
+        books,
+        Attributes::from_iter([("title", Attribute::Text("One".to_string()))]),
+    );
+
+    // The request carries no route parameters; the override draws the value from the record instead.
+    let route = RouteParameters::new();
+    let query = QueryParameters::new(books);
+    let headers = HeaderMap::new();
+
+    let resolved = SluggedBooks::default().parameters_for_route(
+        &record,
+        &route,
+        &query,
+        &headers,
+        &["title"],
+    )?;
+
+    assert_eq!(resolved["title"], Cow::Borrowed("One"));
+    Ok(())
 }
 
 #[test]
