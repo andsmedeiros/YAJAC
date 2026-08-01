@@ -133,54 +133,64 @@ impl std::error::Error for RouterError {}
 pub(crate) type ControllerFactory<'sch, Adapter> =
     fn() -> Box<dyn ResourceController<'sch, Adapter> + 'sch>;
 
-/// Resolves a resource kind to its canonical controller. A kind with no mounted controller
-/// resolves to `DefaultController`.
+/// The two canonical link templates of one mounted relationship, each present only when its
+/// endpoint was mounted. The segments mirror the mounted route's path, so a link rendered from a
+/// template always lands on a real route.
+#[derive(Default)]
+pub(crate) struct RelationshipMounts<'sch> {
+    pub linkage: Option<Vec<Cow<'sch, str>>>,
+    pub related: Option<Vec<Cow<'sch, str>>>,
+}
+
+/// The canonical mount of one resource: its kind, its controller factory, and the path templates
+/// its links are rendered from — the `base` (collection) prefix, from which the resource path is
+/// `base` + `:id`, and each mounted relationship.
+pub(crate) struct ResourceMount<'sch, Adapter: AdapterInterface> {
+    pub kind: &'sch str,
+    pub factory: ControllerFactory<'sch, Adapter>,
+    pub base: Vec<Cow<'sch, str>>,
+    pub relationships: IndexMap<&'sch str, RelationshipMounts<'sch>>,
+}
+
+/// Resolves a resource kind to its mount: the controller factory and the link templates the router
+/// captured for it. A kind with no mounted resource resolves to `DefaultController` and no links.
 pub struct MountTable<'sch, Adapter: AdapterInterface> {
-    factories: IndexMap<&'sch str, ControllerFactory<'sch, Adapter>>,
+    mounts: IndexMap<&'sch str, ResourceMount<'sch, Adapter>>,
 }
 
 impl<'sch, Adapter: AdapterInterface + 'sch> MountTable<'sch, Adapter> {
-    pub fn register<T>(mut self, kind: &'sch str) -> Self
-    where
-        T: ResourceController<'sch, Adapter> + Default + 'sch,
-    {
-        self.factories
-            .insert(kind, || Box::new(T::default()) as Box<dyn ResourceController<'sch, Adapter>>);
-        self
+    /// The controller serving `kind`, or `DefaultController` when `kind` is unmounted.
+    pub fn resolve(&self, kind: &str) -> Box<dyn ResourceController<'sch, Adapter> + 'sch> {
+        self.mounts.get(kind).map_or_else(
+            || Box::new(DefaultController) as Box<dyn ResourceController<'sch, Adapter>>,
+            |mount| (mount.factory)(),
+        )
     }
 
-    pub fn resolve(&self, kind: &str) -> Box<dyn ResourceController<'sch, Adapter> + 'sch> {
-        self.factories.get(kind).map_or_else(
-            || Box::new(DefaultController) as Box<dyn ResourceController<'sch, Adapter>>,
-            |factory| factory(),
-        )
+    /// The mount for `kind`, absent when `kind` is unmounted — the source of its link templates.
+    pub(crate) fn mount(&self, kind: &str) -> Option<&ResourceMount<'sch, Adapter>> {
+        self.mounts.get(kind)
     }
 }
 
 impl<'sch, Adapter: AdapterInterface> Default for MountTable<'sch, Adapter> {
     fn default() -> Self {
         Self {
-            factories: IndexMap::new(),
+            mounts: IndexMap::new(),
         }
     }
 }
 
-impl<'sch, Adapter: AdapterInterface> FromIterator<(&'sch str, ControllerFactory<'sch, Adapter>)>
+impl<'sch, Adapter: AdapterInterface> FromIterator<ResourceMount<'sch, Adapter>>
     for MountTable<'sch, Adapter>
 {
-    fn from_iter<I: IntoIterator<Item = (&'sch str, ControllerFactory<'sch, Adapter>)>>(
-        iter: I,
-    ) -> Self {
+    /// Collects complete mounts into a table by kind, last write winning. Unlike the router's own
+    /// assembly it does not reject duplicates — a hand-built table (in tests) owns that.
+    fn from_iter<I: IntoIterator<Item = ResourceMount<'sch, Adapter>>>(iter: I) -> Self {
         Self {
-            factories: iter.into_iter().collect(),
+            mounts: iter.into_iter().map(|mount| (mount.kind, mount)).collect(),
         }
     }
-}
-
-/// The canonical mount of one resource: its kind and the factory for its controller.
-pub(crate) struct ResourceMount<'sch, Adapter: AdapterInterface> {
-    pub kind: &'sch str,
-    pub factory: ControllerFactory<'sch, Adapter>,
 }
 
 /// The accumulating product of a builder: eagerly-built routes, each carrying its build outcome,
@@ -220,16 +230,17 @@ impl<'sch, Adapter: AdapterInterface + 'sch> MaterialisedRoutes<'sch, Adapter> {
     ) -> StdResult<(Vec<Route<'sch, Adapter>>, MountTable<'sch, Adapter>), RouterError> {
         let routes = self.routes.into_iter().collect::<StdResult<Vec<_>, _>>()?;
 
-        let mut factories: IndexMap<&'sch str, ControllerFactory<'sch, Adapter>> = IndexMap::new();
+        let mut mounts: IndexMap<&'sch str, ResourceMount<'sch, Adapter>> = IndexMap::new();
         for mount in self.mounts {
-            if factories.insert(mount.kind, mount.factory).is_some() {
+            let kind = mount.kind;
+            if mounts.insert(kind, mount).is_some() {
                 return Err(RouterError::DuplicateResource {
-                    kind: mount.kind.to_string(),
+                    kind: kind.to_string(),
                 });
             }
         }
 
-        Ok((routes, MountTable { factories }))
+        Ok((routes, MountTable { mounts }))
     }
 }
 
@@ -248,6 +259,12 @@ impl<'sch, Adapter: AdapterInterface + 'sch> Router<'sch, Adapter> {
     ) -> StdResult<Self, RouterError> {
         let (routes, mount_table) = configure(PrimaryRouteBuilder::root()).into_routes().resolve()?;
         Ok(Router { routes, mount_table })
+    }
+
+    /// The router's mount table — the per-resource controller factories and link templates it
+    /// captured while building.
+    pub(crate) fn mount_table(&self) -> &MountTable<'sch, Adapter> {
+        &self.mount_table
     }
 
     pub fn handle(
