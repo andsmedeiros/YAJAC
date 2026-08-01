@@ -146,7 +146,9 @@ mod tests {
     }
 
     /// The resolution map a controller hands back for a template's dynamic segments.
-    fn resolved(entries: &[(&'static str, &'static str)]) -> HashMap<&'static str, Cow<'static, str>> {
+    fn resolved(
+        entries: &[(&'static str, &'static str)],
+    ) -> HashMap<&'static str, Cow<'static, str>> {
         entries
             .iter()
             .map(|(name, value)| (*name, Cow::Borrowed(*value)))

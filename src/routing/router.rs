@@ -257,8 +257,13 @@ impl<'sch, Adapter: AdapterInterface + 'sch> Router<'sch, Adapter> {
     pub fn try_new(
         configure: impl FnOnce(PrimaryRouteBuilder<'sch, Adapter>) -> PrimaryRouteBuilder<'sch, Adapter>,
     ) -> StdResult<Self, RouterError> {
-        let (routes, mount_table) = configure(PrimaryRouteBuilder::root()).into_routes().resolve()?;
-        Ok(Router { routes, mount_table })
+        let (routes, mount_table) = configure(PrimaryRouteBuilder::root())
+            .into_routes()
+            .resolve()?;
+        Ok(Router {
+            routes,
+            mount_table,
+        })
     }
 
     /// The router's mount table — the per-resource controller factories and link templates it
@@ -307,7 +312,11 @@ impl<'sch, Adapter: AdapterInterface + 'sch> Router<'sch, Adapter> {
                     if cfg!(debug_assertions) {
                         error
                     } else {
-                        Error::new(status.clone(), "InternalServerError", "Internal server error")
+                        Error::new(
+                            status.clone(),
+                            "InternalServerError",
+                            "Internal server error",
+                        )
                     }
                 } else {
                     error

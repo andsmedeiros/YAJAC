@@ -16,7 +16,7 @@ use crate::{
         document::Document, identifier::Identifier as ResourceIdentifier,
         primary_content::PrimaryContent, resource::Resource,
     },
-    routing::{MountTable, Error as RoutingError, RouteParameters},
+    routing::{Error as RoutingError, MountTable, RouteParameters},
 };
 use http::HeaderMap;
 use itertools::Itertools;
@@ -60,10 +60,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
     }
 
     /// Lends the router's controller lookup to this context for the duration of the request.
-    pub fn with_mount_table(
-        mut self,
-        mount_table: &'req MountTable<'sch, Adapter>,
-    ) -> Self {
+    pub fn with_mount_table(mut self, mount_table: &'req MountTable<'sch, Adapter>) -> Self {
         self.mount_table = Some(mount_table);
         self
     }

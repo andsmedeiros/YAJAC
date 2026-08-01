@@ -23,5 +23,5 @@ pub use request::Request;
 pub use responder::{default_response, respond, respond_with};
 pub use result::Result;
 pub use route_parameters::RouteParameters;
-pub use router::{MountTable, MountSlot, Router, RouterError};
+pub use router::{MountSlot, MountTable, Router, RouterError};
 pub use uri_generator::{DefaultUriGenerator, UriGenerator};

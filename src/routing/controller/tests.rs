@@ -65,8 +65,7 @@ fn schemas() -> [SchemaBuilder<'static>; 3] {
 }
 
 fn manager() -> Result<Manager, Box<dyn StdError>> {
-    let manager: Manager =
-        ConnectionManager::new(Registry::try_new(schemas())?, Pool::memory()?);
+    let manager: Manager = ConnectionManager::new(Registry::try_new(schemas())?, Pool::memory()?);
 
     manager.acquire()?.execute_batch(
         "CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL); \
@@ -266,8 +265,8 @@ fn test_create_honours_accepted_client_generated_id() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let context = Context::from_request(&manager, &uri, RouteParameters::new(), request);
 
-    let created =
-        ClientIdBooks::default().create(ResourceContext::new(schema(&manager, "books"), context))?;
+    let created = ClientIdBooks::default()
+        .create(ResourceContext::new(schema(&manager, "books"), context))?;
 
     assert_eq!(created.status(), StatusCode::CREATED);
     assert_eq!(body(&created)["data"]["id"], json!("42"));
@@ -951,7 +950,10 @@ impl<'sch> ResourceController<'sch, SqliteAdapter> for Bios {}
 // related template per named relationship. A truthful table entry the router could produce, so the
 // fixture never confuses the controller; these tests resolve the controller `related` forwards to,
 // not the templates.
-fn mount<'sch, T>(kind: &'sch str, relationships: &[&'sch str]) -> ResourceMount<'sch, SqliteAdapter>
+fn mount<'sch, T>(
+    kind: &'sch str,
+    relationships: &[&'sch str],
+) -> ResourceMount<'sch, SqliteAdapter>
 where
     T: ResourceController<'sch, SqliteAdapter> + Default + 'sch,
 {
