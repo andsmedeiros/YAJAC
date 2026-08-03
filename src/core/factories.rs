@@ -1,6 +1,8 @@
 use crate::{
     core::error::Error,
+    core::uri_generator::UriGenerator,
     database::{
+        adapters::Adapter as AdapterInterface,
         attributes::Identifier as DatabaseIdentifier,
         error::Error as DatabaseError,
         record::Record,
@@ -17,7 +19,6 @@ use crate::{
         relationship::{self, Linkage, Relationship},
         resource::{self, Resource},
     },
-    routing::UriGenerator,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -113,9 +114,9 @@ impl<'sch> TryFrom<(Identifier, &'sch Schema<'sch>)> for DatabaseIdentifier {
     }
 }
 
-pub fn make_record_resource(
-    record: &Record,
-    uri_generator: &dyn UriGenerator,
+pub(crate) fn make_record_resource<'sch, 'req, Adapter: AdapterInterface>(
+    record: &Record<'sch>,
+    generator: &UriGenerator<'sch, 'req, Adapter>,
 ) -> Result<Resource, Error> {
     let identifier = record.identifier();
     let attributes = record
@@ -160,28 +161,31 @@ pub fn make_record_resource(
                 })?
             };
 
-            let links = relationship::Links {
-                this: Some(uri_generator.uri_for_relationship(&identifier, relationship)),
-                related: Some(uri_generator.uri_for_related(&identifier, relationship))
+            let links = match (
+                generator.uri_for_linkage(record, relationship)?,
+                generator.uri_for_related(record, relationship)?,
+            ) {
+                (None, None) => None,
+                (this, related) => Some(relationship::Links { this, related }),
             };
 
             Ok((relationship.to_string(), Relationship {
                 data: Some(linkage),
-                links: Some(links),
+                links,
                 meta: None
             }))
         })
         .collect::<Result<HashMap<_, _>, _>>()?;
 
-    let links = resource::Links {
-        this: uri_generator.uri_for_resource(&identifier),
-    };
+    let links = generator
+        .uri_for_resource(record)?
+        .map(|this| resource::Links { this });
 
     Ok(Resource {
         identifier,
         attributes: Some(attributes),
         relationships: Some(relationships),
-        links: links.into(),
+        links,
         meta: None,
     })
 }
@@ -213,11 +217,11 @@ fn document_links(uri: &Uri) -> document::Links {
     }
 }
 
-pub fn to_document<'sch: 'req, 'req>(
+pub(crate) fn to_document<'sch: 'req, 'req, Adapter: AdapterInterface>(
     content: impl Into<Content<'sch, 'req>>,
-    included: Vec<Record>,
+    included: Vec<Record<'sch>>,
     uri: &Uri,
-    uri_generator: &dyn UriGenerator,
+    generator: &UriGenerator<'sch, 'req, Adapter>,
 ) -> Result<Document, Error> {
     let content = content.into();
     // `included` MUST NOT accompany a document without primary `data` (i.e. an
@@ -225,10 +229,10 @@ pub fn to_document<'sch: 'req, 'req>(
     let carries_data = !matches!(content, Content::Errors(_));
 
     let content: PrimaryContent = match content {
-        Content::Resource(record) => make_record_resource(record, uri_generator)?.into(),
+        Content::Resource(record) => make_record_resource(record, generator)?.into(),
         Content::Collection(collection) => collection
             .into_iter()
-            .map(|record| make_record_resource(record, uri_generator))
+            .map(|record| make_record_resource(record, generator))
             .collect::<Result<Vec<_>, _>>()?
             .into(),
         Content::LinkageToOne(Some(identifier)) => make_linkage_resource(identifier).into(),
@@ -243,7 +247,7 @@ pub fn to_document<'sch: 'req, 'req>(
 
     let included = included
         .into_iter()
-        .map(|record| make_record_resource(&record, uri_generator))
+        .map(|record| make_record_resource(&record, generator))
         .collect::<Result<Vec<_>, Error>>()?;
 
     Ok(Document {
