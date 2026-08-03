@@ -59,41 +59,6 @@ impl Display for ClientGeneratedIdNotSupportedError {
 
 impl StdError for ClientGeneratedIdNotSupportedError {}
 
-/// Link generation could not produce a valid URI — an unresolved dynamic segment or a path that
-/// fails to parse. Always internal: the router owns every template and resolver, so a failure here
-/// is a framework fault, not a client one.
-#[derive(Debug, Clone, Serialize)]
-pub struct LinkGenerationError {
-    pub message: String,
-}
-
-impl Display for LinkGenerationError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Failed to generate a link: {}", self.message)
-    }
-}
-
-impl StdError for LinkGenerationError {}
-
-/// A link template's dynamic route parameter could not be resolved from the request. Internal: the
-/// router mounted the template, so a parameter it cannot fill is a framework fault, not a client one.
-#[derive(Debug, Clone, Serialize)]
-pub struct UnresolvedRouteParameterError {
-    pub parameter: String,
-}
-
-impl Display for UnresolvedRouteParameterError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Could not resolve the route parameter '{}'",
-            self.parameter
-        )
-    }
-}
-
-impl StdError for UnresolvedRouteParameterError {}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ApiErrorKind {
     ModelValidationFailed,
@@ -185,26 +150,6 @@ impl From<ClientGeneratedIdNotSupportedError> for Error {
     }
 }
 
-impl From<LinkGenerationError> for Error {
-    fn from(error: LinkGenerationError) -> Self {
-        Error::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "LinkGenerationFailed",
-            error.to_string(),
-        )
-    }
-}
-
-impl From<UnresolvedRouteParameterError> for Error {
-    fn from(error: UnresolvedRouteParameterError) -> Self {
-        Error::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "UnresolvedRouteParameter",
-            error.to_string(),
-        )
-    }
-}
-
 impl From<HttpError> for Error {
     fn from(error: HttpError) -> Self {
         Error::new(
@@ -248,6 +193,11 @@ impl From<CoreError> for Error {
             CoreError::DocumentSerialisationError { .. } => Error::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "DocumentSerialisationError",
+                error.to_string(),
+            ),
+            CoreError::LinkGenerationError { .. } => Error::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "LinkGenerationFailed",
                 error.to_string(),
             ),
         }
