@@ -4,7 +4,6 @@ mod tests;
 use std::ops::{Deref, DerefMut};
 
 use crate::{
-    core::factories::{Content, to_document},
     database::{
         adapters::Adapter as AdapterInterface,
         attributes::Identifier,
@@ -20,11 +19,23 @@ use crate::{
         identifier::Identifier as JsonApiIdentifier, relationship::Linkage, resource::Resource,
     },
     routing::{
-        Context, DefaultUriGenerator, Error, Result, error::ClientGeneratedIdNotSupportedError,
+        Context, Error, Result, RouteParameters, error::ClientGeneratedIdNotSupportedError,
         responder::*,
     },
+    serialisation::factories::{Content, to_document},
 };
-use http::StatusCode;
+use http::{HeaderMap, StatusCode};
+use std::borrow::Cow;
+use std::cell::LazyCell;
+use std::collections::HashMap;
+
+/// A query parsed lazily against the resource schema; unforced until first use, then the parsed
+/// parameters or the parse failure. Boxed because the init closure captures the request's uri,
+/// schema, and registry.
+type LazyQueryParameters<'sch, 'req> = LazyCell<
+    std::result::Result<QueryParameters<'sch, 'req>, DatabaseError>,
+    Box<dyn FnOnce() -> std::result::Result<QueryParameters<'sch, 'req>, DatabaseError> + 'req>,
+>;
 
 /// A request narrowed to a single resource: the resource's schema paired with the
 /// routing context. It lends the context's request operations already bound to that
@@ -32,11 +43,20 @@ use http::StatusCode;
 pub struct ResourceContext<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> {
     schema: &'sch Schema<'sch>,
     context: Context<'sch, 'req, Adapter>,
+    query_parameters: LazyQueryParameters<'sch, 'req>,
 }
 
 impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> ResourceContext<'sch, 'req, Adapter> {
     pub fn new(schema: &'sch Schema<'sch>, context: Context<'sch, 'req, Adapter>) -> Self {
-        Self { schema, context }
+        let uri = context.uri;
+        let registry = context.manager.registry();
+        Self {
+            schema,
+            context,
+            query_parameters: LazyCell::new(Box::new(move || {
+                QueryParameters::parse(uri, schema, registry)
+            })),
+        }
     }
 
     pub fn schema(&self) -> &'sch Schema<'sch> {
@@ -52,11 +72,13 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> ResourceContext<'sch, '
         self.context.require_record(self.schema)
     }
 
-    /// Lazily parses the query string against the resource schema.
+    /// The query parsed against the resource schema, parsed once on first access.
     pub fn query_parameters(
         &self,
     ) -> std::result::Result<&QueryParameters<'sch, 'req>, DatabaseError> {
-        self.context.query_parameters(self.schema)
+        LazyCell::force(&self.query_parameters)
+            .as_ref()
+            .map_err(|error| error.clone())
     }
 
     pub fn require_resource(&mut self) -> std::result::Result<Resource, Error> {
@@ -119,6 +141,40 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
         Configuration::default()
     }
 
+    /// Resolves a route's required parameters to concrete, request-scoped values, for the router to
+    /// render a link against. The default takes the `:id` parameter from `record` — the resource's
+    /// identifier is always mounted as `:id`, regardless of the primary key's column name — and
+    /// echoes every other parameter from the request's route parameters, omitting any it cannot
+    /// resolve (an unresolved parameter leaves the link unrenderable). Override to resolve a
+    /// parameter from the request headers instead.
+    fn parameters_for_route<'req>(
+        &self,
+        record: &'req Record<'sch>,
+        route: &'req RouteParameters,
+        _headers: &'req HeaderMap,
+        required_parameters: &[&'sch str],
+    ) -> HashMap<&'sch str, Cow<'req, str>>
+    where
+        'sch: 'req,
+    {
+        required_parameters
+            .iter()
+            .filter_map(|&parameter| {
+                let value = if parameter == "id" {
+                    record.get_id().map(|id| match id {
+                        Identifier::Integer(id) => Cow::Owned(id.to_string()),
+                        Identifier::Text(id) => Cow::Borrowed(id.as_str()),
+                    })
+                } else {
+                    route
+                        .get(parameter)
+                        .map(|value| Cow::Borrowed(value.as_str()))
+                };
+                value.map(|value| (parameter, value))
+            })
+            .collect()
+    }
+
     fn index<'req>(&self, context: ResourceContext<'sch, 'req, Adapter>) -> Result
     where
         'sch: 'req,
@@ -127,12 +183,7 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
         let Composite { content, included } = context
             .store()?
             .fetch_collection(context.schema(), parameters)?;
-        let document = to_document(
-            &content,
-            included,
-            context.uri(),
-            &DefaultUriGenerator::default(),
-        )?;
+        let document = to_document(&content, included, context.uri(), &context.uri_generator())?;
 
         respond(Some(document))
     }
@@ -147,12 +198,7 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
             context
                 .store()?
                 .fetch_record(context.schema(), id, parameters)?;
-        let document = to_document(
-            &content,
-            included,
-            context.uri(),
-            &DefaultUriGenerator::default(),
-        )?;
+        let document = to_document(&content, included, context.uri(), &context.uri_generator())?;
 
         respond(Some(document))
     }
@@ -169,12 +215,7 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
 
         let parameters = context.query_parameters()?;
         let Composite { content, included } = context.store()?.create_record(record, parameters)?;
-        let document = to_document(
-            &content,
-            included,
-            context.uri(),
-            &DefaultUriGenerator::default(),
-        )?;
+        let document = to_document(&content, included, context.uri(), &context.uri_generator())?;
 
         respond_with(StatusCode::CREATED, Some(document))
     }
@@ -186,12 +227,7 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
         let record = context.require_record()?;
         let parameters = context.query_parameters()?;
         let Composite { content, included } = context.store()?.update_record(record, parameters)?;
-        let document = to_document(
-            &content,
-            included,
-            context.uri(),
-            &DefaultUriGenerator::default(),
-        )?;
+        let document = to_document(&content, included, context.uri(), &context.uri_generator())?;
 
         respond(Some(document))
     }
@@ -246,12 +282,7 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
                 .into(),
         };
 
-        let document = to_document(
-            content,
-            Vec::new(),
-            context.uri(),
-            &DefaultUriGenerator::default(),
-        )?;
+        let document = to_document(content, Vec::new(), context.uri(), &context.uri_generator())?;
 
         respond(Some(document))
     }
@@ -286,7 +317,7 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
         let uri = context.uri();
         let related_parameters = QueryParameters::parse(uri, related_schema, registry)?;
 
-        let generator = DefaultUriGenerator::default();
+        let generator = context.uri_generator();
         let document = match descriptor.kind {
             RelationshipKind::HasMany => {
                 let Composite { content, included } =
@@ -353,12 +384,7 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
             .collect::<Vec<_>>()
             .into();
 
-        let document = to_document(
-            content,
-            Vec::new(),
-            context.uri(),
-            &DefaultUriGenerator::default(),
-        )?;
+        let document = to_document(content, Vec::new(), context.uri(), &context.uri_generator())?;
 
         respond(Some(document))
     }
@@ -410,12 +436,7 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
             .collect::<Vec<_>>()
             .into();
 
-        let document = to_document(
-            content,
-            Vec::new(),
-            context.uri(),
-            &DefaultUriGenerator::default(),
-        )?;
+        let document = to_document(content, Vec::new(), context.uri(), &context.uri_generator())?;
 
         respond(Some(document))
     }
@@ -475,12 +496,7 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
             },
         };
 
-        let document = to_document(
-            content,
-            Vec::new(),
-            context.uri(),
-            &DefaultUriGenerator::default(),
-        )?;
+        let document = to_document(content, Vec::new(), context.uri(), &context.uri_generator())?;
 
         respond(Some(document))
     }

@@ -1,16 +1,17 @@
 use super::{
-    Context, DefaultUriGenerator, Error, Request, Result, RouteParameters,
+    BaseUri, Context, Error, Request, Result, RouteParameters,
     builders::{PrimaryRouteBuilder, RouteBuilder},
-    controller::{DefaultController, ResourceController},
     default_response, respond_with,
 };
 use crate::{
-    core::factories::to_document,
     database::{adapters::Adapter as AdapterInterface, connection_manager::ConnectionManager},
     http_wrappers::{StatusCode, Uri},
     json_api::{document::Document, error::Error as JsonApiError},
+    routing::mount_table::{MountTable, ResourceMount},
+    serialisation::factories::to_document,
+    serialisation::uri_generator::UriGenerator,
 };
-use http::{Method, Response};
+use http::{HeaderMap, Method, Response};
 use indexmap::IndexMap;
 use log::{debug, error};
 use std::borrow::Cow;
@@ -129,60 +130,6 @@ impl Display for RouterError {
 
 impl std::error::Error for RouterError {}
 
-/// Builds a fresh, type-erased controller instance for one resource kind.
-pub(crate) type ControllerFactory<'sch, Adapter> =
-    fn() -> Box<dyn ResourceController<'sch, Adapter> + 'sch>;
-
-/// Resolves a resource kind to its canonical controller. A kind with no mounted controller
-/// resolves to `DefaultController`.
-pub struct ControllerLookup<'sch, Adapter: AdapterInterface> {
-    factories: IndexMap<&'sch str, ControllerFactory<'sch, Adapter>>,
-}
-
-impl<'sch, Adapter: AdapterInterface + 'sch> ControllerLookup<'sch, Adapter> {
-    pub fn register<T>(mut self, kind: &'sch str) -> Self
-    where
-        T: ResourceController<'sch, Adapter> + Default + 'sch,
-    {
-        self.factories
-            .insert(kind, || Box::new(T::default()) as Box<dyn ResourceController<'sch, Adapter>>);
-        self
-    }
-
-    pub fn resolve(&self, kind: &str) -> Box<dyn ResourceController<'sch, Adapter> + 'sch> {
-        self.factories.get(kind).map_or_else(
-            || Box::new(DefaultController) as Box<dyn ResourceController<'sch, Adapter>>,
-            |factory| factory(),
-        )
-    }
-}
-
-impl<'sch, Adapter: AdapterInterface> Default for ControllerLookup<'sch, Adapter> {
-    fn default() -> Self {
-        Self {
-            factories: IndexMap::new(),
-        }
-    }
-}
-
-impl<'sch, Adapter: AdapterInterface> FromIterator<(&'sch str, ControllerFactory<'sch, Adapter>)>
-    for ControllerLookup<'sch, Adapter>
-{
-    fn from_iter<I: IntoIterator<Item = (&'sch str, ControllerFactory<'sch, Adapter>)>>(
-        iter: I,
-    ) -> Self {
-        Self {
-            factories: iter.into_iter().collect(),
-        }
-    }
-}
-
-/// The canonical mount of one resource: its kind and the factory for its controller.
-pub(crate) struct ResourceMount<'sch, Adapter: AdapterInterface> {
-    pub kind: &'sch str,
-    pub factory: ControllerFactory<'sch, Adapter>,
-}
-
 /// The accumulating product of a builder: eagerly-built routes, each carrying its build outcome,
 /// and the canonical mounts to validate once building completes. Opaque — the builder seam threads
 /// it, but nothing outside the crate can read or write it.
@@ -217,37 +164,46 @@ impl<'sch, Adapter: AdapterInterface + 'sch> MaterialisedRoutes<'sch, Adapter> {
     /// (surfacing a duplicate resource) into the finished routes and controller lookup.
     fn resolve(
         self,
-    ) -> StdResult<(Vec<Route<'sch, Adapter>>, ControllerLookup<'sch, Adapter>), RouterError> {
+    ) -> StdResult<(Vec<Route<'sch, Adapter>>, MountTable<'sch, Adapter>), RouterError> {
         let routes = self.routes.into_iter().collect::<StdResult<Vec<_>, _>>()?;
 
-        let mut factories: IndexMap<&'sch str, ControllerFactory<'sch, Adapter>> = IndexMap::new();
+        let mut mounts: IndexMap<&'sch str, ResourceMount<'sch, Adapter>> = IndexMap::new();
         for mount in self.mounts {
-            if factories.insert(mount.kind, mount.factory).is_some() {
+            let kind = mount.kind;
+            if mounts.insert(kind, mount).is_some() {
                 return Err(RouterError::DuplicateResource {
-                    kind: mount.kind.to_string(),
+                    kind: kind.to_string(),
                 });
             }
         }
 
-        Ok((routes, ControllerLookup { factories }))
+        Ok((routes, MountTable::new(mounts)))
     }
 }
 
-/// A schema-aware router: the mounted routes it dispatches to, and the controller lookup its
-/// handlers resolve related resources through.
+/// A schema-aware router: the base its links are rooted at, the mounted routes it dispatches to,
+/// and the mount table its handlers resolve controllers and link templates through.
 pub struct Router<'sch, Adapter: AdapterInterface> {
+    base_uri: BaseUri<'sch>,
     routes: Vec<Route<'sch, Adapter>>,
-    controllers: ControllerLookup<'sch, Adapter>,
+    pub(crate) mount_table: MountTable<'sch, Adapter>,
 }
 
 impl<'sch, Adapter: AdapterInterface + 'sch> Router<'sch, Adapter> {
     /// Assembles a router: runs `configure` against a root builder, then validates the eagerly
-    /// built routes and their canonical mounts.
+    /// built routes and their canonical mounts. `base_uri` roots every link the router mints.
     pub fn try_new(
+        base_uri: BaseUri<'sch>,
         configure: impl FnOnce(PrimaryRouteBuilder<'sch, Adapter>) -> PrimaryRouteBuilder<'sch, Adapter>,
     ) -> StdResult<Self, RouterError> {
-        let (routes, controllers) = configure(PrimaryRouteBuilder::root()).into_routes().resolve()?;
-        Ok(Router { routes, controllers })
+        let (routes, mount_table) = configure(PrimaryRouteBuilder::root())
+            .into_routes()
+            .resolve()?;
+        Ok(Router {
+            base_uri,
+            routes,
+            mount_table,
+        })
     }
 
     pub fn handle(
@@ -270,8 +226,14 @@ impl<'sch, Adapter: AdapterInterface + 'sch> Router<'sch, Adapter> {
                 debug!("Matched {method} {uri}");
                 let (parts, body) = request.into_parts();
                 let request = Request::from_parts(parts, serde_json::from_slice(&body)?);
-                let context = Context::from_request(database, &uri, parameters, request)
-                    .with_controllers(&self.controllers);
+                let context = Context::from_request(
+                    database,
+                    &self.base_uri,
+                    &self.mount_table,
+                    &uri,
+                    parameters,
+                    request,
+                );
                 (route.handler)(context)
             })
             .unwrap_or_else(|| {
@@ -290,17 +252,27 @@ impl<'sch, Adapter: AdapterInterface + 'sch> Router<'sch, Adapter> {
                     if cfg!(debug_assertions) {
                         error
                     } else {
-                        Error::new(status.clone(), "InternalServerError", "Internal server error")
+                        Error::new(
+                            status.clone(),
+                            "InternalServerError",
+                            "Internal server error",
+                        )
                     }
                 } else {
                     error
                 };
 
+                // An errors document carries no resource links; the generator is never driven, but
+                // `to_document` takes one uniformly, so lend it a bare view over the request.
+                let route = RouteParameters::new();
+                let headers = HeaderMap::new();
+                let generator =
+                    UriGenerator::new(&self.base_uri, &self.mount_table, &route, &headers);
                 let document = to_document(
                     vec![JsonApiError::from(error)],
                     Vec::new(),
                     &uri,
-                    &DefaultUriGenerator::default(),
+                    &generator,
                 )?;
 
                 respond_with(status.into(), Some(document))

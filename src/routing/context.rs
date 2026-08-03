@@ -16,11 +16,19 @@ use crate::{
         document::Document, identifier::Identifier as ResourceIdentifier,
         primary_content::PrimaryContent, resource::Resource,
     },
-    routing::{ControllerLookup, Error as RoutingError, RouteParameters},
+    routing::{BaseUri, Error as RoutingError, MountTable, RouteParameters},
+    serialisation::uri_generator::UriGenerator,
 };
 use http::HeaderMap;
 use itertools::Itertools;
-use std::cell::OnceCell;
+use std::cell::LazyCell;
+
+/// A lazily-acquired request connection: unforced until first use, then the pooled handle or the
+/// failure that acquiring it produced. Boxed because the init closure captures the manager.
+type LazyConnection<'sch, Adapter> = LazyCell<
+    Result<<Adapter as AdapterInterface>::Connection, Error>,
+    Box<dyn FnOnce() -> Result<<Adapter as AdapterInterface>::Connection, Error> + 'sch>,
+>;
 
 pub struct Context<'sch, 'req, Adapter: AdapterInterface>
 where
@@ -28,60 +36,52 @@ where
 {
     pub manager: &'sch ConnectionManager<'sch, Adapter>,
     pub uri: &'req Uri,
+    base_uri: &'req BaseUri<'sch>,
+    mount_table: &'req MountTable<'sch, Adapter>,
     body: Option<Document>,
     headers: HeaderMap,
     route: RouteParameters,
-    query: OnceCell<QueryParameters<'sch, 'req>>,
-    connection: OnceCell<Adapter::Connection>,
-    controllers: Option<&'req ControllerLookup<'sch, Adapter>>,
+    connection: LazyConnection<'sch, Adapter>,
 }
 
 impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
     /// Builds a context from the request, harvesting its owned body and headers and discarding the
     /// rest; `uri` is lent separately so the borrowing query parameters can reference it.
-    pub fn from_request(
+    pub(crate) fn from_request(
         manager: &'sch ConnectionManager<'sch, Adapter>,
+        base_uri: &'req BaseUri<'sch>,
+        mount_table: &'req MountTable<'sch, Adapter>,
         uri: &'req Uri,
         route: RouteParameters,
         request: Request,
     ) -> Self {
         let (parts, body) = request.into_parts();
+        let acquire: Box<dyn FnOnce() -> Result<Adapter::Connection, Error> + 'sch> =
+            Box::new(move || manager.acquire());
 
         Self {
             manager,
             uri,
+            base_uri,
+            mount_table,
             body,
             headers: parts.headers,
             route,
-            query: OnceCell::new(),
-            connection: OnceCell::new(),
-            controllers: None,
+            connection: LazyCell::new(acquire),
         }
     }
 
-    /// Lends the router's controller lookup to this context for the duration of the request.
-    pub fn with_controllers(
-        mut self,
-        controllers: &'req ControllerLookup<'sch, Adapter>,
-    ) -> Self {
-        self.controllers = Some(controllers);
-        self
-    }
-
-    /// The router's controller lookup, absent when the context was not built by a router.
-    pub fn controllers(&self) -> Option<&'req ControllerLookup<'sch, Adapter>> {
-        self.controllers
+    /// The link generator for this request, resolving each record's links against where its type is
+    /// mounted. Cheap to build — a view over the base, the mount table, and the request.
+    pub(crate) fn uri_generator(&self) -> UriGenerator<'sch, '_, Adapter> {
+        UriGenerator::new(self.base_uri, self.mount_table, &self.route, &self.headers)
     }
 
     /// Lazily acquires the request connection from the pool and lends it as a shared reference.
     pub fn connection(&self) -> Result<&Adapter::Connection, Error> {
-        match self.connection.get() {
-            Some(connection) => Ok(connection),
-            None => {
-                let connection = self.manager.acquire()?;
-                Ok(self.connection.get_or_init(|| connection))
-            }
-        }
+        LazyCell::force(&self.connection)
+            .as_ref()
+            .map_err(|error| error.clone())
     }
 
     pub fn table(&self, name: &str) -> Result<Adapter::Table<'sch, '_>, Error> {
@@ -356,16 +356,13 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
         &self.route
     }
 
-    pub fn query_parameters(
+    /// Parses this request's query string against `schema` — the hatch for a `QueryParameters` bound
+    /// to any schema (e.g. `related`'s related type). Uncached; the cached, own-schema query is the
+    /// `LazyCell` on `ResourceContext`.
+    pub fn parse_query(
         &self,
         schema: &'sch Schema<'sch>,
-    ) -> Result<&QueryParameters<'sch, 'req>, Error> {
-        match self.query.get() {
-            Some(parameters) => Ok(parameters),
-            None => {
-                let parameters = QueryParameters::parse(self.uri, schema, self.manager.registry())?;
-                Ok(self.query.get_or_init(|| parameters))
-            }
-        }
+    ) -> Result<QueryParameters<'sch, 'req>, Error> {
+        QueryParameters::parse(self.uri, schema, self.manager.registry())
     }
 }

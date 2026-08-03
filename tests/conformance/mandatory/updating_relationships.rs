@@ -202,11 +202,7 @@ fn clearing_a_to_many_relationship_takes_effect() -> TestResult {
 fn deleting_named_members_leaves_the_rest() -> TestResult {
     let api = Api::new()?;
     let body = json!({ "data": [{ "type": "articles", "id": "1" }] });
-    let response = api.request(
-        "DELETE",
-        &relationship_url("authors", "3", "edited"),
-        body,
-    )?;
+    let response = api.request("DELETE", &relationship_url("authors", "3", "edited"), body)?;
 
     if response.status() == 403 && !enforced(Affordance::RelationshipDelete) {
         log::info!("relationship-member deletion unsupported (403); skipping");
