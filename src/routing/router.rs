@@ -4,12 +4,12 @@ use super::{
     default_response, respond_with,
 };
 use crate::{
-    core::factories::to_document,
-    core::uri_generator::UriGenerator,
     database::{adapters::Adapter as AdapterInterface, connection_manager::ConnectionManager},
     http_wrappers::{StatusCode, Uri},
     json_api::{document::Document, error::Error as JsonApiError},
     routing::mount_table::{MountTable, ResourceMount},
+    serialisation::factories::to_document,
+    serialisation::uri_generator::UriGenerator,
 };
 use http::{HeaderMap, Method, Response};
 use indexmap::IndexMap;

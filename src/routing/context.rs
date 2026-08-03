@@ -7,7 +7,6 @@ use crate::database::schema::{IdentifierType, RelationshipDescriptor, Relationsh
 use crate::json_api::identifier::Identifier as JsonApiIdentifier;
 use crate::json_api::relationship::Linkage;
 use crate::{
-    core::uri_generator::UriGenerator,
     database::{
         adapters::Adapter as AdapterInterface, connection::Connection as ConnectionInterface,
         connection_manager::ConnectionManager, query_parameters::QueryParameters, store::Store,
@@ -18,6 +17,7 @@ use crate::{
         primary_content::PrimaryContent, resource::Resource,
     },
     routing::{BaseUri, Error as RoutingError, MountTable, RouteParameters},
+    serialisation::uri_generator::UriGenerator,
 };
 use http::HeaderMap;
 use itertools::Itertools;

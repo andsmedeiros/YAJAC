@@ -1,6 +1,6 @@
+use super::error::Error;
+use super::uri_generator::UriGenerator;
 use crate::{
-    core::error::Error,
-    core::uri_generator::UriGenerator,
     database::{
         adapters::Adapter as AdapterInterface,
         attributes::Identifier as DatabaseIdentifier,

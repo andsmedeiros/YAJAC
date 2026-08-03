@@ -1,4 +1,4 @@
-use crate::core::error::Error;
+use super::error::Error;
 use crate::database::adapters::Adapter as AdapterInterface;
 use crate::database::record::Record;
 use crate::http_wrappers::Uri;

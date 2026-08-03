@@ -4,7 +4,6 @@ mod tests;
 use std::ops::{Deref, DerefMut};
 
 use crate::{
-    core::factories::{Content, to_document},
     database::{
         adapters::Adapter as AdapterInterface,
         attributes::Identifier,
@@ -23,6 +22,7 @@ use crate::{
         Context, Error, Result, RouteParameters, error::ClientGeneratedIdNotSupportedError,
         responder::*,
     },
+    serialisation::factories::{Content, to_document},
 };
 use http::{HeaderMap, StatusCode};
 use std::borrow::Cow;

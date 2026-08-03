@@ -1,8 +1,8 @@
 use crate::{
-    core::error::Error as CoreError,
     database::error::Error as DatabaseError,
     http_wrappers::StatusCode,
     json_api::error::{Error as JsonApiError, Source},
+    serialisation::error::Error as CoreError,
 };
 use http::Error as HttpError;
 use serde::{Deserialize, Serialize};
