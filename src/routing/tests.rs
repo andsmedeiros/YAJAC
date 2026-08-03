@@ -6,7 +6,7 @@ use crate::database::schema::{AttributeType, Related, SchemaBuilder};
 use crate::json_api::document::Document;
 use crate::routing::controller::{ResourceContext, ResourceController};
 use crate::routing::responder::respond_with;
-use crate::routing::{Context, Result as RouteResult, Router, RouterError, UnboundVerbs};
+use crate::routing::{BaseUri, Context, Result as RouteResult, Router, RouterError, UnboundVerbs};
 use http::{Response, StatusCode};
 use serde_json::{Value, json};
 use std::borrow::Cow;
@@ -161,7 +161,7 @@ fn standard_router(manager: &Manager) -> Result<Router<'_, SqliteAdapter>, Box<d
     let articles = manager.registry().schema("articles")?;
     let comments = manager.registry().schema("comments")?;
     let drafts = manager.registry().schema("drafts")?;
-    Ok(Router::try_new(|root| {
+    Ok(Router::try_new(BaseUri::Relative, |root| {
         root.resource::<Articles>("articles", articles)
             .resource::<Comments>("comments", comments)
             .resource::<Drafts>("drafts", drafts)
@@ -170,7 +170,7 @@ fn standard_router(manager: &Manager) -> Result<Router<'_, SqliteAdapter>, Box<d
 
 fn read_only_router(manager: &Manager) -> Result<Router<'_, SqliteAdapter>, Box<dyn StdError>> {
     let summaries = manager.registry().schema("summaries")?;
-    Ok(Router::try_new(|root| {
+    Ok(Router::try_new(BaseUri::Relative, |root| {
         root.read_only_resource::<Summaries>("summaries", summaries)
     })?)
 }
@@ -230,8 +230,8 @@ fn test_mount_captures_link_templates() -> TestResult {
     let manager = manager()?;
     let router = standard_router(&manager)?;
     let mount = router
-        .mount_table()
-        .mount("articles")
+        .mount_table
+        .get("articles")
         .expect("articles is mounted");
 
     // The base is the collection prefix; the resource path is the base plus `:id`, derived at render.
@@ -571,7 +571,7 @@ fn test_linkage_only_family_omits_related_link() -> TestResult {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let comments = manager.registry().schema("comments")?;
-    let router = Router::try_new(|root| {
+    let router = Router::try_new(BaseUri::Relative, |root| {
         root.resource::<Comments>("comments", comments)
             .resource_with::<Articles>("articles", articles, |articles| {
                 articles.linkage("comments")
@@ -609,7 +609,7 @@ fn test_related_only_family_omits_self_link() -> TestResult {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let comments = manager.registry().schema("comments")?;
-    let router = Router::try_new(|root| {
+    let router = Router::try_new(BaseUri::Relative, |root| {
         root.resource::<Comments>("comments", comments)
             .resource_with::<Articles>("articles", articles, |articles| {
                 articles.related("comments")
@@ -647,7 +647,7 @@ fn test_at_override_relocates_relationship_paths() -> TestResult {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let comments = manager.registry().schema("comments")?;
-    let router = Router::try_new(|root| {
+    let router = Router::try_new(BaseUri::Relative, |root| {
         root.resource::<Comments>("comments", comments)
             .resource_with::<Articles>("articles", articles, |articles| {
                 articles
@@ -697,7 +697,7 @@ fn test_read_only_relationship_config_forbids_writes() -> TestResult {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let comments = manager.registry().schema("comments")?;
-    let router = Router::try_new(|root| {
+    let router = Router::try_new(BaseUri::Relative, |root| {
         root.resource::<Comments>("comments", comments)
             .resource_with::<Articles>("articles", articles, |articles| {
                 articles.relationship_with("comments", |config| config.read_only())
@@ -735,7 +735,7 @@ fn test_relationships_subset_mounts_only_named() -> TestResult {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let comments = manager.registry().schema("comments")?;
-    let router = Router::try_new(|root| {
+    let router = Router::try_new(BaseUri::Relative, |root| {
         root.resource::<Comments>("comments", comments)
             .resource_with::<Articles>("articles", articles, |articles| {
                 articles.relationships(&["comments"])
@@ -774,7 +774,7 @@ fn test_all_relationships_enumerates_every_relationship() -> TestResult {
     let articles = manager.registry().schema("articles")?;
     let comments = manager.registry().schema("comments")?;
     let drafts = manager.registry().schema("drafts")?;
-    let router = Router::try_new(|root| {
+    let router = Router::try_new(BaseUri::Relative, |root| {
         root.resource::<Comments>("comments", comments)
             .resource::<Drafts>("drafts", drafts)
             .resource_with::<Articles>("articles", articles, |articles| {
@@ -814,7 +814,7 @@ fn test_all_relationships_enumerates_every_relationship() -> TestResult {
 fn test_member_route_is_record_scoped() -> TestResult {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
-    let router = Router::try_new(|root| {
+    let router = Router::try_new(BaseUri::Relative, |root| {
         root.resource_with::<Articles>("articles", articles, |articles| {
             articles.member(|member| member.post("publish", publish))
         })
@@ -837,7 +837,7 @@ fn test_member_route_is_record_scoped() -> TestResult {
 fn test_collection_route_is_collection_scoped() -> TestResult {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
-    let router = Router::try_new(|root| {
+    let router = Router::try_new(BaseUri::Relative, |root| {
         root.resource_with::<Articles>("articles", articles, |articles| {
             articles.collection(|collection| collection.get("search", search))
         })
@@ -854,7 +854,7 @@ fn test_collection_route_is_collection_scoped() -> TestResult {
 fn test_unbound_leaf_route() -> TestResult {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
-    let router = Router::try_new(|root| {
+    let router = Router::try_new(BaseUri::Relative, |root| {
         root.resource_with::<Articles>("articles", articles, |articles| {
             articles.get("health", health)
         })
@@ -883,7 +883,7 @@ fn test_unknown_route_is_not_found() -> TestResult {
 fn test_duplicate_resource_is_rejected() -> TestResult {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
-    let result = Router::try_new(|root| {
+    let result = Router::try_new(BaseUri::Relative, |root| {
         root.resource::<Articles>("articles", articles)
             .resource::<Articles>("posts", articles)
     });
@@ -898,7 +898,7 @@ fn test_duplicate_relationship_slot_is_rejected() -> TestResult {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let comments = manager.registry().schema("comments")?;
-    let result = Router::try_new(|root| {
+    let result = Router::try_new(BaseUri::Relative, |root| {
         root.resource::<Comments>("comments", comments)
             .resource_with::<Articles>("articles", articles, |articles| {
                 articles.relationship("comments").linkage("comments")
@@ -918,7 +918,7 @@ fn test_all_relationships_after_individual_is_rejected() -> TestResult {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let comments = manager.registry().schema("comments")?;
-    let result = Router::try_new(|root| {
+    let result = Router::try_new(BaseUri::Relative, |root| {
         root.resource::<Comments>("comments", comments)
             .resource_with::<Articles>("articles", articles, |articles| {
                 articles.relationship("comments").all_relationships()
@@ -937,7 +937,7 @@ fn test_all_relationships_after_individual_is_rejected() -> TestResult {
 fn test_unknown_relationship_is_rejected() -> TestResult {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
-    let result = Router::try_new(|root| {
+    let result = Router::try_new(BaseUri::Relative, |root| {
         root.resource_with::<Articles>("articles", articles, |articles| {
             articles.relationship("ghost")
         })
@@ -956,7 +956,9 @@ fn test_unmounted_resource_is_allowed() -> TestResult {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     // `comments`, `drafts`, and `summaries` are registered but never mounted.
-    let result = Router::try_new(|root| root.resource::<Articles>("articles", articles));
+    let result = Router::try_new(BaseUri::Relative, |root| {
+        root.resource::<Articles>("articles", articles)
+    });
 
     assert!(result.is_ok());
 

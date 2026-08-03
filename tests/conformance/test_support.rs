@@ -11,15 +11,17 @@
 // A shared toolbox: not every test module uses every accessor.
 #![allow(dead_code)]
 
+use crate::validations::BASE_URL;
 use http::{HeaderMap, Method, StatusCode};
 use serde_json::Value;
+use std::borrow::Cow;
 use yajac::database::adapters::SqliteAdapter;
 use yajac::database::adapters::sqlite::Pool;
 use yajac::database::connection_manager::ConnectionManager;
 use yajac::database::registry::Registry;
 use yajac::database::schema::{AttributeType, IdentifierType, Related, SchemaBuilder};
-use yajac::routing::Router;
 use yajac::routing::controller::{Configuration, ResourceController};
+use yajac::routing::{BaseUri, Router};
 
 pub type BoxError = Box<dyn std::error::Error>;
 pub type TestResult = Result<(), BoxError>;
@@ -260,7 +262,7 @@ impl Api {
         let comments = registry.schema("comments")?;
         let profiles = registry.schema("profiles")?;
         let tags = registry.schema("tags")?;
-        let router = Router::try_new(|root| {
+        let router = Router::try_new(BaseUri::Absolute(Cow::Borrowed(BASE_URL)), |root| {
             root.resource::<Authors>("authors", authors)
                 .resource::<Articles>("articles", articles)
                 .resource::<Comments>("comments", comments)
