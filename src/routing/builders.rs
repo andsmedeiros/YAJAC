@@ -1,10 +1,8 @@
 use super::{
     Context, Error, Result,
     controller::{ResourceContext, ResourceController},
-    router::{
-        Handler, MaterialisedRoutes, MountSlot, RelationshipMounts, ResourceMount, Route,
-        RouterError, split_segments,
-    },
+    mount_table::{RelationshipMounts, ResourceMount},
+    router::{Handler, MaterialisedRoutes, MountSlot, Route, RouterError, split_segments},
 };
 use crate::database::{
     adapters::Adapter as AdapterInterface,

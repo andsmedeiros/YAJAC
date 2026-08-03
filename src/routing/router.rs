@@ -1,16 +1,17 @@
 use super::{
-    Context, DefaultUriGenerator, Error, Request, Result, RouteParameters,
+    BaseUri, Context, Error, Request, Result, RouteParameters,
     builders::{PrimaryRouteBuilder, RouteBuilder},
-    controller::{DefaultController, ResourceController},
     default_response, respond_with,
 };
 use crate::{
     core::factories::to_document,
+    core::uri_generator::UriGenerator,
     database::{adapters::Adapter as AdapterInterface, connection_manager::ConnectionManager},
     http_wrappers::{StatusCode, Uri},
     json_api::{document::Document, error::Error as JsonApiError},
+    routing::mount_table::{MountTable, ResourceMount},
 };
-use http::{Method, Response};
+use http::{HeaderMap, Method, Response};
 use indexmap::IndexMap;
 use log::{debug, error};
 use std::borrow::Cow;
@@ -129,70 +130,6 @@ impl Display for RouterError {
 
 impl std::error::Error for RouterError {}
 
-/// Builds a fresh, type-erased controller instance for one resource kind.
-pub(crate) type ControllerFactory<'sch, Adapter> =
-    fn() -> Box<dyn ResourceController<'sch, Adapter> + 'sch>;
-
-/// The two canonical link templates of one mounted relationship, each present only when its
-/// endpoint was mounted. The segments mirror the mounted route's path, so a link rendered from a
-/// template always lands on a real route.
-#[derive(Default)]
-pub(crate) struct RelationshipMounts<'sch> {
-    pub linkage: Option<Vec<Cow<'sch, str>>>,
-    pub related: Option<Vec<Cow<'sch, str>>>,
-}
-
-/// The canonical mount of one resource: its kind, its controller factory, and the path templates
-/// its links are rendered from — the `base` (collection) prefix, from which the resource path is
-/// `base` + `:id`, and each mounted relationship.
-pub(crate) struct ResourceMount<'sch, Adapter: AdapterInterface> {
-    pub kind: &'sch str,
-    pub factory: ControllerFactory<'sch, Adapter>,
-    pub base: Vec<Cow<'sch, str>>,
-    pub relationships: IndexMap<&'sch str, RelationshipMounts<'sch>>,
-}
-
-/// Resolves a resource kind to its mount: the controller factory and the link templates the router
-/// captured for it. A kind with no mounted resource resolves to `DefaultController` and no links.
-pub struct MountTable<'sch, Adapter: AdapterInterface> {
-    mounts: IndexMap<&'sch str, ResourceMount<'sch, Adapter>>,
-}
-
-impl<'sch, Adapter: AdapterInterface + 'sch> MountTable<'sch, Adapter> {
-    /// The controller serving `kind`, or `DefaultController` when `kind` is unmounted.
-    pub fn resolve(&self, kind: &str) -> Box<dyn ResourceController<'sch, Adapter> + 'sch> {
-        self.mounts.get(kind).map_or_else(
-            || Box::new(DefaultController) as Box<dyn ResourceController<'sch, Adapter>>,
-            |mount| (mount.factory)(),
-        )
-    }
-
-    /// The mount for `kind`, absent when `kind` is unmounted — the source of its link templates.
-    pub(crate) fn mount(&self, kind: &str) -> Option<&ResourceMount<'sch, Adapter>> {
-        self.mounts.get(kind)
-    }
-}
-
-impl<'sch, Adapter: AdapterInterface> Default for MountTable<'sch, Adapter> {
-    fn default() -> Self {
-        Self {
-            mounts: IndexMap::new(),
-        }
-    }
-}
-
-impl<'sch, Adapter: AdapterInterface> FromIterator<ResourceMount<'sch, Adapter>>
-    for MountTable<'sch, Adapter>
-{
-    /// Collects complete mounts into a table by kind, last write winning. Unlike the router's own
-    /// assembly it does not reject duplicates — a hand-built table (in tests) owns that.
-    fn from_iter<I: IntoIterator<Item = ResourceMount<'sch, Adapter>>>(iter: I) -> Self {
-        Self {
-            mounts: iter.into_iter().map(|mount| (mount.kind, mount)).collect(),
-        }
-    }
-}
-
 /// The accumulating product of a builder: eagerly-built routes, each carrying its build outcome,
 /// and the canonical mounts to validate once building completes. Opaque — the builder seam threads
 /// it, but nothing outside the crate can read or write it.
@@ -240,36 +177,33 @@ impl<'sch, Adapter: AdapterInterface + 'sch> MaterialisedRoutes<'sch, Adapter> {
             }
         }
 
-        Ok((routes, MountTable { mounts }))
+        Ok((routes, MountTable::new(mounts)))
     }
 }
 
-/// A schema-aware router: the mounted routes it dispatches to, and the controller lookup its
-/// handlers resolve related resources through.
+/// A schema-aware router: the base its links are rooted at, the mounted routes it dispatches to,
+/// and the mount table its handlers resolve controllers and link templates through.
 pub struct Router<'sch, Adapter: AdapterInterface> {
+    base_uri: BaseUri<'sch>,
     routes: Vec<Route<'sch, Adapter>>,
-    mount_table: MountTable<'sch, Adapter>,
+    pub(crate) mount_table: MountTable<'sch, Adapter>,
 }
 
 impl<'sch, Adapter: AdapterInterface + 'sch> Router<'sch, Adapter> {
     /// Assembles a router: runs `configure` against a root builder, then validates the eagerly
-    /// built routes and their canonical mounts.
+    /// built routes and their canonical mounts. `base_uri` roots every link the router mints.
     pub fn try_new(
+        base_uri: BaseUri<'sch>,
         configure: impl FnOnce(PrimaryRouteBuilder<'sch, Adapter>) -> PrimaryRouteBuilder<'sch, Adapter>,
     ) -> StdResult<Self, RouterError> {
         let (routes, mount_table) = configure(PrimaryRouteBuilder::root())
             .into_routes()
             .resolve()?;
         Ok(Router {
+            base_uri,
             routes,
             mount_table,
         })
-    }
-
-    /// The router's mount table — the per-resource controller factories and link templates it
-    /// captured while building.
-    pub(crate) fn mount_table(&self) -> &MountTable<'sch, Adapter> {
-        &self.mount_table
     }
 
     pub fn handle(
@@ -292,8 +226,14 @@ impl<'sch, Adapter: AdapterInterface + 'sch> Router<'sch, Adapter> {
                 debug!("Matched {method} {uri}");
                 let (parts, body) = request.into_parts();
                 let request = Request::from_parts(parts, serde_json::from_slice(&body)?);
-                let context = Context::from_request(database, &uri, parameters, request)
-                    .with_mount_table(&self.mount_table);
+                let context = Context::from_request(
+                    database,
+                    &self.base_uri,
+                    &self.mount_table,
+                    &uri,
+                    parameters,
+                    request,
+                );
                 (route.handler)(context)
             })
             .unwrap_or_else(|| {
@@ -322,11 +262,17 @@ impl<'sch, Adapter: AdapterInterface + 'sch> Router<'sch, Adapter> {
                     error
                 };
 
+                // An errors document carries no resource links; the generator is never driven, but
+                // `to_document` takes one uniformly, so lend it a bare view over the request.
+                let route = RouteParameters::new();
+                let headers = HeaderMap::new();
+                let generator =
+                    UriGenerator::new(&self.base_uri, &self.mount_table, &route, &headers);
                 let document = to_document(
                     vec![JsonApiError::from(error)],
                     Vec::new(),
                     &uri,
-                    &DefaultUriGenerator::default(),
+                    &generator,
                 )?;
 
                 respond_with(status.into(), Some(document))
