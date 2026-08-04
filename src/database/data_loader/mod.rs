@@ -170,12 +170,13 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
         if requested {
             if joins_on_primary_key {
                 for record in collection {
-                    if let Some(related_id) = record.get_owned(descriptor.keys.own)
-                        && !matches!(related_id, Attribute::Null)
-                    {
-                        record
-                            .relationships
-                            .insert(relationship, BelongsTo(Identifier::try_from(related_id)?));
+                    if let Some(related_id) = record.get_owned(descriptor.keys.own) {
+                        let value = if matches!(related_id, Attribute::Null) {
+                            Empty
+                        } else {
+                            BelongsTo(Identifier::try_from(related_id)?)
+                        };
+                        record.relationships.insert(relationship, value);
                     }
                 }
             } else {
@@ -186,28 +187,27 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
                 )?;
 
                 for record in collection {
-                    if let Some(attribute) = record.get_owned(descriptor.keys.own)
-                        && !matches!(attribute, Attribute::Null)
-                    {
-                        let related_id = index
-                            .get(&attribute)
-                            .copied()
-                            .ok_or_else(|| {
-                                let id = record.require_id()
+                    if let Some(attribute) = record.get_owned(descriptor.keys.own) {
+                        let value = if matches!(attribute, Attribute::Null) {
+                            Empty
+                        } else {
+                            let related_id = index.get(&attribute).copied().ok_or_else(|| {
+                                let id = record
+                                    .require_id()
                                     .map(ToString::to_string)
                                     .unwrap_or("".to_string());
 
                                 Error::DataLoadingError {
-                                message: format!(
-                                    "Relationship '{}' of model '{}' with id '{}' references record '{}' with attribute '{}' set to '{}', but the record was not found",
-                                    relationship, record.schema.name(), id,
-                                    descriptor.resource, descriptor.keys.related, attribute
-                                )
-                            }
+                                    message: format!(
+                                        "Relationship '{}' of model '{}' with id '{}' references record '{}' with attribute '{}' set to '{}', but the record was not found",
+                                        relationship, record.schema.name(), id,
+                                        descriptor.resource, descriptor.keys.related, attribute
+                                    ),
+                                }
                             })?;
-                        record
-                            .relationships
-                            .insert(relationship, BelongsTo(related_id.clone()));
+                            BelongsTo(related_id.clone())
+                        };
+                        record.relationships.insert(relationship, value);
                     }
                 }
             }
@@ -239,12 +239,12 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
 
         if query_parameters.is_requested(relationship) {
             for record in collection {
-                if let Some(attribute) = record.get_owned(descriptor.keys.own)
-                    && let Some(related_id) = index.get(&attribute).copied()
-                {
-                    record
-                        .relationships
-                        .insert(relationship, HasOne(related_id.clone()));
+                if let Some(attribute) = record.get_owned(descriptor.keys.own) {
+                    let value = match index.get(&attribute).copied() {
+                        Some(related_id) => HasOne(related_id.clone()),
+                        None => Empty,
+                    };
+                    record.relationships.insert(relationship, value);
                 }
             }
         }
@@ -275,9 +275,8 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
 
         if query_parameters.is_requested(relationship) {
             for record in collection {
-                if let Some(attribute) = record.get_owned(descriptor.keys.own)
-                    && let Some(related_ids) = index.remove(&attribute)
-                {
+                if let Some(attribute) = record.get_owned(descriptor.keys.own) {
+                    let related_ids = index.remove(&attribute).unwrap_or_default();
                     record
                         .relationships
                         .insert(relationship, HasMany(related_ids));
