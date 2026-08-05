@@ -19,7 +19,7 @@ use crate::{
         identifier::Identifier as JsonApiIdentifier, relationship::Linkage, resource::Resource,
     },
     routing::{
-        Context, Error, Result, RouteParameters, error::ClientGeneratedIdNotSupportedError,
+        Error, PrimaryContext, Result, RouteParameters, error::ClientGeneratedIdNotSupportedError,
         responder::*,
     },
     serialisation::factories::{Content, to_document},
@@ -42,12 +42,12 @@ type LazyQueryParameters<'sch, 'req> = LazyCell<
 /// schema, so controller handlers never thread the schema through by hand.
 pub struct ResourceContext<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> {
     schema: &'sch Schema<'sch>,
-    context: Context<'sch, 'req, Adapter>,
+    context: PrimaryContext<'sch, 'req, Adapter>,
     query_parameters: LazyQueryParameters<'sch, 'req>,
 }
 
 impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> ResourceContext<'sch, 'req, Adapter> {
-    pub fn new(schema: &'sch Schema<'sch>, context: Context<'sch, 'req, Adapter>) -> Self {
+    pub fn new(schema: &'sch Schema<'sch>, context: PrimaryContext<'sch, 'req, Adapter>) -> Self {
         let uri = context.uri;
         let registry = context.manager.registry();
         Self {
@@ -109,7 +109,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> ResourceContext<'sch, '
 impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> Deref
     for ResourceContext<'sch, 'req, Adapter>
 {
-    type Target = Context<'sch, 'req, Adapter>;
+    type Target = PrimaryContext<'sch, 'req, Adapter>;
 
     fn deref(&self) -> &Self::Target {
         &self.context

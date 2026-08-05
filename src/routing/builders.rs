@@ -1,5 +1,5 @@
 use super::{
-    Context, Error, Result,
+    Error, PrimaryContext, Result,
     controller::{ResourceContext, ResourceController},
     mount_table::{RelationshipMounts, ResourceMount},
     router::{Handler, MaterialisedRoutes, MountSlot, Route, RouterError, split_segments},
@@ -97,7 +97,7 @@ impl<'sch, T, Adapter: AdapterInterface> ResourceHandler<'sch, Adapter> for T wh
 
 /// The refusal a read-only mount serves for an unsupported write.
 fn forbidden<'sch, 'req, Adapter: AdapterInterface>(
-    _context: Context<'sch, 'req, Adapter>,
+    _context: PrimaryContext<'sch, 'req, Adapter>,
 ) -> Result {
     Err(Error::new(
         StatusCode::FORBIDDEN,

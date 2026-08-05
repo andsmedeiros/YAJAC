@@ -1,5 +1,5 @@
 use super::{
-    BaseUri, Context, Error, Request, Result, RouteParameters,
+    BaseUri, Error, PrimaryContext, Request, Result, RouteParameters,
     builders::{PrimaryRouteBuilder, RouteBuilder},
     default_response, respond_with,
 };
@@ -20,12 +20,12 @@ use std::result::Result as StdResult;
 
 /// A schema-oblivious request handler: the leaf every mounted route resolves to.
 pub trait Handler<'sch, Adapter: AdapterInterface>:
-    for<'req> Fn(Context<'sch, 'req, Adapter>) -> Result + Sync + Send + 'sch
+    for<'req> Fn(PrimaryContext<'sch, 'req, Adapter>) -> Result + Sync + Send + 'sch
 {
 }
 
 impl<'sch, T, Adapter: AdapterInterface> Handler<'sch, Adapter> for T where
-    T: for<'req> Fn(Context<'sch, 'req, Adapter>) -> Result + Sync + Send + 'sch
+    T: for<'req> Fn(PrimaryContext<'sch, 'req, Adapter>) -> Result + Sync + Send + 'sch
 {
 }
 
@@ -226,7 +226,7 @@ impl<'sch, Adapter: AdapterInterface + 'sch> Router<'sch, Adapter> {
                 debug!("Matched {method} {uri}");
                 let (parts, body) = request.into_parts();
                 let request = Request::from_parts(parts, serde_json::from_slice(&body)?);
-                let context = Context::from_request(
+                let context = PrimaryContext::from_request(
                     database,
                     &self.base_uri,
                     &self.mount_table,

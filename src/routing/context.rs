@@ -30,7 +30,7 @@ type LazyConnection<'sch, Adapter> = LazyCell<
     Box<dyn FnOnce() -> Result<<Adapter as AdapterInterface>::Connection, Error> + 'sch>,
 >;
 
-pub struct Context<'sch, 'req, Adapter: AdapterInterface>
+pub struct PrimaryContext<'sch, 'req, Adapter: AdapterInterface>
 where
     'sch: 'req,
 {
@@ -44,7 +44,7 @@ where
     connection: LazyConnection<'sch, Adapter>,
 }
 
-impl<'sch: 'req, 'req, Adapter: AdapterInterface> Context<'sch, 'req, Adapter> {
+impl<'sch: 'req, 'req, Adapter: AdapterInterface> PrimaryContext<'sch, 'req, Adapter> {
     /// Builds a context from the request, harvesting its owned body and headers and discarding the
     /// rest; `uri` is lent separately so the borrowing query parameters can reference it.
     pub(crate) fn from_request(

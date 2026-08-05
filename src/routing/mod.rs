@@ -18,7 +18,7 @@ pub use builders::{
     PrimaryRouteBuilder, RelationshipConfig, RelationshipsConfig, ResourceHandler,
     ResourceRouteBuilder, RouteBuilder, SubordinateRouteBuilder, UnboundVerbs,
 };
-pub use context::Context;
+pub use context::PrimaryContext;
 pub use controller::DefaultController;
 pub use error::Error;
 pub(crate) use mount_table::MountTable;

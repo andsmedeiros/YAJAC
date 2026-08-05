@@ -6,7 +6,9 @@ use crate::database::schema::{AttributeType, Related, SchemaBuilder};
 use crate::json_api::document::Document;
 use crate::routing::controller::{ResourceContext, ResourceController};
 use crate::routing::responder::respond_with;
-use crate::routing::{BaseUri, Context, Result as RouteResult, Router, RouterError, UnboundVerbs};
+use crate::routing::{
+    BaseUri, PrimaryContext, Result as RouteResult, Router, RouterError, UnboundVerbs,
+};
 use http::{Response, StatusCode};
 use serde_json::{Value, json};
 use std::borrow::Cow;
@@ -151,7 +153,7 @@ fn search(context: ResourceContext<'_, '_, SqliteAdapter>) -> RouteResult {
 }
 
 // An unbound leaf route: schema-oblivious, receives a bare `Context`.
-fn health(_context: Context<'_, '_, SqliteAdapter>) -> RouteResult {
+fn health(_context: PrimaryContext<'_, '_, SqliteAdapter>) -> RouteResult {
     respond_with(StatusCode::OK, None)
 }
 
