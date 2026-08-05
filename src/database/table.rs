@@ -35,8 +35,10 @@ pub trait Table<
     }
 
     fn query(&self, parameters: &QueryParameters) -> Result<Vec<Row<'sch>>, Error> {
-        let (query, bindings) = QueryBuilder::new(self.schema()).query(parameters)?;
-        self.run_fetch(query, bindings)
+        QueryBuilder::new(self.schema())
+            .query(parameters)?
+            .map(|(query, bindings)| self.run_fetch(query, bindings))
+            .unwrap_or_else(|| Ok(Vec::new()))
     }
 
     fn first(&self, parameters: &QueryParameters) -> Result<Option<Row<'sch>>, Error> {
@@ -55,19 +57,20 @@ pub trait Table<
         value: Attribute,
         fields: Option<IndexSet<&'sch str>>,
     ) -> Result<Row<'sch>, Error> {
-        let (query, bindings) = QueryBuilder::new(self.schema()).query(&QueryParameters {
-            fields: FieldsParameters::from([(
-                self.schema().name(),
-                fields.unwrap_or_else(|| [column].into()),
-            )]),
-            filter: Some(FilterParameters::from([(
-                column,
-                vec![FilterValue::Equal(value)],
-            )])),
-            ..QueryParameters::new(self.schema())
-        })?;
-
-        let mut rows = self.run_fetch(query, bindings)?;
+        let mut rows = QueryBuilder::new(self.schema())
+            .query(&QueryParameters {
+                fields: FieldsParameters::from([(
+                    self.schema().name(),
+                    fields.unwrap_or_else(|| [column].into()),
+                )]),
+                filter: Some(FilterParameters::from([(
+                    column,
+                    vec![FilterValue::Equal(value)],
+                )])),
+                ..QueryParameters::new(self.schema())
+            })?
+            .map(|(query, bindings)| self.run_fetch(query, bindings))
+            .unwrap_or_else(|| Ok(Vec::new()))?;
 
         match rows.len() {
             0 => Err(Error::RecordNotFound)?,
@@ -102,8 +105,10 @@ pub trait Table<
         parameters: &QueryParameters,
     ) -> Result<Vec<Row<'sch>>, Error> {
         self.require_columns(&row)?;
-        let (query, bindings) = QueryBuilder::new(self.schema()).update_batch(row, parameters)?;
-        self.run_fetch(query, bindings)
+        QueryBuilder::new(self.schema())
+            .update_batch(row, parameters)?
+            .map(|(query, bindings)| self.run_fetch(query, bindings))
+            .unwrap_or_else(|| Ok(Vec::new()))
     }
 
     fn insert_batch(
@@ -142,8 +147,10 @@ pub trait Table<
 
     /// Deletes the records matched by `parameters`, reporting how many were removed.
     fn delete_batch(&self, parameters: &QueryParameters) -> Result<usize, Error> {
-        let (query, bindings) = QueryBuilder::new(self.schema()).delete_batch(parameters)?;
-        self.connection().execute(query, bindings)
+        QueryBuilder::new(self.schema())
+            .delete_batch(parameters)?
+            .map(|(query, bindings)| self.connection().execute(query, bindings))
+            .unwrap_or_else(|| Ok(0))
     }
 
     fn run_fetch(&self, query: String, bindings: Vec<Attribute>) -> Result<Vec<Row<'sch>>, Error> {

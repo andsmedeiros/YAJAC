@@ -10,7 +10,7 @@ pub type Bindings = Vec<Attribute>;
 
 pub trait QueryBuilder<'sch> {
     fn new(schema: &'sch Schema<'sch>) -> Self;
-    fn query(&self, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
+    fn query(&self, parameters: &QueryParameters) -> Result<Option<(String, Bindings)>, Error>;
     fn find(
         &self,
         id: Identifier,
@@ -31,12 +31,15 @@ pub trait QueryBuilder<'sch> {
         &self,
         attributes: Attributes<'sch>,
         parameters: &QueryParameters,
-    ) -> Result<(String, Bindings), Error>;
+    ) -> Result<Option<(String, Bindings)>, Error>;
     fn insert_batch(
         &self,
         rows: Vec<Attributes<'sch>>,
         parameters: &QueryParameters,
     ) -> Result<(String, Bindings), Error>;
     fn delete(&self, id: Identifier) -> (String, Bindings);
-    fn delete_batch(&self, parameters: &QueryParameters) -> Result<(String, Bindings), Error>;
+    fn delete_batch(
+        &self,
+        parameters: &QueryParameters,
+    ) -> Result<Option<(String, Bindings)>, Error>;
 }
