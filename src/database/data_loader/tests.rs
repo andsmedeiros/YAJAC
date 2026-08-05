@@ -933,3 +933,43 @@ fn test_empty_has_one_is_present_and_empty() -> Result<(), Box<dyn Error>> {
         Ok(())
     })
 }
+
+#[test]
+fn test_include_through_empty_intermediate() -> Result<(), Box<dyn Error>> {
+    with_database(|manager| {
+        seed_database(manager)?;
+
+        // Post 4 has no comments, so the nested `comments.author` load scopes by an empty set.
+        let (record, included) = load_record(
+            manager,
+            "posts",
+            Identifier::Integer(4),
+            "/posts/4?include=comments.author",
+        )?;
+
+        assert_eq!(to_many(&record, "comments"), Some::<&[Identifier]>(&[]));
+        assert!(included.is_empty(), "no comments means no included authors");
+
+        Ok(())
+    })
+}
+
+#[test]
+fn test_include_null_belongs_to() -> Result<(), Box<dyn Error>> {
+    with_database(|manager| {
+        seed_database(manager)?;
+
+        // Comment 1's `parent_id` is NULL, so including `parent` scopes by an empty set.
+        let (record, included) = load_record(
+            manager,
+            "comments",
+            Identifier::Integer(1),
+            "/comments/1?include=parent",
+        )?;
+
+        assert_eq!(record.get_related("parent"), Some(&Relationship::Empty));
+        assert!(included.is_empty(), "a null to-one includes nothing");
+
+        Ok(())
+    })
+}

@@ -16,6 +16,7 @@ use crate::database::attributes::Identifier;
 use crate::database::query_parameters::FieldsParameters;
 use crate::database::relationships::Relationships;
 use crate::utils::indexing::Indexable;
+use indexmap::IndexSet;
 use std::{
     collections::{HashMap, HashSet, hash_map::Entry},
     slice,
@@ -293,13 +294,19 @@ impl<'sch, 'req, Adapter: AdapterInterface> DataLoader<'sch, 'req, Adapter> {
         attributes: &[Option<Attribute>],
         fields: &FieldsParameters,
     ) -> Result<Vec<Record<'sch>>, Error> {
-        let attributes = attributes
+        let attributes: IndexSet<Attribute> = attributes
             .iter()
             .filter_map(|entry| match entry {
                 None | Some(Attribute::Null) => None,
                 Some(attribute) => Some(attribute.clone()),
             })
             .collect();
+
+        // No keys to scope by means no related rows: skip the query the builder would render
+        // unsatisfiable anyway.
+        if attributes.is_empty() {
+            return Ok(Vec::new());
+        }
 
         let query_parameters = QueryParameters {
             filter: Some([(column, vec![In(attributes)])].into()),
