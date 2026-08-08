@@ -214,6 +214,7 @@ fn document_links(uri: &Uri) -> document::Links {
         this: Link::Uri(uri.clone()).into(),
         related: None,
         described_by: None,
+        pagination: None,
     }
 }
 
