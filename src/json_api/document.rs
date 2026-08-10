@@ -31,6 +31,26 @@ pub struct Links {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub described_by: Option<Link>,
+
+    #[serde(flatten)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pagination: Option<Pagination>,
+}
+
+/// A collection's pagination links. Each key is omitted when its page is unavailable.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Pagination {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first: Option<Link>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last: Option<Link>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prev: Option<Link>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<Link>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

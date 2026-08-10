@@ -1,15 +1,9 @@
 use crate::json_api::document::Document;
 use crate::routing::Error;
-use http::{Response, StatusCode, response::Builder as ResponseBuilder};
+use http::{Response, StatusCode};
 
-pub fn default_response() -> ResponseBuilder {
-    Response::builder()
-        .header("Access-Control-Allow-Origin", "*")
-        .header("Content-Type", "application/vnd.api+json")
-}
-
-pub fn respond_with<T>(code: StatusCode, payload: T) -> Result<Response<T>, Error> {
-    Ok(default_response().status(code).body(payload)?)
+pub fn respond_with<T>(code: impl Into<StatusCode>, payload: T) -> Result<Response<T>, Error> {
+    Ok(Response::builder().status(code.into()).body(payload)?)
 }
 
 pub fn respond<T>(payload: T) -> Result<Response<T>, Error> {

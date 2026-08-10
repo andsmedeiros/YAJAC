@@ -8,18 +8,42 @@ use crate::routing::mount_table::{ControllerFactory, MountTable};
 use http::HeaderMap;
 use std::borrow::Cow;
 
-/// The router's link generator: a per-request view that renders a resource's `self`, relationship,
-/// and related links from where its type is actually mounted. Private — the router builds it and the
-/// serialisation funnel drives it; there is no user-facing seam. A type with no mount, or a
-/// relationship slot that was not mounted, yields `None` (no link) rather than a broken one.
-pub(crate) struct UriGenerator<'sch, 'req, Adapter: AdapterInterface> {
+/// Renders a record's `self`, relationship, and related links. The serialisation funnel drives it and
+/// stays oblivious to which generator it holds: the canonical one resolves links from where a type is
+/// mounted, the null one refuses every link. A slot that has no link yields `None`; a slot that
+/// *should* have one but cannot be rendered yields `Err`.
+pub(crate) trait UriGenerator<'sch> {
+    /// The resource's `self` link, or `None` when its type is not mounted.
+    fn uri_for_resource(&self, record: &Record<'sch>) -> Result<Option<Uri>, Error>;
+
+    /// The relationship's `self` (linkage) link, or `None` when the type or that slot is not mounted.
+    fn uri_for_linkage(
+        &self,
+        record: &Record<'sch>,
+        relationship: &str,
+    ) -> Result<Option<Uri>, Error>;
+
+    /// The related-resource link, or `None` when the type or that slot is not mounted.
+    fn uri_for_related(
+        &self,
+        record: &Record<'sch>,
+        relationship: &str,
+    ) -> Result<Option<Uri>, Error>;
+}
+
+/// The router's real link generator: a per-request view that renders each link from where its type is
+/// actually mounted. A type with no mount, or a relationship slot that was not mounted, yields `None`
+/// (no link) rather than a broken one.
+pub(crate) struct CanonicalUriGenerator<'sch, 'req, Adapter: AdapterInterface> {
     base: &'req BaseUri<'sch>,
     mount_table: &'req MountTable<'sch, Adapter>,
     route: &'req RouteParameters,
     headers: &'req HeaderMap,
 }
 
-impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> UriGenerator<'sch, 'req, Adapter> {
+impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch>
+    CanonicalUriGenerator<'sch, 'req, Adapter>
+{
     pub(crate) fn new(
         base: &'req BaseUri<'sch>,
         mount_table: &'req MountTable<'sch, Adapter>,
@@ -31,59 +55,6 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> UriGenerator<'sch, 'req
             mount_table,
             route,
             headers,
-        }
-    }
-
-    /// The resource's `self` link, or `None` when its type is not mounted. The resource path is the
-    /// mount's base prefix plus `:id`.
-    pub(crate) fn uri_for_resource(&self, record: &Record<'sch>) -> Result<Option<Uri>, Error> {
-        self.mount_table
-            .get(record.schema.name())
-            .map(|mount| {
-                let template: Vec<Cow<'sch, str>> = mount
-                    .base
-                    .iter()
-                    .cloned()
-                    .chain([Cow::Borrowed(":id")])
-                    .collect();
-                self.render(record, &template, mount.factory)
-            })
-            .transpose()
-    }
-
-    /// The relationship's `self` (linkage) link, or `None` when the type or that slot is not mounted.
-    pub(crate) fn uri_for_linkage(
-        &self,
-        record: &Record<'sch>,
-        relationship: &str,
-    ) -> Result<Option<Uri>, Error> {
-        if let Some(mount) = self.mount_table.get(record.kind())
-            && let Some(template) = mount
-                .relationships
-                .get(relationship)
-                .and_then(|mounts| mounts.linkage.as_deref())
-        {
-            self.render(record, template, mount.factory).map(Some)
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// The related-resource link, or `None` when the type or that slot is not mounted.
-    pub(crate) fn uri_for_related(
-        &self,
-        record: &Record<'sch>,
-        relationship: &str,
-    ) -> Result<Option<Uri>, Error> {
-        if let Some(mount) = self.mount_table.get(record.kind())
-            && let Some(template) = mount
-                .relationships
-                .get(relationship)
-                .and_then(|mounts| mounts.related.as_deref())
-        {
-            self.render(record, template, mount.factory).map(Some)
-        } else {
-            Ok(None)
         }
     }
 
@@ -110,5 +81,94 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> UriGenerator<'sch, 'req
         };
 
         self.base.render(template, &resolved)
+    }
+}
+
+impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> UriGenerator<'sch>
+    for CanonicalUriGenerator<'sch, 'req, Adapter>
+{
+    fn uri_for_resource(&self, record: &Record<'sch>) -> Result<Option<Uri>, Error> {
+        self.mount_table
+            .get(record.schema.name())
+            .map(|mount| {
+                // The resource path is the mount's base (collection) prefix plus `:id`.
+                let template: Vec<Cow<'sch, str>> = mount
+                    .base
+                    .iter()
+                    .cloned()
+                    .chain([Cow::Borrowed(":id")])
+                    .collect();
+                self.render(record, &template, mount.factory)
+            })
+            .transpose()
+    }
+
+    fn uri_for_linkage(
+        &self,
+        record: &Record<'sch>,
+        relationship: &str,
+    ) -> Result<Option<Uri>, Error> {
+        if let Some(mount) = self.mount_table.get(record.kind())
+            && let Some(template) = mount
+                .relationships
+                .get(relationship)
+                .and_then(|mounts| mounts.linkage.as_deref())
+        {
+            self.render(record, template, mount.factory).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn uri_for_related(
+        &self,
+        record: &Record<'sch>,
+        relationship: &str,
+    ) -> Result<Option<Uri>, Error> {
+        if let Some(mount) = self.mount_table.get(record.kind())
+            && let Some(template) = mount
+                .relationships
+                .get(relationship)
+                .and_then(|mounts| mounts.related.as_deref())
+        {
+            self.render(record, template, mount.factory).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+/// A generator for a document that renders no per-record links — an errors document. Every method
+/// fails, making the contract explicit: pass it only where no link is produced. A link request
+/// against it is a framework bug, surfaced loudly rather than answered with a fabricated link.
+pub(crate) struct NullUriGenerator;
+
+impl NullUriGenerator {
+    fn refusal() -> Error {
+        Error::LinkGenerationError {
+            message: "a link was requested from the null generator, which serves documents that must render none".to_string(),
+        }
+    }
+}
+
+impl<'sch> UriGenerator<'sch> for NullUriGenerator {
+    fn uri_for_resource(&self, _record: &Record<'sch>) -> Result<Option<Uri>, Error> {
+        Err(Self::refusal())
+    }
+
+    fn uri_for_linkage(
+        &self,
+        _record: &Record<'sch>,
+        _relationship: &str,
+    ) -> Result<Option<Uri>, Error> {
+        Err(Self::refusal())
+    }
+
+    fn uri_for_related(
+        &self,
+        _record: &Record<'sch>,
+        _relationship: &str,
+    ) -> Result<Option<Uri>, Error> {
+        Err(Self::refusal())
     }
 }

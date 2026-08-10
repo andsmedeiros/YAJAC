@@ -3,14 +3,21 @@ use crate::database::adapters::sqlite::Pool;
 use crate::database::connection_manager::ConnectionManager;
 use crate::database::registry::Registry as DatabaseRegistry;
 use crate::database::schema::{AttributeType, Related, SchemaBuilder};
-use crate::json_api::document::Document;
+use crate::http_wrappers::Uri;
 use crate::routing::controller::{ResourceContext, ResourceController};
+use crate::routing::middleware::{PrimaryMiddleware, ResourceMiddleware};
 use crate::routing::responder::respond_with;
-use crate::routing::{BaseUri, Context, Result as RouteResult, Router, RouterError, UnboundVerbs};
-use http::{Response, StatusCode};
+use crate::routing::{
+    BaseUri, PrimaryContext, PrimaryHandler, PrimaryResult, ResourceHandler,
+    ResourceResult as RouteResult, ResourceVerbs, RouteParameters, Router, RouterError,
+    UnboundVerbs,
+};
+use crate::serialisation::ByteStream;
+use http::{HeaderMap, HeaderValue, Response, StatusCode};
 use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::error::Error as StdError;
+use std::io::{Cursor, Read};
 
 type Manager = ConnectionManager<'static, SqliteAdapter>;
 type TestResult = Result<(), Box<dyn StdError>>;
@@ -150,9 +157,9 @@ fn search(context: ResourceContext<'_, '_, SqliteAdapter>) -> RouteResult {
     respond_with(StatusCode::OK, None)
 }
 
-// An unbound leaf route: schema-oblivious, receives a bare `Context`.
-fn health(_context: Context<'_, '_, SqliteAdapter>) -> RouteResult {
-    respond_with(StatusCode::OK, None)
+// An unbound leaf route: schema-oblivious, works the raw byte tier.
+fn health(_context: PrimaryContext<'_, '_, SqliteAdapter>) -> PrimaryResult {
+    respond_with(StatusCode::OK, None).map_err(Into::into)
 }
 
 // The standard resourceful mount: every resource bare, so CRUD and the full set of relationship
@@ -175,19 +182,43 @@ fn read_only_router(manager: &Manager) -> Result<Router<'_, SqliteAdapter>, Box<
     })?)
 }
 
+/// Dispatches a request against `router`, threading `headers` onto it and buffering the streamed
+/// response body so a test can read its status, headers, and document repeatedly.
 fn send<'a>(
     manager: &'a Manager,
     router: &Router<'a, SqliteAdapter>,
     method: &str,
     uri: &str,
     body: Value,
-) -> Result<Response<Option<Document>>, Box<dyn StdError>> {
-    let request = http::Request::builder()
-        .method(method)
-        .uri(uri)
-        .body(serde_json::to_vec(&body)?)?;
+    headers: &[(&str, &str)],
+) -> Result<Response<Vec<u8>>, Box<dyn StdError>> {
+    // Stand in for the client: send `Content-Type` alongside any body unless a test set one, and
+    // treat a `null` body as no body (streamed as zero bytes).
+    let carries_body = !body.is_null();
+    let sets_content_type = headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("content-type"));
 
-    Ok(router.handle(manager, request))
+    let mut builder = headers.iter().fold(
+        http::Request::builder().method(method).uri(uri),
+        |builder, (name, value)| builder.header(*name, *value),
+    );
+    if carries_body && !sets_content_type {
+        builder = builder.header("content-type", "application/vnd.api+json");
+    }
+    let stream: ByteStream = if carries_body {
+        Box::new(Cursor::new(serde_json::to_vec(&body)?))
+    } else {
+        Box::new(Cursor::new(Vec::new()))
+    };
+    let request = builder.body(stream)?;
+
+    let (parts, body) = router.handle(manager, request)?.into_parts();
+    let mut buffer = Vec::new();
+    if let Some(mut stream) = body {
+        stream.read_to_end(&mut buffer)?;
+    }
+    Ok(Response::from_parts(parts, buffer))
 }
 
 fn serve(
@@ -195,8 +226,8 @@ fn serve(
     method: &str,
     uri: &str,
     body: Value,
-) -> Result<Response<Option<Document>>, Box<dyn StdError>> {
-    send(manager, &standard_router(manager)?, method, uri, body)
+) -> Result<Response<Vec<u8>>, Box<dyn StdError>> {
+    send(manager, &standard_router(manager)?, method, uri, body, &[])
 }
 
 fn read_only_serve(
@@ -204,15 +235,20 @@ fn read_only_serve(
     method: &str,
     uri: &str,
     body: Value,
-) -> Result<Response<Option<Document>>, Box<dyn StdError>> {
-    send(manager, &read_only_router(manager)?, method, uri, body)
+) -> Result<Response<Vec<u8>>, Box<dyn StdError>> {
+    send(manager, &read_only_router(manager)?, method, uri, body, &[])
 }
 
-fn body(response: &Response<Option<Document>>) -> Value {
-    serde_json::to_value(response.body()).expect("a serialisable document")
+/// The response body as JSON — `null` when the body is empty (a no-content or bodyless response).
+fn body(response: &Response<Vec<u8>>) -> Value {
+    if response.body().is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(response.body()).expect("a serialisable document")
+    }
 }
 
-fn data_ids(response: &Response<Option<Document>>) -> Vec<Value> {
+fn data_ids(response: &Response<Vec<u8>>) -> Vec<Value> {
     let mut ids: Vec<Value> = body(response)["data"]
         .as_array()
         .expect("a data array")
@@ -584,7 +620,8 @@ fn test_linkage_only_family_omits_related_link() -> TestResult {
             &router,
             "GET",
             "/articles/1/relationships/comments",
-            Value::Null
+            Value::Null,
+            &[],
         )?
         .status(),
         StatusCode::OK
@@ -595,7 +632,8 @@ fn test_linkage_only_family_omits_related_link() -> TestResult {
             &router,
             "GET",
             "/articles/1/comments",
-            Value::Null
+            Value::Null,
+            &[],
         )?
         .status(),
         StatusCode::NOT_FOUND
@@ -622,7 +660,8 @@ fn test_related_only_family_omits_self_link() -> TestResult {
             &router,
             "GET",
             "/articles/1/comments",
-            Value::Null
+            Value::Null,
+            &[],
         )?
         .status(),
         StatusCode::OK
@@ -633,7 +672,8 @@ fn test_related_only_family_omits_self_link() -> TestResult {
             &router,
             "GET",
             "/articles/1/relationships/comments",
-            Value::Null
+            Value::Null,
+            &[],
         )?
         .status(),
         StatusCode::NOT_FOUND
@@ -661,7 +701,8 @@ fn test_at_override_relocates_relationship_paths() -> TestResult {
             &router,
             "GET",
             "/articles/1/relations/commentaries",
-            Value::Null
+            Value::Null,
+            &[],
         )?
         .status(),
         StatusCode::OK
@@ -672,7 +713,8 @@ fn test_at_override_relocates_relationship_paths() -> TestResult {
             &router,
             "GET",
             "/articles/1/commentaries",
-            Value::Null
+            Value::Null,
+            &[],
         )?
         .status(),
         StatusCode::OK
@@ -683,7 +725,8 @@ fn test_at_override_relocates_relationship_paths() -> TestResult {
             &router,
             "GET",
             "/articles/1/relationships/comments",
-            Value::Null
+            Value::Null,
+            &[],
         )?
         .status(),
         StatusCode::NOT_FOUND
@@ -710,7 +753,8 @@ fn test_read_only_relationship_config_forbids_writes() -> TestResult {
             &router,
             "GET",
             "/articles/1/relationships/comments",
-            Value::Null
+            Value::Null,
+            &[],
         )?
         .status(),
         StatusCode::OK
@@ -722,6 +766,7 @@ fn test_read_only_relationship_config_forbids_writes() -> TestResult {
             "POST",
             "/articles/1/relationships/comments",
             json!({ "data": [{ "type": "comments", "id": "1" }] }),
+            &[],
         )?
         .status(),
         StatusCode::FORBIDDEN
@@ -748,7 +793,8 @@ fn test_relationships_subset_mounts_only_named() -> TestResult {
             &router,
             "GET",
             "/articles/1/relationships/comments",
-            Value::Null
+            Value::Null,
+            &[],
         )?
         .status(),
         StatusCode::OK
@@ -759,7 +805,8 @@ fn test_relationships_subset_mounts_only_named() -> TestResult {
             &router,
             "GET",
             "/articles/1/relationships/drafts",
-            Value::Null
+            Value::Null,
+            &[],
         )?
         .status(),
         StatusCode::NOT_FOUND
@@ -788,7 +835,8 @@ fn test_all_relationships_enumerates_every_relationship() -> TestResult {
             &router,
             "GET",
             "/articles/1/relationships/comments",
-            Value::Null
+            Value::Null,
+            &[],
         )?
         .status(),
         StatusCode::OK
@@ -799,7 +847,8 @@ fn test_all_relationships_enumerates_every_relationship() -> TestResult {
             &router,
             "GET",
             "/articles/1/relationships/drafts",
-            Value::Null
+            Value::Null,
+            &[],
         )?
         .status(),
         StatusCode::OK
@@ -826,6 +875,7 @@ fn test_member_route_is_record_scoped() -> TestResult {
         "POST",
         "/articles/1/publish",
         Value::Null,
+        &[],
     )?;
 
     assert_eq!(response.status(), StatusCode::ACCEPTED);
@@ -837,13 +887,21 @@ fn test_member_route_is_record_scoped() -> TestResult {
 fn test_collection_route_is_collection_scoped() -> TestResult {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
+    // A resource builder's own verbs mount collection-scoped schema-bound routes.
     let router = Router::try_new(BaseUri::Relative, |root| {
         root.resource_with::<Articles>("articles", articles, |articles| {
-            articles.collection(|collection| collection.get("search", search))
+            articles.get("search", search)
         })
     })?;
 
-    let response = send(&manager, &router, "GET", "/articles/search", Value::Null)?;
+    let response = send(
+        &manager,
+        &router,
+        "GET",
+        "/articles/search",
+        Value::Null,
+        &[],
+    )?;
 
     assert_eq!(response.status(), StatusCode::OK);
 
@@ -854,15 +912,26 @@ fn test_collection_route_is_collection_scoped() -> TestResult {
 fn test_unbound_leaf_route() -> TestResult {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
+    // A raw route side-mounted into a resource's path space, declared before the resource so it wins
+    // the shared `/articles/:id` slot. It must reach its handler, and the resource must keep serving
+    // its own routes alongside.
     let router = Router::try_new(BaseUri::Relative, |root| {
-        root.resource_with::<Articles>("articles", articles, |articles| {
-            articles.get("health", health)
-        })
+        root.get("articles/health", health)
+            .resource::<Articles>("articles", articles)
     })?;
 
-    let response = send(&manager, &router, "GET", "/articles/health", Value::Null)?;
+    let raw = send(
+        &manager,
+        &router,
+        "GET",
+        "/articles/health",
+        Value::Null,
+        &[],
+    )?;
+    assert_eq!(raw.status(), StatusCode::OK);
 
-    assert_eq!(response.status(), StatusCode::OK);
+    let collection = send(&manager, &router, "GET", "/articles", Value::Null, &[])?;
+    assert_eq!(collection.status(), StatusCode::OK);
 
     Ok(())
 }
@@ -961,6 +1030,785 @@ fn test_unmounted_resource_is_allowed() -> TestResult {
     });
 
     assert!(result.is_ok());
+
+    Ok(())
+}
+
+// --- middleware ------------------------------------------------------------
+
+/// A primary guard admitting only requests that carry a given header.
+struct RequireHeader(&'static str);
+impl<'sch> PrimaryMiddleware<'sch, SqliteAdapter> for RequireHeader {
+    fn matches(&self, headers: &HeaderMap, _uri: &Uri, _route: &RouteParameters) -> bool {
+        headers.contains_key(self.0)
+    }
+}
+
+/// A primary around-filter stamping a marker header on the response coming back through it.
+struct StampResponse;
+impl<'sch> PrimaryMiddleware<'sch, SqliteAdapter> for StampResponse {
+    fn handle<'req>(
+        &self,
+        context: PrimaryContext<'sch, 'req, SqliteAdapter>,
+        next: &PrimaryHandler<'sch, 'req, SqliteAdapter>,
+    ) -> PrimaryResult
+    where
+        'sch: 'req,
+    {
+        let mut response = next(context)?;
+        response
+            .headers_mut()
+            .insert("x-stamp", HeaderValue::from_static("seen"));
+        Ok(response)
+    }
+}
+
+/// A primary middleware short-circuiting the chain — it answers 401 without invoking `next`.
+struct Deny;
+impl<'sch> PrimaryMiddleware<'sch, SqliteAdapter> for Deny {
+    fn handle<'req>(
+        &self,
+        _context: PrimaryContext<'sch, 'req, SqliteAdapter>,
+        _next: &PrimaryHandler<'sch, 'req, SqliteAdapter>,
+    ) -> PrimaryResult
+    where
+        'sch: 'req,
+    {
+        respond_with(StatusCode::UNAUTHORIZED, None).map_err(Into::into)
+    }
+}
+
+/// A resource guard admitting only requests that carry a given header, on the schema-bound tier.
+struct RequireResourceHeader(&'static str);
+impl<'sch> ResourceMiddleware<'sch, SqliteAdapter> for RequireResourceHeader {
+    fn matches(&self, headers: &HeaderMap, _uri: &Uri, _route: &RouteParameters) -> bool {
+        headers.contains_key(self.0)
+    }
+}
+
+/// A resource around-filter stamping a marker header on the document response coming back — the
+/// header must survive the crossing's serialisation to the byte response.
+struct StampResourceResponse;
+impl<'sch> ResourceMiddleware<'sch, SqliteAdapter> for StampResourceResponse {
+    fn handle<'req>(
+        &self,
+        context: ResourceContext<'sch, 'req, SqliteAdapter>,
+        next: &ResourceHandler<'sch, 'req, SqliteAdapter>,
+    ) -> RouteResult
+    where
+        'sch: 'req,
+    {
+        let mut response = next(context)?;
+        response
+            .headers_mut()
+            .insert("x-stamp", HeaderValue::from_static("seen"));
+        Ok(response)
+    }
+}
+
+/// A resource middleware short-circuiting the chain — it refuses with 403 without invoking `next`.
+struct DenyResource;
+impl<'sch> ResourceMiddleware<'sch, SqliteAdapter> for DenyResource {
+    fn handle<'req>(
+        &self,
+        _context: ResourceContext<'sch, 'req, SqliteAdapter>,
+        _next: &ResourceHandler<'sch, 'req, SqliteAdapter>,
+    ) -> RouteResult
+    where
+        'sch: 'req,
+    {
+        respond_with(StatusCode::FORBIDDEN, None)
+    }
+}
+
+#[test]
+fn test_primary_guard_falls_through_when_unmet() -> TestResult {
+    let manager = manager()?;
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.middleware(RequireHeader("x-key"), |root| root.get("health", health))
+    })?;
+
+    let missing = send(&manager, &router, "GET", "/health", Value::Null, &[])?;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    let present = send(
+        &manager,
+        &router,
+        "GET",
+        "/health",
+        Value::Null,
+        &[("x-key", "present")],
+    )?;
+    assert_eq!(present.status(), StatusCode::OK);
+
+    Ok(())
+}
+
+#[test]
+fn test_primary_middleware_rewrites_response() -> TestResult {
+    let manager = manager()?;
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.middleware(StampResponse, |root| root.get("health", health))
+    })?;
+
+    let response = send(&manager, &router, "GET", "/health", Value::Null, &[])?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-stamp")
+            .and_then(|value| value.to_str().ok()),
+        Some("seen")
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_primary_middleware_short_circuits_handler() -> TestResult {
+    let manager = manager()?;
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.middleware(Deny, |root| root.get("health", health))
+    })?;
+
+    let response = send(&manager, &router, "GET", "/health", Value::Null, &[])?;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    Ok(())
+}
+
+#[test]
+fn test_middleware_scope_is_bounded() -> TestResult {
+    let manager = manager()?;
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.middleware(Deny, |denied| denied.get("locked", health))
+            .get("open", health)
+    })?;
+
+    assert_eq!(
+        send(&manager, &router, "GET", "/locked", Value::Null, &[])?.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        send(&manager, &router, "GET", "/open", Value::Null, &[])?.status(),
+        StatusCode::OK
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_middleware_at_scopes_and_guards() -> TestResult {
+    let manager = manager()?;
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.middleware_at("api", RequireHeader("x-key"), |api| {
+            api.get("health", health)
+        })
+    })?;
+
+    assert_eq!(
+        send(&manager, &router, "GET", "/api/health", Value::Null, &[])?.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        send(
+            &manager,
+            &router,
+            "GET",
+            "/api/health",
+            Value::Null,
+            &[("x-key", "present")],
+        )?
+        .status(),
+        StatusCode::OK
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_resource_middleware_guard_falls_through() -> TestResult {
+    let manager = manager()?;
+    let articles = manager.registry().schema("articles")?;
+    let comments = manager.registry().schema("comments")?;
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.resource::<Comments>("comments", comments)
+            .resource_with::<Articles>("articles", articles, |articles| {
+                articles.middleware(RequireResourceHeader("x-key"), |guarded| {
+                    guarded.related("comments")
+                })
+            })
+    })?;
+
+    assert_eq!(
+        send(
+            &manager,
+            &router,
+            "GET",
+            "/articles/1/comments",
+            Value::Null,
+            &[]
+        )?
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        send(
+            &manager,
+            &router,
+            "GET",
+            "/articles/1/comments",
+            Value::Null,
+            &[("x-key", "present")],
+        )?
+        .status(),
+        StatusCode::OK
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_resource_middleware_rewrites_response() -> TestResult {
+    let manager = manager()?;
+    let articles = manager.registry().schema("articles")?;
+    let comments = manager.registry().schema("comments")?;
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.resource::<Comments>("comments", comments)
+            .resource_with::<Articles>("articles", articles, |articles| {
+                articles.middleware(StampResourceResponse, |wrapped| wrapped.related("comments"))
+            })
+    })?;
+
+    let response = send(
+        &manager,
+        &router,
+        "GET",
+        "/articles/1/comments",
+        Value::Null,
+        &[],
+    )?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-stamp")
+            .and_then(|value| value.to_str().ok()),
+        Some("seen")
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_resource_middleware_short_circuits_handler() -> TestResult {
+    let manager = manager()?;
+    let articles = manager.registry().schema("articles")?;
+    let comments = manager.registry().schema("comments")?;
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.resource::<Comments>("comments", comments)
+            .resource_with::<Articles>("articles", articles, |articles| {
+                articles.middleware(DenyResource, |wrapped| wrapped.related("comments"))
+            })
+    })?;
+
+    let response = send(
+        &manager,
+        &router,
+        "GET",
+        "/articles/1/comments",
+        Value::Null,
+        &[],
+    )?;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    Ok(())
+}
+
+// --- JSON:API boundary (the crossing) --------------------------------------
+
+#[test]
+fn test_crossing_stamps_jsonapi_content_type() -> TestResult {
+    let manager = manager()?;
+    let response = serve(&manager, "GET", "/articles/1", Value::Null)?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/vnd.api+json")
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_crossing_rejects_parameterised_content_type() -> TestResult {
+    let manager = manager()?;
+    let router = standard_router(&manager)?;
+    let response = send(
+        &manager,
+        &router,
+        "POST",
+        "/articles",
+        json!({ "data": { "type": "articles", "attributes": { "title": "X", "body": "Y" } } }),
+        &[("Content-Type", "application/vnd.api+json; charset=utf-8")],
+    )?;
+
+    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+    Ok(())
+}
+
+#[test]
+fn test_crossing_rejects_parameterised_accept() -> TestResult {
+    let manager = manager()?;
+    let router = standard_router(&manager)?;
+    let response = send(
+        &manager,
+        &router,
+        "GET",
+        "/articles",
+        Value::Null,
+        &[("Accept", "application/vnd.api+json; charset=utf-8")],
+    )?;
+
+    assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+
+    Ok(())
+}
+
+#[test]
+fn test_crossing_renders_error_as_document() -> TestResult {
+    let manager = manager()?;
+    let response = serve(&manager, "GET", "/articles/999", Value::Null)?;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(body(&response)["errors"].is_array());
+    assert_eq!(body(&response).get("data"), None);
+
+    Ok(())
+}
+
+#[test]
+fn test_crossing_rejects_unparseable_body() -> TestResult {
+    let manager = manager()?;
+    let router = standard_router(&manager)?;
+    // Genuinely malformed JSON (not merely the wrong shape) is a syntax error — a 400 at the parse.
+    // Built by hand: `send` serialises a `Value`, which is always well-formed.
+    let stream: ByteStream = Box::new(Cursor::new(b"{ this is not json".to_vec()));
+    let request = http::Request::builder()
+        .method("POST")
+        .uri("/articles")
+        .header("content-type", "application/vnd.api+json")
+        .body(stream)?;
+
+    let status = router.handle(&manager, request)?.status();
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    Ok(())
+}
+
+#[test]
+fn test_crossing_accepts_a_clean_jsonapi_instance_among_parameterised() -> TestResult {
+    let manager = manager()?;
+    let router = standard_router(&manager)?;
+    // One instance is parameterised (and so ignored), but a clean instance remains — acceptable.
+    let response = send(
+        &manager,
+        &router,
+        "GET",
+        "/articles",
+        Value::Null,
+        &[(
+            "Accept",
+            "application/vnd.api+json; charset=utf-8, application/vnd.api+json",
+        )],
+    )?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    Ok(())
+}
+
+#[test]
+fn test_crossing_accepts_a_profile_in_content_type() -> TestResult {
+    let manager = manager()?;
+    let router = standard_router(&manager)?;
+    // `profile` is an allowed media type parameter; an unrecognised one is ignored, not rejected.
+    let response = send(
+        &manager,
+        &router,
+        "POST",
+        "/articles",
+        json!({ "data": { "type": "articles", "attributes": { "title": "P", "body": "Q" } } }),
+        &[(
+            "Content-Type",
+            "application/vnd.api+json; profile=\"https://example.com/p\"",
+        )],
+    )?;
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    Ok(())
+}
+
+#[test]
+fn test_crossing_accepts_a_profile_in_accept() -> TestResult {
+    let manager = manager()?;
+    let router = standard_router(&manager)?;
+    // An unrecognised `profile` in `Accept` must be ignored, leaving the instance acceptable.
+    let response = send(
+        &manager,
+        &router,
+        "GET",
+        "/articles",
+        Value::Null,
+        &[(
+            "Accept",
+            "application/vnd.api+json; profile=\"https://example.com/p\"",
+        )],
+    )?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    Ok(())
+}
+
+#[test]
+fn test_crossing_rejects_an_unsupported_extension_in_content_type() -> TestResult {
+    let manager = manager()?;
+    let router = standard_router(&manager)?;
+    // We support no extensions, so any `ext` URI is unsupported and the content type is refused.
+    let response = send(
+        &manager,
+        &router,
+        "POST",
+        "/articles",
+        json!({ "data": { "type": "articles", "attributes": { "title": "X", "body": "Y" } } }),
+        &[(
+            "Content-Type",
+            "application/vnd.api+json; ext=\"https://example.com/ext\"",
+        )],
+    )?;
+
+    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+    Ok(())
+}
+
+#[test]
+fn test_crossing_rejects_an_unsupported_extension_in_accept() -> TestResult {
+    let manager = manager()?;
+    let router = standard_router(&manager)?;
+    // The sole acceptable instance demands an unsupported extension, so none is acceptable.
+    let response = send(
+        &manager,
+        &router,
+        "GET",
+        "/articles",
+        Value::Null,
+        &[(
+            "Accept",
+            "application/vnd.api+json; ext=\"https://example.com/ext\"",
+        )],
+    )?;
+
+    assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+
+    Ok(())
+}
+
+// --- middleware composition & the byte tier --------------------------------
+
+// A raw route streaming an actual byte payload — the byte tier's reason for being.
+fn download(_context: PrimaryContext<'_, '_, SqliteAdapter>) -> PrimaryResult {
+    let payload: ByteStream = Box::new(Cursor::new(b"raw payload".to_vec()));
+    respond_with(StatusCode::OK, Some(payload)).map_err(Into::into)
+}
+
+/// A primary middleware that fails outright — its error must escape `handle` to the embedder rather
+/// than being rendered as a response.
+struct Fault;
+impl<'sch> PrimaryMiddleware<'sch, SqliteAdapter> for Fault {
+    fn handle<'req>(
+        &self,
+        _context: PrimaryContext<'sch, 'req, SqliteAdapter>,
+        _next: &PrimaryHandler<'sch, 'req, SqliteAdapter>,
+    ) -> PrimaryResult
+    where
+        'sch: 'req,
+    {
+        Err("middleware fault".into())
+    }
+}
+
+/// A primary around-filter appending its mark to an order header on the way back, so a stack of
+/// them records the order in which the chain unwinds.
+struct AppendMark(&'static str);
+impl<'sch> PrimaryMiddleware<'sch, SqliteAdapter> for AppendMark {
+    fn handle<'req>(
+        &self,
+        context: PrimaryContext<'sch, 'req, SqliteAdapter>,
+        next: &PrimaryHandler<'sch, 'req, SqliteAdapter>,
+    ) -> PrimaryResult
+    where
+        'sch: 'req,
+    {
+        let mut response = next(context)?;
+        let order = response
+            .headers()
+            .get("x-order")
+            .and_then(|value| value.to_str().ok())
+            .map(|existing| format!("{existing},{}", self.0))
+            .unwrap_or_else(|| self.0.to_string());
+        response
+            .headers_mut()
+            .insert("x-order", HeaderValue::from_str(&order)?);
+        Ok(response)
+    }
+}
+
+#[test]
+fn test_primary_fault_escapes_to_embedder() -> TestResult {
+    let manager = manager()?;
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.middleware(Fault, |root| root.get("health", health))
+    })?;
+
+    let stream: ByteStream = Box::new(Cursor::new(Vec::new()));
+    let request = http::Request::builder()
+        .method("GET")
+        .uri("/health")
+        .body(stream)?;
+
+    assert!(router.handle(&manager, request).is_err());
+
+    Ok(())
+}
+
+#[test]
+fn test_middleware_stacks_in_nesting_order() -> TestResult {
+    let manager = manager()?;
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.middleware(AppendMark("outer"), |outer| {
+            outer.middleware(AppendMark("inner"), |inner| inner.get("health", health))
+        })
+    })?;
+
+    let response = send(&manager, &router, "GET", "/health", Value::Null, &[])?;
+    // The chain unwinds innermost-first, so `inner` marks the response before `outer`.
+    assert_eq!(
+        response
+            .headers()
+            .get("x-order")
+            .and_then(|value| value.to_str().ok()),
+        Some("inner,outer")
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_primary_middleware_wraps_resource() -> TestResult {
+    let manager = manager()?;
+    let articles = manager.registry().schema("articles")?;
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.middleware(RequireHeader("x-key"), |guarded| {
+            guarded.resource::<Articles>("articles", articles)
+        })
+    })?;
+
+    // The primary guard fronts the resource's own CRUD: without the header, the collection 404s.
+    assert_eq!(
+        send(&manager, &router, "GET", "/articles", Value::Null, &[])?.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        send(
+            &manager,
+            &router,
+            "GET",
+            "/articles",
+            Value::Null,
+            &[("x-key", "present")],
+        )?
+        .status(),
+        StatusCode::OK
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_raw_route_streams_body() -> TestResult {
+    let manager = manager()?;
+    let router = Router::try_new(BaseUri::Relative, |root| root.get("download", download))?;
+
+    let response = send(&manager, &router, "GET", "/download", Value::Null, &[])?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(String::from_utf8(response.body().clone())?, "raw payload");
+
+    Ok(())
+}
+
+#[test]
+fn test_raw_route_omits_jsonapi_content_type() -> TestResult {
+    let manager = manager()?;
+    let router = Router::try_new(BaseUri::Relative, |root| root.get("health", health))?;
+
+    let response = send(&manager, &router, "GET", "/health", Value::Null, &[])?;
+    assert_eq!(response.status(), StatusCode::OK);
+    // The primary tier carries no implicit JSON:API headers; the content type is the crossing's.
+    assert_eq!(response.headers().get("content-type"), None);
+
+    Ok(())
+}
+
+#[test]
+fn test_resource_middleware_guards_custom_route() -> TestResult {
+    let manager = manager()?;
+    let articles = manager.registry().schema("articles")?;
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.resource_with::<Articles>("articles", articles, |articles| {
+            articles.middleware(RequireResourceHeader("x-key"), |guarded| {
+                guarded.get("search", search)
+            })
+        })
+    })?;
+
+    assert_eq!(
+        send(
+            &manager,
+            &router,
+            "GET",
+            "/articles/search",
+            Value::Null,
+            &[]
+        )?
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        send(
+            &manager,
+            &router,
+            "GET",
+            "/articles/search",
+            Value::Null,
+            &[("x-key", "present")],
+        )?
+        .status(),
+        StatusCode::OK
+    );
+
+    Ok(())
+}
+
+// --- wildcard routes -------------------------------------------------------
+
+#[test]
+fn test_wildcard_matches_the_tail_and_captures_it() -> TestResult {
+    let manager = manager()?;
+    // `*path` captures one-or-more trailing segments, joined, under `path`; the handler echoes them.
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.get(
+            "files/*path",
+            |context: PrimaryContext<'_, '_, SqliteAdapter>| {
+                let tail = context
+                    .route_parameters()
+                    .get("path")
+                    .cloned()
+                    .unwrap_or_default();
+                let stream: ByteStream = Box::new(Cursor::new(tail.into_bytes()));
+                respond_with(StatusCode::OK, Some(stream)).map_err(Into::into)
+            },
+        )
+    })?;
+
+    let deep = send(&manager, &router, "GET", "/files/a/b/c", Value::Null, &[])?;
+    assert_eq!(deep.status(), StatusCode::OK);
+    assert_eq!(String::from_utf8(deep.body().clone())?, "a/b/c");
+
+    // A single trailing segment still matches.
+    assert_eq!(
+        send(&manager, &router, "GET", "/files/a", Value::Null, &[])?.status(),
+        StatusCode::OK
+    );
+
+    // Zero trailing segments do not: a wildcard is one-or-more.
+    assert_eq!(
+        send(&manager, &router, "GET", "/files", Value::Null, &[])?.status(),
+        StatusCode::NOT_FOUND
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_wildcard_reaches_the_resource_tier() -> TestResult {
+    let manager = manager()?;
+    let articles = manager.registry().schema("articles")?;
+    // A resource-tier catch-all, declared last so it only claims paths no canonical route matched.
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.resource_with::<Articles>("articles", articles, |articles| {
+            articles
+                .default_endpoints()
+                .all_relationships()
+                .get("*rest", search)
+        })
+    })?;
+
+    // A canonical route still wins its slot.
+    assert_eq!(
+        send(&manager, &router, "GET", "/articles/1", Value::Null, &[])?.status(),
+        StatusCode::OK
+    );
+
+    // A deep path no canonical route claims falls to the wildcard and crosses the JSON:API boundary.
+    let caught = send(
+        &manager,
+        &router,
+        "GET",
+        "/articles/1/no/such/path",
+        Value::Null,
+        &[],
+    )?;
+    assert_eq!(caught.status(), StatusCode::OK);
+    assert_eq!(
+        caught
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/vnd.api+json")
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_misplaced_wildcard_is_rejected() -> TestResult {
+    let result = Router::try_new(BaseUri::Relative, |root| root.get("*mid/tail", health));
+
+    assert!(matches!(result, Err(RouterError::MisplacedGlob { .. })));
+
+    Ok(())
+}
+
+#[test]
+fn test_duplicate_capture_is_rejected() -> TestResult {
+    // A repeated `:name`, and a `:name`/`*name` clash, both collide on resolution.
+    let repeated = Router::try_new(BaseUri::Relative, |root| root.get(":id/sub/:id", health));
+    assert!(matches!(
+        repeated,
+        Err(RouterError::DuplicateParameter { .. })
+    ));
+
+    let mixed = Router::try_new(BaseUri::Relative, |root| root.get(":rest/*rest", health));
+    assert!(matches!(mixed, Err(RouterError::DuplicateParameter { .. })));
 
     Ok(())
 }

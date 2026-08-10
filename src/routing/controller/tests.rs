@@ -9,12 +9,14 @@ use crate::database::schema::{AttributeType, Related, Schema, SchemaBuilder};
 use crate::http_wrappers::Uri;
 use crate::json_api::document::Document;
 use crate::routing::mount_table::{RelationshipMounts, ResourceMount};
-use crate::routing::{BaseUri, Context, MountTable, Request, RouteParameters};
+use crate::routing::{BaseUri, MountTable, PrimaryContext, PrimaryRequest, RouteParameters};
+use crate::serialisation::ByteStream;
 use http::{HeaderMap, StatusCode};
 use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::error::Error as StdError;
+use std::io::Cursor;
 use test_log::test;
 
 type Manager = ConnectionManager<'static, SqliteAdapter>;
@@ -93,16 +95,22 @@ fn manager() -> Result<Manager, Box<dyn StdError>> {
     Ok(manager)
 }
 
-fn build_request(method: &str, uri: &str, body: Value) -> Result<Request, Box<dyn StdError>> {
-    let document = match body {
-        Value::Null => None,
-        value => Some(serde_json::from_value(value)?),
+fn build_request(
+    method: &str,
+    uri: &str,
+    body: Value,
+) -> Result<PrimaryRequest, Box<dyn StdError>> {
+    // A `null` body is bodyless — streamed as no bytes; anything else streams its serialised form.
+    let stream: ByteStream = if body.is_null() {
+        Box::new(Cursor::new(Vec::new()))
+    } else {
+        Box::new(Cursor::new(serde_json::to_vec(&body)?))
     };
 
     Ok(http::Request::builder()
         .method(method)
         .uri(uri)
-        .body(document)?)
+        .body(stream)?)
 }
 
 fn route_id(id: &str) -> RouteParameters {
@@ -140,7 +148,7 @@ fn test_index_returns_collection() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(
+    let context = PrimaryContext::from_request(
         &manager,
         &base,
         &mounts,
@@ -172,7 +180,8 @@ fn test_show_returns_record() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     let response =
         Books::default().show(ResourceContext::new(schema(&manager, "books"), context))?;
@@ -192,7 +201,8 @@ fn test_show_missing_is_not_found() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("999"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("999"), request);
 
     match Books::default().show(ResourceContext::new(schema(&manager, "books"), context)) {
         Ok(_) => Err("a missing record must error".into()),
@@ -215,7 +225,7 @@ fn test_create_persists_record() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(
+    let context = PrimaryContext::from_request(
         &manager,
         &base,
         &mounts,
@@ -240,7 +250,8 @@ fn test_create_persists_record() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id(&id), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id(&id), request);
 
     let fetched =
         Books::default().show(ResourceContext::new(schema(&manager, "books"), context))?;
@@ -271,7 +282,7 @@ fn test_create_refuses_unaccepted_client_generated_id() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(
+    let context = PrimaryContext::from_request(
         &manager,
         &base,
         &mounts,
@@ -301,7 +312,7 @@ fn test_create_honours_accepted_client_generated_id() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(
+    let context = PrimaryContext::from_request(
         &manager,
         &base,
         &mounts,
@@ -321,7 +332,8 @@ fn test_create_honours_accepted_client_generated_id() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("42"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("42"), request);
     let fetched =
         Books::default().show(ResourceContext::new(schema(&manager, "books"), context))?;
 
@@ -348,7 +360,7 @@ fn test_create_with_belongs_to_relationship() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(
+    let context = PrimaryContext::from_request(
         &manager,
         &base,
         &mounts,
@@ -380,7 +392,7 @@ fn test_create_rejects_type_mismatch() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(
+    let context = PrimaryContext::from_request(
         &manager,
         &base,
         &mounts,
@@ -410,7 +422,7 @@ fn test_create_rejects_unknown_attribute() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(
+    let context = PrimaryContext::from_request(
         &manager,
         &base,
         &mounts,
@@ -437,7 +449,7 @@ fn test_create_rejects_non_resource_document() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(
+    let context = PrimaryContext::from_request(
         &manager,
         &base,
         &mounts,
@@ -469,7 +481,8 @@ fn test_update_changes_attributes() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     let response =
         Books::default().update(ResourceContext::new(schema(&manager, "books"), context))?;
@@ -494,7 +507,8 @@ fn test_update_missing_is_not_found() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("999"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("999"), request);
 
     match Books::default().update(ResourceContext::new(schema(&manager, "books"), context)) {
         Ok(_) => Err("a missing record must error".into()),
@@ -523,7 +537,8 @@ fn test_update_patches_belongs_to_relationship() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     let response =
         Books::default().update(ResourceContext::new(schema(&manager, "books"), context))?;
@@ -548,7 +563,8 @@ fn test_update_rejects_type_mismatch() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     match Books::default().update(ResourceContext::new(schema(&manager, "books"), context)) {
         Ok(_) => Err("a type mismatch must error".into()),
@@ -571,7 +587,8 @@ fn test_update_rejects_id_mismatch() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     match Books::default().update(ResourceContext::new(schema(&manager, "books"), context)) {
         Ok(_) => Err("an id mismatch must error".into()),
@@ -590,7 +607,8 @@ fn test_delete_removes_record() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("2"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("2"), request);
 
     let deleted =
         Books::default().delete(ResourceContext::new(schema(&manager, "books"), context))?;
@@ -600,7 +618,8 @@ fn test_delete_removes_record() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("2"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("2"), request);
 
     match Books::default().show(ResourceContext::new(schema(&manager, "books"), context)) {
         Ok(_) => Err("a deleted record must be gone".into()),
@@ -619,7 +638,8 @@ fn test_linkage_to_many() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     let response = Authors::default().linkage(
         ResourceContext::new(schema(&manager, "authors"), context),
@@ -646,7 +666,8 @@ fn test_linkage_to_one() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     let response = Books::default().linkage(
         ResourceContext::new(schema(&manager, "books"), context),
@@ -667,7 +688,8 @@ fn test_linkage_empty_to_one() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("3"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("3"), request);
 
     let response = Books::default().linkage(
         ResourceContext::new(schema(&manager, "books"), context),
@@ -687,7 +709,8 @@ fn test_linkage_has_one() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     let response = Authors::default().linkage(
         ResourceContext::new(schema(&manager, "authors"), context),
@@ -708,7 +731,8 @@ fn test_linkage_unknown_relationship_is_internal_error() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     match Authors::default().linkage(
         ResourceContext::new(schema(&manager, "authors"), context),
@@ -734,7 +758,8 @@ fn test_link_adds_to_collection() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("2"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("2"), request);
 
     let response = Authors::default().link(
         ResourceContext::new(schema(&manager, "authors"), context),
@@ -758,7 +783,8 @@ fn test_relink_replaces_collection() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     let response = Authors::default().relink(
         ResourceContext::new(schema(&manager, "authors"), context),
@@ -782,7 +808,8 @@ fn test_unlink_removes_from_collection() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     let response = Authors::default().unlink(
         ResourceContext::new(schema(&manager, "authors"), context),
@@ -806,7 +833,8 @@ fn test_relink_sets_belongs_to_target() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     let response = Books::default().relink(
         ResourceContext::new(schema(&manager, "books"), context),
@@ -831,7 +859,8 @@ fn test_relink_null_clears_to_one() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     let response = Books::default().relink(
         ResourceContext::new(schema(&manager, "books"), context),
@@ -855,7 +884,8 @@ fn test_relink_sets_has_one_target() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("2"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("2"), request);
 
     let response = Authors::default().relink(
         ResourceContext::new(schema(&manager, "authors"), context),
@@ -880,7 +910,8 @@ fn test_relink_missing_target_is_not_found() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     match Books::default().relink(
         ResourceContext::new(schema(&manager, "books"), context),
@@ -906,7 +937,8 @@ fn test_link_rejects_to_one_linkage() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     match Authors::default().link(
         ResourceContext::new(schema(&manager, "authors"), context),
@@ -932,7 +964,8 @@ fn test_link_missing_target_is_not_found() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     match Authors::default().link(
         ResourceContext::new(schema(&manager, "authors"), context),
@@ -958,7 +991,8 @@ fn test_relink_missing_parent_is_not_found() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("999"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("999"), request);
 
     match Books::default().relink(
         ResourceContext::new(schema(&manager, "books"), context),
@@ -984,7 +1018,8 @@ fn test_relink_unknown_relationship_is_internal_error() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     match Books::default().relink(
         ResourceContext::new(schema(&manager, "books"), context),
@@ -1006,7 +1041,8 @@ fn test_relink_without_body_is_unprocessable() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     match Books::default().relink(
         ResourceContext::new(schema(&manager, "books"), context),
@@ -1032,7 +1068,8 @@ fn test_link_on_to_one_is_kind_mismatch() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     match Authors::default().link(
         ResourceContext::new(schema(&manager, "authors"), context),
@@ -1058,7 +1095,8 @@ fn test_unlink_on_to_one_is_kind_mismatch() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     match Authors::default().unlink(
         ResourceContext::new(schema(&manager, "authors"), context),
@@ -1218,7 +1256,8 @@ fn test_related_to_many_serves_collection() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     let response = Authors::default().related(
         ResourceContext::new(schema(&manager, "authors"), context),
@@ -1246,7 +1285,8 @@ fn test_related_to_one_serves_record() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     let response = Books::default().related(
         ResourceContext::new(schema(&manager, "books"), context),
@@ -1268,7 +1308,8 @@ fn test_related_empty_to_one_is_null() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("3"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("3"), request);
 
     let response = Books::default().related(
         ResourceContext::new(schema(&manager, "books"), context),
@@ -1288,7 +1329,8 @@ fn test_related_has_one_serves_record() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     let response = Authors::default().related(
         ResourceContext::new(schema(&manager, "authors"), context),
@@ -1309,7 +1351,8 @@ fn test_related_supports_primary_content_include() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     let response = Authors::default().related(
         ResourceContext::new(schema(&manager, "authors"), context),
@@ -1335,7 +1378,8 @@ fn test_related_unknown_relationship_is_internal_error() -> TestResult {
     let uri: Uri = request.uri().clone().into();
     let base = base_uri();
     let mounts = mount_table();
-    let context = Context::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
+    let context =
+        PrimaryContext::from_request(&manager, &base, &mounts, &uri, route_id("1"), request);
 
     match Authors::default().related(
         ResourceContext::new(schema(&manager, "authors"), context),
