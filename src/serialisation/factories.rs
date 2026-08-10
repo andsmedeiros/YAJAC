@@ -2,7 +2,6 @@ use super::error::Error;
 use super::uri_generator::UriGenerator;
 use crate::{
     database::{
-        adapters::Adapter as AdapterInterface,
         attributes::Identifier as DatabaseIdentifier,
         error::Error as DatabaseError,
         record::Record,
@@ -114,9 +113,9 @@ impl<'sch> TryFrom<(Identifier, &'sch Schema<'sch>)> for DatabaseIdentifier {
     }
 }
 
-pub(crate) fn make_record_resource<'sch, 'req, Adapter: AdapterInterface>(
+pub(crate) fn make_record_resource<'sch>(
     record: &Record<'sch>,
-    generator: &UriGenerator<'sch, 'req, Adapter>,
+    generator: &impl UriGenerator<'sch>,
 ) -> Result<Resource, Error> {
     let identifier = record.identifier();
     let attributes = record
@@ -218,11 +217,11 @@ fn document_links(uri: &Uri) -> document::Links {
     }
 }
 
-pub(crate) fn to_document<'sch: 'req, 'req, Adapter: AdapterInterface>(
+pub(crate) fn to_document<'sch: 'req, 'req>(
     content: impl Into<Content<'sch, 'req>>,
     included: Vec<Record<'sch>>,
     uri: &Uri,
-    generator: &UriGenerator<'sch, 'req, Adapter>,
+    generator: &impl UriGenerator<'sch>,
 ) -> Result<Document, Error> {
     let content = content.into();
     // `included` MUST NOT accompany a document without primary `data` (i.e. an
