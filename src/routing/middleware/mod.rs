@@ -65,9 +65,24 @@ pub trait ResourceMiddleware<'sch, Adapter: AdapterInterface + 'sch>: Send + Syn
 /// One middleware in a route's chain, tagged by the tier it works. `Arc`-shared so the route table
 /// clones cheaply and a middleware may hold unique resources behind interior mutability. A route's
 /// chain is partitioned primaries-first, then resources.
-pub(crate) enum Middleware<'sch, Adapter: AdapterInterface> {
+///
+/// Part of the builder seam threaded through the public `RouteBuilder` trait, hence `pub` — but an
+/// internal type users never name (they pass middleware values to `.middleware`), so `doc(hidden)`.
+#[doc(hidden)]
+pub enum Middleware<'sch, Adapter: AdapterInterface> {
     Primary(Arc<dyn PrimaryMiddleware<'sch, Adapter>>),
     Resource(Arc<dyn ResourceMiddleware<'sch, Adapter>>),
+}
+
+/// Cloning bumps the `Arc` refcount — the middleware itself is never copied. Hand-written rather than
+/// derived so the bound stays `Adapter: AdapterInterface`, not the `Adapter: Clone` a derive imposes.
+impl<'sch, Adapter: AdapterInterface> Clone for Middleware<'sch, Adapter> {
+    fn clone(&self) -> Self {
+        match self {
+            Middleware::Primary(middleware) => Middleware::Primary(middleware.clone()),
+            Middleware::Resource(middleware) => Middleware::Resource(middleware.clone()),
+        }
+    }
 }
 
 impl<'sch, Adapter: AdapterInterface + 'sch> Middleware<'sch, Adapter> {

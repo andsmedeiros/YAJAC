@@ -1,56 +1,113 @@
 use super::{
-    BaseUri, Error, PrimaryContext, Request, Result, RouteParameters,
+    BaseUri, Error, PrimaryContext, PrimaryRequest, PrimaryResult, ResourceResult, RouteParameters,
     builders::{PrimaryRouteBuilder, RouteBuilder},
-    default_response, respond_with,
+    controller::ResourceContext,
+    middleware::Middleware,
+    respond_with,
 };
 use crate::{
-    database::{adapters::Adapter as AdapterInterface, connection_manager::ConnectionManager},
+    database::{
+        adapters::Adapter as AdapterInterface, connection_manager::ConnectionManager,
+        schema::Schema,
+    },
     http_wrappers::{StatusCode, Uri},
-    json_api::{document::Document, error::Error as JsonApiError},
     routing::mount_table::{MountTable, ResourceMount},
-    serialisation::factories::to_document,
-    serialisation::uri_generator::UriGenerator,
+    serialisation::ByteStream,
 };
 use http::{HeaderMap, Method, Response};
 use indexmap::IndexMap;
-use log::{debug, error};
+use log::debug;
 use std::borrow::Cow;
 use std::fmt::{self, Display};
+use std::io::Cursor;
 use std::result::Result as StdResult;
 
-/// A schema-oblivious request handler: the leaf every mounted route resolves to.
-pub trait Handler<'sch, Adapter: AdapterInterface>:
-    for<'req> Fn(PrimaryContext<'sch, 'req, Adapter>) -> Result + Sync + Send + 'sch
+/// A handler that runs without a bound schema: it receives a `PrimaryContext` — the request head and
+/// the raw request body as a byte stream — and returns a byte-stream response.
+pub trait PrimaryEndpointHandler<'sch, Adapter: AdapterInterface>:
+    for<'req> Fn(PrimaryContext<'sch, 'req, Adapter>) -> PrimaryResult + Sync + Send + 'sch
 {
 }
 
-impl<'sch, T, Adapter: AdapterInterface> Handler<'sch, Adapter> for T where
-    T: for<'req> Fn(PrimaryContext<'sch, 'req, Adapter>) -> Result + Sync + Send + 'sch
+impl<'sch, T, Adapter: AdapterInterface> PrimaryEndpointHandler<'sch, Adapter> for T where
+    T: for<'req> Fn(PrimaryContext<'sch, 'req, Adapter>) -> PrimaryResult + Sync + Send + 'sch
 {
 }
 
-/// A single mounted route: the method and path template it answers, and the handler it runs.
-/// Template segments prefixed `:` are dynamic and captured into `RouteParameters` on a match.
+/// A handler bound to a resource's schema: it receives a `ResourceContext` and returns a `Document`
+/// response, which the router serialises to bytes once the resource middleware around it has run.
+pub trait ResourceEndpointHandler<'sch, Adapter: AdapterInterface>:
+    for<'req> Fn(ResourceContext<'sch, 'req, Adapter>) -> ResourceResult + Sync + Send + 'sch
+{
+}
+
+impl<'sch, T, Adapter: AdapterInterface> ResourceEndpointHandler<'sch, Adapter> for T where
+    T: for<'req> Fn(ResourceContext<'sch, 'req, Adapter>) -> ResourceResult + Sync + Send + 'sch
+{
+}
+
+/// The handler a route runs, in one of two forms. `Primary` serves raw bytes and its errors escape
+/// to the embedder; `Resource` is bound to a schema and returns a `Document` the router serialises,
+/// after building its `ResourceContext`. A route stores exactly one.
+///
+/// Part of the builder seam threaded through the public `RouteBuilder::mount`, hence `pub` — but an
+/// internal type users never name (verbs construct it for them), so `doc(hidden)`.
+#[doc(hidden)]
+pub enum EndpointHandler<'sch, Adapter: AdapterInterface> {
+    Primary(Box<dyn PrimaryEndpointHandler<'sch, Adapter>>),
+    Resource {
+        schema: &'sch Schema<'sch>,
+        handler: Box<dyn ResourceEndpointHandler<'sch, Adapter>>,
+    },
+}
+
+impl<'sch, Adapter: AdapterInterface + 'sch> EndpointHandler<'sch, Adapter> {
+    /// A schema-less handler. The `impl` bound drives closure inference, so callers pass a bare
+    /// closure rather than naming the boxed handler type.
+    pub(crate) fn primary(handler: impl PrimaryEndpointHandler<'sch, Adapter>) -> Self {
+        EndpointHandler::Primary(Box::new(handler))
+    }
+
+    /// A schema-bound handler, paired with the schema its `ResourceContext` is built against.
+    pub(crate) fn resource(
+        schema: &'sch Schema<'sch>,
+        handler: impl ResourceEndpointHandler<'sch, Adapter>,
+    ) -> Self {
+        EndpointHandler::Resource {
+            schema,
+            handler: Box::new(handler),
+        }
+    }
+}
+
+/// A single mounted route: the method and path template it answers, the middleware wrapping it, and
+/// the handler it runs. The middleware is ordered schema-less first, then schema-bound. Template
+/// segments prefixed `:` are dynamic and captured into `RouteParameters` on a match.
 pub(crate) struct Route<'sch, Adapter: AdapterInterface> {
     method: Method,
     path: Vec<Cow<'sch, str>>,
-    handler: Box<dyn Handler<'sch, Adapter>>,
+    middleware: Vec<Middleware<'sch, Adapter>>,
+    handler: EndpointHandler<'sch, Adapter>,
 }
 
 impl<'sch, Adapter: AdapterInterface + 'sch> Route<'sch, Adapter> {
     pub(crate) fn new(
         method: Method,
         path: Vec<Cow<'sch, str>>,
-        handler: impl Handler<'sch, Adapter>,
+        middleware: Vec<Middleware<'sch, Adapter>>,
+        handler: EndpointHandler<'sch, Adapter>,
     ) -> Self {
         Route {
             method,
             path,
-            handler: Box::new(handler),
+            middleware,
+            handler,
         }
     }
 
-    fn matches(&self, method: &Method, path_segments: &[&str]) -> Option<RouteParameters> {
+    /// Matches the request line against this route's method and path template, capturing dynamic
+    /// segments. Does not consult middleware.
+    fn match_path(&self, method: &Method, path_segments: &[&str]) -> Option<RouteParameters> {
         if self.method != method || self.path.len() != path_segments.len() {
             return None;
         }
@@ -64,6 +121,23 @@ impl<'sch, Adapter: AdapterInterface + 'sch> Route<'sch, Adapter> {
             }
         }
         Some(params)
+    }
+
+    /// Matches the request line, then every middleware guard against the request head and the
+    /// captured parameters. A guard that rejects the request makes the route not match — it falls
+    /// through to the next route, or to a 404.
+    fn matches(
+        &self,
+        method: &Method,
+        path_segments: &[&str],
+        uri: &Uri,
+        headers: &HeaderMap,
+    ) -> Option<RouteParameters> {
+        let params = self.match_path(method, path_segments)?;
+        self.middleware
+            .iter()
+            .all(|middleware| middleware.matches(headers, uri, &params))
+            .then_some(params)
     }
 }
 
@@ -89,8 +163,8 @@ impl Display for MountSlot {
     }
 }
 
-/// A fault detected while assembling a router: a misconfiguration in how resources and their
-/// relationship endpoints were mounted.
+/// A fault detected while assembling a router: a misconfiguration in how resources, their
+/// relationship endpoints, or their middleware were mounted.
 #[derive(Debug)]
 pub enum RouterError {
     DuplicateResource {
@@ -104,6 +178,11 @@ pub enum RouterError {
     UnknownRelationship {
         kind: String,
         relationship: String,
+    },
+    /// A schema-bound middleware wraps a raw route. A raw route serves no `Document`, so the
+    /// middleware could never run against a `ResourceContext` — the router would silently ignore it.
+    ResourceMiddlewareOnPrimaryRoute {
+        path: String,
     },
 }
 
@@ -124,6 +203,10 @@ impl Display for RouterError {
             RouterError::UnknownRelationship { kind, relationship } => {
                 write!(f, "'{kind}' has no relationship named '{relationship}'")
             }
+            RouterError::ResourceMiddlewareOnPrimaryRoute { path } => write!(
+                f,
+                "a schema-bound middleware wraps the raw route '/{path}', which serves no JSON:API document"
+            ),
         }
     }
 }
@@ -147,8 +230,12 @@ impl<'sch, Adapter: AdapterInterface + 'sch> MaterialisedRoutes<'sch, Adapter> {
         }
     }
 
-    pub(crate) fn push_route(&mut self, route: StdResult<Route<'sch, Adapter>, RouterError>) {
-        self.routes.push(route);
+    pub(crate) fn push_route(&mut self, route: Route<'sch, Adapter>) {
+        self.routes.push(Ok(route));
+    }
+
+    pub(crate) fn push_error(&mut self, error: RouterError) {
+        self.routes.push(Err(error));
     }
 
     pub(crate) fn push_mount(&mut self, mount: ResourceMount<'sch, Adapter>) {
@@ -181,6 +268,68 @@ impl<'sch, Adapter: AdapterInterface + 'sch> MaterialisedRoutes<'sch, Adapter> {
     }
 }
 
+/// Runs a matched route. Each leading schema-less middleware runs against the `PrimaryContext`,
+/// wrapping the recursive call that runs the rest. Once they are exhausted, a `Primary` handler runs
+/// directly; a `Resource` handler is run against a `ResourceContext` built here, and the `Document`
+/// it returns is serialised into a byte-stream response.
+fn serve<'sch, 'req, Adapter>(
+    middleware: &'req [Middleware<'sch, Adapter>],
+    handler: &'req EndpointHandler<'sch, Adapter>,
+    context: PrimaryContext<'sch, 'req, Adapter>,
+) -> PrimaryResult
+where
+    'sch: 'req,
+    Adapter: AdapterInterface + 'sch,
+{
+    match (middleware.split_first(), handler) {
+        (Some((Middleware::Primary(primary), rest)), _) => {
+            primary.handle(context, &|context| serve(rest, handler, context))
+        }
+        (_, EndpointHandler::Primary(handler)) => handler(context),
+        (_, EndpointHandler::Resource { schema, handler }) => {
+            let response = serve_resource(
+                middleware,
+                &**handler,
+                ResourceContext::new(schema, context),
+            )?;
+            let (parts, body) = response.into_parts();
+            let body = body
+                .map(|document| serde_json::to_vec(&document))
+                .transpose()?
+                .map(|bytes| Box::new(Cursor::new(bytes)) as ByteStream);
+
+            Ok(Response::from_parts(parts, body))
+        }
+    }
+}
+
+/// Runs the schema-bound middleware wrapping a resource handler — each wraps the recursive call that
+/// runs the rest — then the handler. Any schema-less middleware left in the slice has already run
+/// against the `PrimaryContext`, so it is passed over.
+fn serve_resource<'sch, 'req, Adapter>(
+    middleware: &'req [Middleware<'sch, Adapter>],
+    handler: &'req dyn ResourceEndpointHandler<'sch, Adapter>,
+    context: ResourceContext<'sch, 'req, Adapter>,
+) -> ResourceResult
+where
+    'sch: 'req,
+    Adapter: AdapterInterface + 'sch,
+{
+    match middleware.split_first() {
+        Some((Middleware::Resource(resource), rest)) => {
+            resource.handle(context, &|context| serve_resource(rest, handler, context))
+        }
+        // The chain is partitioned schema-less-first, so a schema-less middleware here means the
+        // partition was built wrong — a router-assembly bug, surfaced rather than passed over.
+        Some((Middleware::Primary(_), _)) => Err(Error::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "MisorderedMiddleware",
+            "A schema-less middleware appears within the schema-bound middleware chain",
+        )),
+        None => handler(context),
+    }
+}
+
 /// A schema-aware router: the base its links are rooted at, the mounted routes it dispatches to,
 /// and the mount table its handlers resolve controllers and link templates through.
 pub struct Router<'sch, Adapter: AdapterInterface> {
@@ -206,11 +355,14 @@ impl<'sch, Adapter: AdapterInterface + 'sch> Router<'sch, Adapter> {
         })
     }
 
+    /// Dispatches a request. An unmatched route yields a bare bodyless 404; a matched one runs its
+    /// middleware and handler. The result is fallible to the embedder: expected JSON:API errors are
+    /// rendered into documents by the resource middleware, so an `Err` here is exceptional.
     pub fn handle(
         &self,
         database: &'sch ConnectionManager<'sch, Adapter>,
-        request: http::Request<Vec<u8>>,
-    ) -> Response<Option<Document>> {
+        request: PrimaryRequest,
+    ) -> PrimaryResult {
         let uri: Uri = request.uri().clone().into();
         let method = request.method().clone();
         let path_segments: Vec<&str> = uri.path().split('/').filter(|s| !s.is_empty()).collect();
@@ -219,13 +371,11 @@ impl<'sch, Adapter: AdapterInterface + 'sch> Router<'sch, Adapter> {
             .iter()
             .find_map(|route| {
                 route
-                    .matches(&method, &path_segments)
+                    .matches(&method, &path_segments, &uri, request.headers())
                     .map(|parameters| (route, parameters))
             })
             .map(|(route, parameters)| {
                 debug!("Matched {method} {uri}");
-                let (parts, body) = request.into_parts();
-                let request = Request::from_parts(parts, serde_json::from_slice(&body)?);
                 let context = PrimaryContext::from_request(
                     database,
                     &self.base_uri,
@@ -234,55 +384,10 @@ impl<'sch, Adapter: AdapterInterface + 'sch> Router<'sch, Adapter> {
                     parameters,
                     request,
                 );
-                (route.handler)(context)
+                serve(&route.middleware, &route.handler, context)
             })
             .unwrap_or_else(|| {
-                Err(Error::new(
-                    StatusCode::NOT_FOUND,
-                    "ResourceNotFound",
-                    format!("{method} {uri}: Resource not found"),
-                ))
-            })
-            .or_else(|error| {
-                let status = error.status_code();
-
-                let error = if status.is_server_error() {
-                    error!("{method} {uri} failed: {error:?}");
-
-                    if cfg!(debug_assertions) {
-                        error
-                    } else {
-                        Error::new(
-                            status.clone(),
-                            "InternalServerError",
-                            "Internal server error",
-                        )
-                    }
-                } else {
-                    error
-                };
-
-                // An errors document carries no resource links; the generator is never driven, but
-                // `to_document` takes one uniformly, so lend it a bare view over the request.
-                let route = RouteParameters::new();
-                let headers = HeaderMap::new();
-                let generator =
-                    UriGenerator::new(&self.base_uri, &self.mount_table, &route, &headers);
-                let document = to_document(
-                    vec![JsonApiError::from(error)],
-                    Vec::new(),
-                    &uri,
-                    &generator,
-                )?;
-
-                respond_with(status.into(), Some(document))
-            })
-            .unwrap_or_else(|error| {
-                error!("Failed to construct error response: {error:?}");
-                default_response()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(None)
-                    .unwrap_or_else(|_| Response::new(None))
+                respond_with(StatusCode::NOT_FOUND, None::<ByteStream>).map_err(Into::into)
             })
     }
 }

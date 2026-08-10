@@ -17,7 +17,7 @@ pub mod router;
 pub use base_uri::BaseUri;
 pub use builders::{
     PrimaryRouteBuilder, RelationshipConfig, RelationshipsConfig, ResourceRouteBuilder,
-    RouteBuilder, SubordinateRouteBuilder, UnboundVerbs,
+    ResourceVerbs, RouteBuilder, SubordinateRouteBuilder, UnboundVerbs,
 };
 pub use context::PrimaryContext;
 pub use controller::DefaultController;
