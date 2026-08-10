@@ -9,10 +9,11 @@ use crate::{
     http_wrappers::{StatusCode, Uri},
     routing::{BaseUri, Error as RoutingError, MountTable, RouteParameters},
     serialisation::ByteStream,
-    serialisation::uri_generator::UriGenerator,
+    serialisation::uri_generator::CanonicalUriGenerator,
 };
 use http::HeaderMap;
-use std::cell::LazyCell;
+use std::cell::{LazyCell, OnceCell};
+use std::io::{Cursor, Read};
 
 /// A lazily-acquired request connection: unforced until first use, then the pooled handle or the
 /// failure that acquiring it produced. Boxed because the init closure captures the manager.
@@ -33,6 +34,8 @@ where
     base_uri: &'req BaseUri<'sch>,
     mount_table: &'req MountTable<'sch, Adapter>,
     body: Option<ByteStream>,
+    /// Whether the body carries content, filled once by the first `contains_body` probe.
+    body_present: OnceCell<bool>,
     headers: HeaderMap,
     route: RouteParameters,
     connection: LazyConnection<'sch, Adapter>,
@@ -59,6 +62,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> PrimaryContext<'sch, 'req, Ada
             base_uri,
             mount_table,
             body: Some(body),
+            body_present: OnceCell::new(),
             headers: parts.headers,
             route,
             connection: LazyCell::new(acquire),
@@ -67,18 +71,8 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> PrimaryContext<'sch, 'req, Ada
 
     /// The link generator for this request, resolving each record's links against where its type is
     /// mounted. Cheap to build — a view over the base, the mount table, and the request.
-    pub(crate) fn uri_generator(&self) -> UriGenerator<'sch, '_, Adapter> {
-        UriGenerator::new(self.base_uri, self.mount_table, &self.route, &self.headers)
-    }
-
-    /// The base every link is rooted at — lent to the crossing for error-document rendering.
-    pub(crate) fn base_uri(&self) -> &'req BaseUri<'sch> {
-        self.base_uri
-    }
-
-    /// The mount table controllers and link templates resolve through — lent to the crossing.
-    pub(crate) fn mount_table(&self) -> &'req MountTable<'sch, Adapter> {
-        self.mount_table
+    pub(crate) fn uri_generator(&self) -> CanonicalUriGenerator<'sch, '_, Adapter> {
+        CanonicalUriGenerator::new(self.base_uri, self.mount_table, &self.route, &self.headers)
     }
 
     /// Takes the request body stream by value — a primary handler owns it to read or parse however
@@ -95,12 +89,35 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> PrimaryContext<'sch, 'req, Ada
         })
     }
 
-    pub fn body(&self) -> &Option<ByteStream> {
-        &self.body
-    }
+    /// Tests the request for body content, probed once and cached.
+    /// This attempts to read a single byte from the body stream and prepend it back afterwards,
+    /// replacing the body stream but making the data it yields identical.
+    /// Returns whether a byte was read, and thus the body carries content, or none was, and thus the
+    /// body is empty.
+    pub fn contains_body(&mut self) -> Result<bool, RoutingError> {
+        if let Some(&present) = self.body_present.get() {
+            return Ok(present);
+        }
 
-    pub fn body_mut(&mut self) -> &mut Option<ByteStream> {
-        &mut self.body
+        let mut byte = 0u8;
+        let mut body = self.require_body()?;
+        let count = body
+            .read(std::slice::from_mut(&mut byte))
+            .map_err(|error| {
+                RoutingError::new(
+                    StatusCode::BAD_REQUEST,
+                    "BodyPeekFailed",
+                    format!("Failed to peek the request body: {error}"),
+                )
+            })?;
+
+        if count == 0 {
+            self.body = Some(body);
+        } else {
+            self.body = Some(Box::new(Cursor::new([byte]).take(count as u64).chain(body)));
+        }
+
+        Ok(*self.body_present.get_or_init(|| count != 0))
     }
 
     /// Lazily acquires the request connection from the pool and lends it as a shared reference.

@@ -78,12 +78,16 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> ResourceContext<'sch, '
             .map_err(|error| error.clone())
     }
 
-    /// Takes and parses the streamed body into an optional document. A bodyless request (`null`)
-    /// yields `None`; malformed content surfaces as the parser's error.
+    /// Parses the streamed body into an optional document, straight off the stream. A bodyless
+    /// request yields `None`; a JSON `null` likewise; malformed content surfaces as the parser's
+    /// error.
     fn parse_body(&mut self) -> std::result::Result<Option<Document>, Error> {
-        let mut stream = self.require_body()?;
-        let document: Option<Document> = serde_json::from_reader(&mut stream)?;
-        Ok(document)
+        if !self.contains_body()? {
+            return Ok(None);
+        }
+
+        let body = self.require_body()?;
+        serde_json::from_reader(body).map_err(Into::into)
     }
 
     /// Parses the request body into a record validated against the resource schema.

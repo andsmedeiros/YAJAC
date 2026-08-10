@@ -8,7 +8,6 @@ use http::header::{ACCEPT, CONTENT_TYPE};
 use http::{HeaderMap, HeaderName};
 use itertools::Itertools;
 use std::collections::HashSet;
-use std::io::Read;
 use std::sync::LazyLock;
 
 /// The JSON:API extensions the server supports — none, so any `ext` is unsupported.
@@ -36,7 +35,7 @@ impl ContentNegotiator {
     pub(super) fn negotiate<'sch: 'req, 'req, Adapter: AdapterInterface>(
         context: &mut ResourceContext<'sch, 'req, Adapter>,
     ) -> Result<(), Error> {
-        let content_type_required = Self::contains_body(context)?;
+        let content_type_required = context.contains_body()?;
         if let Some(content_type) =
             Self::extract_json_api_content_type(context.headers(), content_type_required)?
             && content_type
@@ -95,7 +94,7 @@ impl ContentNegotiator {
     fn extract_json_api_content_type(
         headers: &HeaderMap,
         required: bool,
-    ) -> Result<Option<JsonApiMediaType>, Error> {
+    ) -> Result<Option<JsonApiMediaType<'_>>, Error> {
         let Some(header) = Self::read_header(headers, CONTENT_TYPE)? else {
             return required
                 .then(|| {
@@ -143,7 +142,7 @@ impl ContentNegotiator {
     /// If the header is absent, returns `Ok(None)`.
     fn extract_json_api_accept(
         headers: &HeaderMap,
-    ) -> Result<Option<Vec<JsonApiMediaType>>, Error> {
+    ) -> Result<Option<Vec<JsonApiMediaType<'_>>>, Error> {
         let Some(header) = Self::read_header(headers, ACCEPT)? else {
             return Ok(None);
         };
@@ -193,37 +192,6 @@ impl ContentNegotiator {
         }
 
         Ok(Some(json_api_media_types))
-    }
-
-    /// Tests the request for body content.
-    /// This will attempt to read a single byte from the body stream and prepend it back afterwards,
-    /// replacing the body stream but making the output data identical.
-    /// Returns whether the read succeeded, and thus the body carries data, or failed, and thus the
-    /// body is empty.
-    fn contains_body<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch>(
-        context: &mut ResourceContext<'sch, 'req, Adapter>,
-    ) -> Result<bool, Error> {
-        let mut byte = 0u8;
-        let mut body = context.require_body()?;
-        let count = body
-            .read(std::slice::from_mut(&mut byte))
-            .map_err(|error| {
-                Error::new(
-                    StatusCode::BAD_REQUEST,
-                    "BodyPeekFailed",
-                    format!("Failed to peek the request body: {error}"),
-                )
-            })?;
-
-        if count == 0 {
-            *context.body_mut() = Some(body);
-            Ok(false)
-        } else {
-            *context.body_mut() = Some(Box::new(
-                std::io::Cursor::new([byte]).take(count as u64).chain(body),
-            ));
-            Ok(true)
-        }
     }
 }
 

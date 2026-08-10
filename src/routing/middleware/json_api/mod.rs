@@ -9,11 +9,11 @@ use crate::database::adapters::Adapter as AdapterInterface;
 use crate::http_wrappers::StatusCode;
 use crate::json_api::error::Error as JsonApiError;
 use crate::routing::controller::ResourceContext;
-use crate::routing::{Error, ResourceResult, RouteParameters, respond_with};
+use crate::routing::{Error, ResourceResult, respond_with};
 use crate::serialisation::factories::to_document;
-use crate::serialisation::uri_generator::UriGenerator;
+use crate::serialisation::uri_generator::NullUriGenerator;
+use http::HeaderValue;
 use http::header::CONTENT_TYPE;
-use http::{HeaderMap, HeaderValue};
 use log::error;
 use media_type::{JSONAPI_MEDIA_TYPE, JsonApiMediaType};
 use negotiation::ContentNegotiator;
@@ -39,11 +39,7 @@ impl<'sch, Adapter: AdapterInterface + 'sch> ResourceMiddleware<'sch, Adapter> f
     where
         'sch: 'req,
     {
-        // Captured before `next` consumes the context, for rendering an error document afterwards;
-        // each is a request-scoped view over router-owned data, so it outlives the context.
         let uri = context.uri();
-        let base_uri = context.base_uri();
-        let mount_table = context.mount_table();
 
         let uses_filter_profile = context
             .query_parameters()
@@ -85,9 +81,8 @@ impl<'sch, Adapter: AdapterInterface + 'sch> ResourceMiddleware<'sch, Adapter> f
                 Ok(response)
             })
             .or_else(|error| {
-                // The error boundary: render any resource-tier error into an error document,
-                // redacting (and logging) a 5xx so nothing internal leaks. The generator is never
-                // driven — an errors document carries no resource links — so lend it a bare view.
+                // Render any resource-tier error into an error document, redacting (and logging) a
+                // 5xx so nothing internal leaks.
                 let status = error.status_code();
                 let error = if status.is_server_error() {
                     error!("{uri} failed: {error:?}");
@@ -104,11 +99,14 @@ impl<'sch, Adapter: AdapterInterface + 'sch> ResourceMiddleware<'sch, Adapter> f
                     error
                 };
 
-                let route = RouteParameters::new();
-                let headers = HeaderMap::new();
-                let generator = UriGenerator::new(base_uri, mount_table, &route, &headers);
-                let document =
-                    to_document(vec![JsonApiError::from(error)], Vec::new(), uri, &generator)?;
+                // An errors document renders no per-record links, so it needs no request-bound
+                // generator: the null generator refuses any link, asserting exactly that.
+                let document = to_document(
+                    vec![JsonApiError::from(error)],
+                    Vec::new(),
+                    uri,
+                    &NullUriGenerator,
+                )?;
                 respond_with(status, Some(document)).map(|mut response| {
                     response
                         .headers_mut()
