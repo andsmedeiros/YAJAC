@@ -128,6 +128,18 @@ impl From<StatusCode> for http::StatusCode {
     }
 }
 
+impl PartialEq<http::StatusCode> for StatusCode {
+    fn eq(&self, other: &http::StatusCode) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<StatusCode> for http::StatusCode {
+    fn eq(&self, other: &StatusCode) -> bool {
+        *self == other.0
+    }
+}
+
 impl FromStr for StatusCode {
     type Err = <http::StatusCode as FromStr>::Err;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -164,5 +176,22 @@ impl<'de> Deserialize<'de> for StatusCode {
         D: Deserializer<'de>,
     {
         Ok(StatusCode(deserializer.deserialize_str(StatusCodeVisitor)?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn equals_its_inner_status_in_both_directions() {
+        assert_eq!(StatusCode::CREATED, http::StatusCode::CREATED);
+        assert_eq!(http::StatusCode::CREATED, StatusCode::CREATED);
+    }
+
+    #[test]
+    fn differs_from_another_inner_status_in_both_directions() {
+        assert_ne!(StatusCode::CREATED, http::StatusCode::OK);
+        assert_ne!(http::StatusCode::OK, StatusCode::CREATED);
     }
 }
