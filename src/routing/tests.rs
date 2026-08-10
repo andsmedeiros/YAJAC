@@ -1707,3 +1707,93 @@ fn test_resource_middleware_guards_custom_route() -> TestResult {
 
     Ok(())
 }
+
+// --- wildcard routes -------------------------------------------------------
+
+#[test]
+fn test_wildcard_matches_the_tail_and_captures_it() -> TestResult {
+    let manager = manager()?;
+    // `*path` captures one-or-more trailing segments, joined, under `path`; the handler echoes them.
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.get(
+            "files/*path",
+            |context: PrimaryContext<'_, '_, SqliteAdapter>| {
+                let tail = context
+                    .route_parameters()
+                    .get("path")
+                    .cloned()
+                    .unwrap_or_default();
+                let stream: ByteStream = Box::new(Cursor::new(tail.into_bytes()));
+                respond_with(StatusCode::OK, Some(stream)).map_err(Into::into)
+            },
+        )
+    })?;
+
+    let deep = send(&manager, &router, "GET", "/files/a/b/c", Value::Null, &[])?;
+    assert_eq!(deep.status(), StatusCode::OK);
+    assert_eq!(String::from_utf8(deep.body().clone())?, "a/b/c");
+
+    // A single trailing segment still matches.
+    assert_eq!(
+        send(&manager, &router, "GET", "/files/a", Value::Null, &[])?.status(),
+        StatusCode::OK
+    );
+
+    // Zero trailing segments do not: a wildcard is one-or-more.
+    assert_eq!(
+        send(&manager, &router, "GET", "/files", Value::Null, &[])?.status(),
+        StatusCode::NOT_FOUND
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_wildcard_reaches_the_resource_tier() -> TestResult {
+    let manager = manager()?;
+    let articles = manager.registry().schema("articles")?;
+    // A resource-tier catch-all, declared last so it only claims paths no canonical route matched.
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.resource_with::<Articles>("articles", articles, |articles| {
+            articles
+                .default_endpoints()
+                .all_relationships()
+                .get("*rest", search)
+        })
+    })?;
+
+    // A canonical route still wins its slot.
+    assert_eq!(
+        send(&manager, &router, "GET", "/articles/1", Value::Null, &[])?.status(),
+        StatusCode::OK
+    );
+
+    // A deep path no canonical route claims falls to the wildcard and crosses the JSON:API boundary.
+    let caught = send(
+        &manager,
+        &router,
+        "GET",
+        "/articles/1/no/such/path",
+        Value::Null,
+        &[],
+    )?;
+    assert_eq!(caught.status(), StatusCode::OK);
+    assert_eq!(
+        caught
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/vnd.api+json")
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_misplaced_wildcard_is_rejected() -> TestResult {
+    let result = Router::try_new(BaseUri::Relative, |root| root.get("*mid/tail", health));
+
+    assert!(matches!(result, Err(RouterError::MisplacedGlob { .. })));
+
+    Ok(())
+}

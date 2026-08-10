@@ -107,19 +107,43 @@ impl<'sch, Adapter: AdapterInterface + 'sch> Route<'sch, Adapter> {
 
     /// Matches the request line against this route's method and path template, capturing dynamic
     /// segments. Does not consult middleware.
+    ///
+    /// A trailing `*name` template segment is a glob: it matches one-or-more remaining path segments,
+    /// captured joined under `name` (a bare `*` matches without capturing). Every other segment
+    /// matches exactly one path segment — literally, or capturing a `:name` dynamic segment.
     fn match_path(&self, method: &Method, path_segments: &[&str]) -> Option<RouteParameters> {
-        if self.method != method || self.path.len() != path_segments.len() {
+        if self.method != method {
             return None;
         }
 
+        let glob = self
+            .path
+            .last()
+            .and_then(|segment| segment.strip_prefix('*'));
+
+        if (glob.is_none() && path_segments.len() != self.path.len())
+            || path_segments.len() < self.path.len()
+        {
+            return None;
+        }
+
+        let partition = self.path.len() - glob.is_some() as usize;
+
         let mut params = RouteParameters::new();
-        for (segment, &path_segment) in self.path.iter().zip(path_segments) {
+        for (segment, &path_segment) in self.path[..partition].iter().zip(path_segments) {
             if let Some(param_name) = segment.strip_prefix(':') {
                 params.insert(param_name, path_segment);
-            } else if segment.as_ref() != path_segment {
+            } else if segment != path_segment {
                 return None;
             }
         }
+
+        if let Some(name) = glob
+            && !name.is_empty()
+        {
+            params.insert(name, path_segments[partition..].join("/"));
+        }
+
         Some(params)
     }
 
@@ -184,6 +208,11 @@ pub enum RouterError {
     ResourceMiddlewareOnPrimaryRoute {
         path: String,
     },
+    /// A `*name` glob segment appears anywhere but the end of a path template. A glob consumes the
+    /// rest of the path, so any segment after it could never match.
+    MisplacedGlob {
+        path: String,
+    },
 }
 
 impl Display for RouterError {
@@ -207,6 +236,12 @@ impl Display for RouterError {
                 f,
                 "a schema-bound middleware wraps the raw route '/{path}', which serves no JSON:API document"
             ),
+            RouterError::MisplacedGlob { path } => {
+                write!(
+                    f,
+                    "route '/{path}' contains a wildcard segment in an invalid position"
+                )
+            }
         }
     }
 }

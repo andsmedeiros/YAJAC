@@ -90,6 +90,18 @@ pub trait RouteBuilder<'sch, Adapter: AdapterInterface + 'sch>: Sized {
         let path: Vec<Cow<'sch, str>> = self.path().iter().cloned().chain(segments).collect();
         let middleware = self.middleware().to_vec();
 
+        if path
+            .iter()
+            .rev()
+            .skip(1)
+            .any(|segment| segment.starts_with('*'))
+        {
+            self.routes_mut().push_error(RouterError::MisplacedGlob {
+                path: path.iter().join("/"),
+            });
+            return;
+        }
+
         if let EndpointHandler::Primary(_) = handler
             && middleware.iter().any(Middleware::is_resource)
         {
