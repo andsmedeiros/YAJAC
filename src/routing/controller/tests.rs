@@ -9,12 +9,14 @@ use crate::database::schema::{AttributeType, Related, Schema, SchemaBuilder};
 use crate::http_wrappers::Uri;
 use crate::json_api::document::Document;
 use crate::routing::mount_table::{RelationshipMounts, ResourceMount};
-use crate::routing::{BaseUri, MountTable, PrimaryContext, Request, RouteParameters};
+use crate::routing::{BaseUri, MountTable, PrimaryContext, PrimaryRequest, RouteParameters};
+use crate::serialisation::ByteStream;
 use http::{HeaderMap, StatusCode};
 use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::error::Error as StdError;
+use std::io::Cursor;
 use test_log::test;
 
 type Manager = ConnectionManager<'static, SqliteAdapter>;
@@ -93,16 +95,22 @@ fn manager() -> Result<Manager, Box<dyn StdError>> {
     Ok(manager)
 }
 
-fn build_request(method: &str, uri: &str, body: Value) -> Result<Request, Box<dyn StdError>> {
-    let document = match body {
-        Value::Null => None,
-        value => Some(serde_json::from_value(value)?),
+fn build_request(
+    method: &str,
+    uri: &str,
+    body: Value,
+) -> Result<PrimaryRequest, Box<dyn StdError>> {
+    // A `null` body is bodyless — streamed as no bytes; anything else streams its serialised form.
+    let stream: ByteStream = if body.is_null() {
+        Box::new(Cursor::new(Vec::new()))
+    } else {
+        Box::new(Cursor::new(serde_json::to_vec(&body)?))
     };
 
     Ok(http::Request::builder()
         .method(method)
         .uri(uri)
-        .body(document)?)
+        .body(stream)?)
 }
 
 fn route_id(id: &str) -> RouteParameters {

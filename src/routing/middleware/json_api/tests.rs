@@ -165,7 +165,7 @@ fn stamps_the_filter_profile_when_the_request_filters() -> TestResult {
     let manager = manager()?;
     let response = handle(
         &manager,
-        request("GET", "/articles?filter[title]=Rust", "", &[])?,
+        request("GET", "/articles?filter[title]=eq:Rust", "", &[])?,
         |_context| Ok(Response::new(None)),
     )?;
 

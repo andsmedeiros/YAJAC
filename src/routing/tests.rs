@@ -8,8 +8,9 @@ use crate::routing::controller::{ResourceContext, ResourceController};
 use crate::routing::middleware::{PrimaryMiddleware, ResourceMiddleware};
 use crate::routing::responder::respond_with;
 use crate::routing::{
-    BaseUri, PrimaryContext, PrimaryHandler, PrimaryResult, ResourceHandler, Result as RouteResult,
-    RouteParameters, Router, RouterError, UnboundVerbs,
+    BaseUri, PrimaryContext, PrimaryHandler, PrimaryResult, ResourceHandler,
+    ResourceResult as RouteResult, ResourceVerbs, RouteParameters, Router, RouterError,
+    UnboundVerbs,
 };
 use crate::serialisation::ByteStream;
 use http::{HeaderMap, HeaderValue, Response, StatusCode};
@@ -191,14 +192,26 @@ fn send<'a>(
     body: Value,
     headers: &[(&str, &str)],
 ) -> Result<Response<Vec<u8>>, Box<dyn StdError>> {
-    let stream: ByteStream = Box::new(Cursor::new(serde_json::to_vec(&body)?));
-    let request = headers
+    // Stand in for the client: send `Content-Type` alongside any body unless a test set one, and
+    // treat a `null` body as no body (streamed as zero bytes).
+    let carries_body = !body.is_null();
+    let sets_content_type = headers
         .iter()
-        .fold(
-            http::Request::builder().method(method).uri(uri),
-            |builder, (name, value)| builder.header(*name, *value),
-        )
-        .body(stream)?;
+        .any(|(name, _)| name.eq_ignore_ascii_case("content-type"));
+
+    let mut builder = headers.iter().fold(
+        http::Request::builder().method(method).uri(uri),
+        |builder, (name, value)| builder.header(*name, *value),
+    );
+    if carries_body && !sets_content_type {
+        builder = builder.header("content-type", "application/vnd.api+json");
+    }
+    let stream: ByteStream = if carries_body {
+        Box::new(Cursor::new(serde_json::to_vec(&body)?))
+    } else {
+        Box::new(Cursor::new(Vec::new()))
+    };
+    let request = builder.body(stream)?;
 
     let (parts, body) = router.handle(manager, request)?.into_parts();
     let mut buffer = Vec::new();
@@ -874,9 +887,10 @@ fn test_member_route_is_record_scoped() -> TestResult {
 fn test_collection_route_is_collection_scoped() -> TestResult {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
+    // A resource builder's own verbs mount collection-scoped schema-bound routes.
     let router = Router::try_new(BaseUri::Relative, |root| {
         root.resource_with::<Articles>("articles", articles, |articles| {
-            articles.collection(|collection| collection.get("search", search))
+            articles.get("search", search)
         })
     })?;
 
@@ -898,13 +912,15 @@ fn test_collection_route_is_collection_scoped() -> TestResult {
 fn test_unbound_leaf_route() -> TestResult {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
+    // A raw route side-mounted into a resource's path space, declared before the resource so it wins
+    // the shared `/articles/:id` slot. It must reach its handler, and the resource must keep serving
+    // its own routes alongside.
     let router = Router::try_new(BaseUri::Relative, |root| {
-        root.resource_with::<Articles>("articles", articles, |articles| {
-            articles.get("health", health)
-        })
+        root.get("articles/health", health)
+            .resource::<Articles>("articles", articles)
     })?;
 
-    let response = send(
+    let raw = send(
         &manager,
         &router,
         "GET",
@@ -912,8 +928,10 @@ fn test_unbound_leaf_route() -> TestResult {
         Value::Null,
         &[],
     )?;
+    assert_eq!(raw.status(), StatusCode::OK);
 
-    assert_eq!(response.status(), StatusCode::OK);
+    let collection = send(&manager, &router, "GET", "/articles", Value::Null, &[])?;
+    assert_eq!(collection.status(), StatusCode::OK);
 
     Ok(())
 }
@@ -1378,16 +1396,18 @@ fn test_crossing_renders_error_as_document() -> TestResult {
 fn test_crossing_rejects_unparseable_body() -> TestResult {
     let manager = manager()?;
     let router = standard_router(&manager)?;
-    let response = send(
-        &manager,
-        &router,
-        "POST",
-        "/articles",
-        json!("not a resource document"),
-        &[("Content-Type", "application/vnd.api+json")],
-    )?;
+    // Genuinely malformed JSON (not merely the wrong shape) is a syntax error — a 400 at the parse.
+    // Built by hand: `send` serialises a `Value`, which is always well-formed.
+    let stream: ByteStream = Box::new(Cursor::new(b"{ this is not json".to_vec()));
+    let request = http::Request::builder()
+        .method("POST")
+        .uri("/articles")
+        .header("content-type", "application/vnd.api+json")
+        .body(stream)?;
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let status = router.handle(&manager, request)?.status();
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 
     Ok(())
 }
@@ -1649,15 +1669,13 @@ fn test_raw_route_omits_jsonapi_content_type() -> TestResult {
 }
 
 #[test]
-fn test_subordinate_middleware_guards_custom_route() -> TestResult {
+fn test_resource_middleware_guards_custom_route() -> TestResult {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let router = Router::try_new(BaseUri::Relative, |root| {
         root.resource_with::<Articles>("articles", articles, |articles| {
-            articles.collection(|collection| {
-                collection.middleware(RequireResourceHeader("x-key"), |guarded| {
-                    guarded.get("search", search)
-                })
+            articles.middleware(RequireResourceHeader("x-key"), |guarded| {
+                guarded.get("search", search)
             })
         })
     })?;

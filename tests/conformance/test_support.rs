@@ -1,8 +1,8 @@
 //! Shared fixture for the JSON:API v1.1 conformance suite.
 //!
 //! Black-box: drives the crate exactly as an embedder would — build a
-//! `ConnectionManager`, wire a `RouterBuilder`, hand `Router::handle` an
-//! `http::Request<Vec<u8>>`, and inspect the `http::Response<Option<Document>>`.
+//! `ConnectionManager`, wire a router, hand `Router::handle` an
+//! `http::Request<ByteStream>`, and inspect the streamed `http::Response`.
 //!
 //! Only the response's status, headers, and serialised document are exposed;
 //! generic validation lives in `validations`, and request-specific assertions
@@ -15,6 +15,7 @@ use crate::validations::BASE_URL;
 use http::{HeaderMap, Method, StatusCode};
 use serde_json::Value;
 use std::borrow::Cow;
+use std::io::{Cursor, Read};
 use yajac::database::adapters::SqliteAdapter;
 use yajac::database::adapters::sqlite::Pool;
 use yajac::database::connection_manager::ConnectionManager;
@@ -22,6 +23,7 @@ use yajac::database::registry::Registry;
 use yajac::database::schema::{AttributeType, IdentifierType, Related, SchemaBuilder};
 use yajac::routing::controller::{Configuration, ResourceController};
 use yajac::routing::{BaseUri, Router};
+use yajac::serialisation::ByteStream;
 
 pub type BoxError = Box<dyn std::error::Error>;
 pub type TestResult = Result<(), BoxError>;
@@ -270,22 +272,44 @@ impl Api {
                 .resource::<Tags>("tags", tags)
         })?;
 
+        // This harness stands in for the client. A client sends `Content-Type` whenever it sends a
+        // body, so default it when a test did not set one — otherwise the request is refused for a
+        // missing media type. A `null` body means no body, streamed as zero bytes.
+        let carries_body = !body.is_null();
+        let sets_content_type = headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("content-type"));
+
         let mut request = http::Request::builder()
             .method(Method::from_bytes(method.as_bytes())?)
             .uri(uri);
         for (name, value) in headers {
             request = request.header(*name, *value);
         }
-        let request = request.body(serde_json::to_vec(&body)?)?;
+        if carries_body && !sets_content_type {
+            request = request.header("content-type", JSONAPI);
+        }
+        let stream: ByteStream = if carries_body {
+            Box::new(Cursor::new(serde_json::to_vec(&body)?))
+        } else {
+            Box::new(Cursor::new(Vec::new()))
+        };
+        let request = request.body(stream)?;
 
-        let response = router.handle(&self.manager, request);
-        let status = response.status();
-        let headers = response.headers().clone();
-        let doc = serde_json::to_value(response.body())?;
+        let (parts, body) = router.handle(&self.manager, request)?.into_parts();
+        let mut buffer = Vec::new();
+        if let Some(mut stream) = body {
+            stream.read_to_end(&mut buffer)?;
+        }
+        let doc = if buffer.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&buffer)?
+        };
 
         Ok(Res {
-            status,
-            headers,
+            status: parts.status,
+            headers: parts.headers,
             doc,
         })
     }
