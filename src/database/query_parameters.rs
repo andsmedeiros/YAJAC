@@ -260,7 +260,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
 
     fn parse_fields(
         &mut self,
-        model: &'req str,
+        model: &str,
         fields: &'req str,
         registry: &Registry<'sch>,
     ) -> Result<(), Error> {
@@ -315,7 +315,7 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
 
     fn parse_filter(
         &mut self,
-        attribute: &'req str,
+        attribute: &str,
         entries: &'req str,
         schema: &'sch Schema,
     ) -> Result<(), Error> {
@@ -509,21 +509,24 @@ impl<'sch, 'req> QueryParameters<'sch, 'req> {
     ) -> Result<(), Error> {
         let mut models_to_serialise = HashMap::from_iter([(schema.name(), schema)]);
 
-        for (entry, split) in query
-            .split('&')
-            .filter(|s| !s.is_empty())
-            .map(|entry| (entry, entry.split_once('=')))
-        {
-            match split.ok_or_else(|| Error::ParseParameterFailure {
-                parameter: entry.to_string(),
-                message: format!("Invalid query entry: '{entry}'"),
-            })? {
-                ("search", value) => self.parse_search(value)?,
-                ("include", include) => {
-                    self.parse_include(include, &mut models_to_serialise, schema, registry)?
+        for entry in query.split('&').filter(|entry| !entry.is_empty()) {
+            let (name, value) = entry
+                .split_once('=')
+                .map(|(name, value)| Self::decode_str(name).map(|name| (name, value)))
+                .unwrap_or_else(|| {
+                    Err(Error::ParseParameterFailure {
+                        parameter: entry.to_string(),
+                        message: format!("Invalid query entry: '{entry}'"),
+                    })
+                })?;
+
+            match name.as_ref() {
+                "search" => self.parse_search(value)?,
+                "include" => {
+                    self.parse_include(value, &mut models_to_serialise, schema, registry)?
                 }
-                ("sort", sort) => self.parse_sort(sort, schema)?,
-                (key, value) => match FAMILY_REGEX.captures(key).map(|c| c.extract()) {
+                "sort" => self.parse_sort(value, schema)?,
+                key => match FAMILY_REGEX.captures(key).map(|c| c.extract()) {
                     Some((_, ["fields", model])) => self.parse_fields(model, value, registry)?,
                     Some((_, ["filter", field])) => self.parse_filter(field, value, schema)?,
                     Some((_, ["page", property])) => self.parse_page(property, value)?,
