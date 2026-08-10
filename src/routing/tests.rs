@@ -1797,3 +1797,18 @@ fn test_misplaced_wildcard_is_rejected() -> TestResult {
 
     Ok(())
 }
+
+#[test]
+fn test_duplicate_capture_is_rejected() -> TestResult {
+    // A repeated `:name`, and a `:name`/`*name` clash, both collide on resolution.
+    let repeated = Router::try_new(BaseUri::Relative, |root| root.get(":id/sub/:id", health));
+    assert!(matches!(
+        repeated,
+        Err(RouterError::DuplicateParameter { .. })
+    ));
+
+    let mixed = Router::try_new(BaseUri::Relative, |root| root.get(":rest/*rest", health));
+    assert!(matches!(mixed, Err(RouterError::DuplicateParameter { .. })));
+
+    Ok(())
+}

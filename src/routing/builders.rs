@@ -102,6 +102,26 @@ pub trait RouteBuilder<'sch, Adapter: AdapterInterface + 'sch>: Sized {
             return;
         }
 
+        let mut captures = HashSet::new();
+        for name in path
+            .iter()
+            .filter_map(|segment| {
+                segment
+                    .strip_prefix(':')
+                    .or_else(|| segment.strip_prefix('*'))
+            })
+            .filter(|name| !name.is_empty())
+        {
+            if !captures.insert(name) {
+                self.routes_mut()
+                    .push_error(RouterError::DuplicateParameter {
+                        path: path.iter().join("/"),
+                        parameter: name.to_string(),
+                    });
+                return;
+            }
+        }
+
         if let EndpointHandler::Primary(_) = handler
             && middleware.iter().any(Middleware::is_resource)
         {

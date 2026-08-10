@@ -213,6 +213,12 @@ pub enum RouterError {
     MisplacedGlob {
         path: String,
     },
+    /// A path template captures the same parameter name in more than one segment. Both would resolve
+    /// into the same key, silently overriding one another.
+    DuplicateParameter {
+        path: String,
+        parameter: String,
+    },
 }
 
 impl Display for RouterError {
@@ -240,6 +246,12 @@ impl Display for RouterError {
                 write!(
                     f,
                     "route '/{path}' contains a wildcard segment in an invalid position"
+                )
+            }
+            RouterError::DuplicateParameter { path, parameter } => {
+                write!(
+                    f,
+                    "route '/{path}' contains the named capture '{parameter}' multiple times"
                 )
             }
         }
