@@ -4,6 +4,7 @@ use crate::database::connection_manager::ConnectionManager;
 use crate::database::registry::Registry as DatabaseRegistry;
 use crate::database::schema::{AttributeType, Related, SchemaBuilder};
 use crate::http_wrappers::Uri;
+use crate::routing::builders::RouteBuilder;
 use crate::routing::controller::{ResourceContext, ResourceController};
 use crate::routing::middleware::{PrimaryMiddleware, ResourceMiddleware};
 use crate::routing::responder::respond_with;
@@ -394,6 +395,64 @@ fn test_delete_removes_record() -> TestResult {
     let fetched = serve(&manager, "GET", "/comments/1", Value::Null)?;
     assert_eq!(fetched.status(), StatusCode::NOT_FOUND);
 
+    Ok(())
+}
+
+// A dynamic segment computed at router-build time (an owned `String`, not a `&'sch str`) still
+// mounts, matches, and resolves in generated links — the end-to-end proof of computed segments.
+#[test]
+fn test_computed_owned_scope_segment_resolves_in_self_link() -> TestResult {
+    let manager = manager()?;
+    let articles = manager.registry().schema("articles")?;
+
+    let tenant_scope = String::from(":tenant");
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.scope(tenant_scope, |scoped| {
+            scoped.resource::<Articles>("articles", articles)
+        })
+    })?;
+
+    let response = send(
+        &manager,
+        &router,
+        "GET",
+        "/acme/articles/1",
+        Value::Null,
+        &[],
+    )?;
+
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        body(&response)["data"]["links"]["self"],
+        json!("/acme/articles/1")
+    );
+    Ok(())
+}
+
+// A *static* segment computed at router-build time (an owned `String`) is matched literally by the
+// router and rendered verbatim — the owned counterpart of an ordinary borrowed path segment.
+#[test]
+fn test_computed_owned_static_segment_matches_and_renders() -> TestResult {
+    let manager = manager()?;
+    let articles = manager.registry().schema("articles")?;
+
+    let version = String::from("v2");
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.scope(version, |scoped| {
+            scoped.resource::<Articles>("articles", articles)
+        })
+    })?;
+
+    // The literal prefix matches; a different one does not.
+    let matched = send(&manager, &router, "GET", "/v2/articles/1", Value::Null, &[])?;
+    let missed = send(&manager, &router, "GET", "/v3/articles/1", Value::Null, &[])?;
+
+    assert_eq!(matched.status(), 200);
+    assert_eq!(
+        body(&matched)["data"]["links"]["self"],
+        json!("/v2/articles/1")
+    );
+    assert_eq!(missed.status(), 404);
     Ok(())
 }
 
