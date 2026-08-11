@@ -30,7 +30,7 @@ impl Display for ConstraintKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Error {
     ParseParameterFailure {
         parameter: String,
@@ -114,7 +114,10 @@ pub enum Error {
         schema: String,
     },
     InconsistentCollection,
-    InvalidIndexAccess,
+    DuplicateIndexKey,
+    IndexEntryFailure {
+        message: String,
+    },
 }
 
 impl Error {
@@ -147,7 +150,8 @@ impl Error {
             | UnloadedRelationshipAccess { .. }
             | MissingRecordId { .. }
             | InconsistentCollection
-            | InvalidIndexAccess => StatusCode::INTERNAL_SERVER_ERROR,
+            | DuplicateIndexKey
+            | IndexEntryFailure { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
@@ -180,7 +184,8 @@ impl Error {
             UnloadedRelationshipAccess { .. } => "UnloadedRelationshipAccess",
             MissingRecordId { .. } => "MissingRecordId",
             InconsistentCollection => "InconsistentCollection",
-            InvalidIndexAccess => "InvalidIndexAccess",
+            DuplicateIndexKey => "DuplicateIndexKey",
+            IndexEntryFailure { .. } => "IndexEntryFailure",
         }
     }
 
@@ -216,7 +221,8 @@ impl Error {
             UnloadedRelationshipAccess { .. } => "An unloaded relationship was accessed",
             MissingRecordId { .. } => "The record is missing an identifier",
             InconsistentCollection => "The collection is heterogeneous",
-            InvalidIndexAccess => "An invalid index was accessed",
+            DuplicateIndexKey => "A collection contained a duplicate index key",
+            IndexEntryFailure { .. } => "Failed to derive an index entry",
         }
     }
 }
@@ -252,9 +258,15 @@ impl From<FromUtf8Error> for Error {
 }
 
 impl From<IndexingError> for Error {
-    /// Any indexing failure is a broken internal invariant, surfaced uniformly as an index access.
-    fn from(_: IndexingError) -> Self {
-        Error::InvalidIndexAccess
+    /// Preserves the class of the indexing failure: a structural duplicate key stays structural,
+    /// while a failed entry closure keeps its cause's message.
+    fn from(error: IndexingError) -> Self {
+        match error {
+            IndexingError::DuplicateIndexKey => Error::DuplicateIndexKey,
+            IndexingError::EntryFailure(source) => Error::IndexEntryFailure {
+                message: source.to_string(),
+            },
+        }
     }
 }
 
@@ -379,9 +391,48 @@ impl Display for Error {
                 f,
                 "Attempted to apply operation over an heterogeneous collection"
             ),
-            InvalidIndexAccess => write!(f, "Attempted to extract an non-indexed value"),
+            DuplicateIndexKey => write!(f, "A collection was indexed with a duplicate key"),
+            IndexEntryFailure { message } => write!(f, "{message}"),
         }
     }
 }
 
 impl StdError for Error {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::indexing::Error as IndexingError;
+
+    /// A stand-in cause carrying a recognisable message, as a failed entry closure would.
+    #[derive(Debug)]
+    struct UnderlyingCause;
+
+    impl Display for UnderlyingCause {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            write!(f, "the join key was not loaded")
+        }
+    }
+
+    impl StdError for UnderlyingCause {}
+
+    #[test]
+    fn a_duplicate_index_key_stays_structural() {
+        assert_eq!(
+            Error::from(IndexingError::DuplicateIndexKey),
+            Error::DuplicateIndexKey
+        );
+    }
+
+    #[test]
+    fn an_entry_failure_retains_its_cause_message() {
+        let error = Error::from(IndexingError::EntryFailure(Box::new(UnderlyingCause)));
+
+        assert_eq!(
+            error,
+            Error::IndexEntryFailure {
+                message: "the join key was not loaded".to_string()
+            }
+        );
+    }
+}
