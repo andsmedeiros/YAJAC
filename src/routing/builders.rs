@@ -66,6 +66,17 @@ pub trait RouteBuilder<'sch, Adapter: AdapterInterface + 'sch>: Sized {
         let path: Vec<Cow<'sch, str>> = self.path().iter().cloned().chain(segments).collect();
         let middleware = self.middleware().to_vec();
 
+        if path.iter().any(|segment| {
+            segment
+                .strip_prefix('*')
+                .is_some_and(|name| !name.is_empty())
+        }) {
+            self.routes_mut().push_error(RouterError::NamedGlob {
+                path: path.iter().join("/"),
+            });
+            return;
+        }
+
         if path
             .iter()
             .rev()
@@ -81,11 +92,7 @@ pub trait RouteBuilder<'sch, Adapter: AdapterInterface + 'sch>: Sized {
         let mut captures = HashSet::new();
         for name in path
             .iter()
-            .filter_map(|segment| {
-                segment
-                    .strip_prefix(':')
-                    .or_else(|| segment.strip_prefix('*'))
-            })
+            .filter_map(|segment| segment.strip_prefix(':'))
             .filter(|name| !name.is_empty())
         {
             if !captures.insert(name) {

@@ -1769,41 +1769,96 @@ fn test_resource_middleware_guards_custom_route() -> TestResult {
 
 // --- wildcard routes -------------------------------------------------------
 
-#[test]
-fn test_wildcard_matches_the_tail_and_captures_it() -> TestResult {
-    let manager = manager()?;
-    // `*path` captures one-or-more trailing segments, joined, under `path`; the handler echoes them.
-    let router = Router::try_new(BaseUri::Relative, |root| {
+// A router with an anonymous wildcard that echoes the captured tail into the response body.
+fn wildcard_echo_router<'a>() -> Result<Router<'a, SqliteAdapter>, Box<dyn StdError>> {
+    Ok(Router::try_new(BaseUri::Relative, |root| {
         root.get(
-            "files/*path",
+            "files/*",
             |context: PrimaryContext<'_, '_, SqliteAdapter>| {
                 let tail = context
                     .route_parameters()
-                    .get("path")
-                    .cloned()
+                    .get_glob()
+                    .map(|glob| glob.to_string())
                     .unwrap_or_default();
                 let stream: ByteStream = Box::new(Cursor::new(tail.into_bytes()));
                 respond_with(StatusCode::OK, Some(stream)).map_err(Into::into)
             },
         )
-    })?;
+    })?)
+}
 
-    let deep = send(&manager, &router, "GET", "/files/a/b/c", Value::Null, &[])?;
-    assert_eq!(deep.status(), StatusCode::OK);
-    assert_eq!(String::from_utf8(deep.body().clone())?, "a/b/c");
+// The captured tail the echo router wrote back, as UTF-8 text.
+fn captured_tail(response: &Response<Vec<u8>>) -> String {
+    String::from_utf8(response.body().clone()).expect("a UTF-8 body")
+}
 
-    // A single trailing segment still matches.
-    assert_eq!(
-        send(&manager, &router, "GET", "/files/a", Value::Null, &[])?.status(),
-        StatusCode::OK
-    );
+#[test]
+fn test_wildcard_captures_multiple_levels() -> TestResult {
+    let manager = manager()?;
+    let router = wildcard_echo_router()?;
 
-    // Zero trailing segments do not: a wildcard is one-or-more.
+    let response = send(&manager, &router, "GET", "/files/a/b/c", Value::Null, &[])?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(captured_tail(&response), "a/b/c");
+    Ok(())
+}
+
+#[test]
+fn test_wildcard_captures_a_single_level() -> TestResult {
+    let manager = manager()?;
+    let router = wildcard_echo_router()?;
+
+    let response = send(&manager, &router, "GET", "/files/a", Value::Null, &[])?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(captured_tail(&response), "a");
+    Ok(())
+}
+
+#[test]
+fn test_wildcard_preserves_a_flat_encoded_segment() -> TestResult {
+    let manager = manager()?;
+    let router = wildcard_echo_router()?;
+
+    // The glob never decodes, so a percent-encoded segment survives verbatim.
+    let response = send(&manager, &router, "GET", "/files/a%20b", Value::Null, &[])?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(captured_tail(&response), "a%20b");
+    Ok(())
+}
+
+#[test]
+fn test_wildcard_preserves_a_nested_encoded_slash() -> TestResult {
+    let manager = manager()?;
+    let router = wildcard_echo_router()?;
+
+    // An encoded slash stays inside its segment — never mistaken for a level boundary.
+    let response = send(
+        &manager,
+        &router,
+        "GET",
+        "/files/x/a%2Fb/c",
+        Value::Null,
+        &[],
+    )?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(captured_tail(&response), "x/a%2Fb/c");
+    Ok(())
+}
+
+#[test]
+fn test_wildcard_requires_at_least_one_segment() -> TestResult {
+    let manager = manager()?;
+    let router = wildcard_echo_router()?;
+
+    // A wildcard is one-or-more: zero trailing segments do not match.
     assert_eq!(
         send(&manager, &router, "GET", "/files", Value::Null, &[])?.status(),
         StatusCode::NOT_FOUND
     );
-
     Ok(())
 }
 
@@ -1817,7 +1872,7 @@ fn test_wildcard_reaches_the_resource_tier() -> TestResult {
             articles
                 .default_endpoints()
                 .all_relationships()
-                .get("*rest", search)
+                .get("*", search)
         })
     })?;
 
@@ -1850,7 +1905,7 @@ fn test_wildcard_reaches_the_resource_tier() -> TestResult {
 
 #[test]
 fn test_misplaced_wildcard_is_rejected() -> TestResult {
-    let result = Router::try_new(BaseUri::Relative, |root| root.get("*mid/tail", health));
+    let result = Router::try_new(BaseUri::Relative, |root| root.get("*/tail", health));
 
     assert!(matches!(result, Err(RouterError::MisplacedGlob { .. })));
 
@@ -1858,16 +1913,70 @@ fn test_misplaced_wildcard_is_rejected() -> TestResult {
 }
 
 #[test]
+fn test_named_wildcard_is_rejected() -> TestResult {
+    // A wildcard must be the anonymous `*`; a named one is a build-time fault.
+    let result = Router::try_new(BaseUri::Relative, |root| root.get("files/*rest", health));
+
+    assert!(matches!(result, Err(RouterError::NamedGlob { .. })));
+
+    Ok(())
+}
+
+#[test]
 fn test_duplicate_capture_is_rejected() -> TestResult {
-    // A repeated `:name`, and a `:name`/`*name` clash, both collide on resolution.
+    // A repeated `:name` collides on resolution.
     let repeated = Router::try_new(BaseUri::Relative, |root| root.get(":id/sub/:id", health));
     assert!(matches!(
         repeated,
         Err(RouterError::DuplicateParameter { .. })
     ));
 
-    let mixed = Router::try_new(BaseUri::Relative, |root| root.get(":rest/*rest", health));
-    assert!(matches!(mixed, Err(RouterError::DuplicateParameter { .. })));
+    Ok(())
+}
 
+// --- named segment capture -------------------------------------------------
+
+// A router that echoes a captured (decoded) `:id` into the response body.
+fn named_echo_router<'a>() -> Result<Router<'a, SqliteAdapter>, Box<dyn StdError>> {
+    Ok(Router::try_new(BaseUri::Relative, |root| {
+        root.get(
+            "items/:id",
+            |context: PrimaryContext<'_, '_, SqliteAdapter>| {
+                let id = context
+                    .route_parameters()
+                    .get("id")
+                    .map(|id| id.to_string())
+                    .unwrap_or_default();
+                let stream: ByteStream = Box::new(Cursor::new(id.into_bytes()));
+                respond_with(StatusCode::OK, Some(stream)).map_err(Into::into)
+            },
+        )
+    })?)
+}
+
+#[test]
+fn test_named_segment_is_percent_decoded() -> TestResult {
+    let manager = manager()?;
+    let router = named_echo_router()?;
+
+    // Unlike the verbatim glob, a `:name` segment is decoded into the captured value.
+    let response = send(&manager, &router, "GET", "/items/a%20b", Value::Null, &[])?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(captured_tail(&response), "a b");
+    Ok(())
+}
+
+#[test]
+fn test_named_segment_with_invalid_encoding_does_not_match() -> TestResult {
+    let manager = manager()?;
+    let router = named_echo_router()?;
+
+    // A malformed percent-escape can't decode, so the segment binds nothing and the route does not
+    // match — a matching concern, not a query parameter's parse error.
+    assert_eq!(
+        send(&manager, &router, "GET", "/items/%FF", Value::Null, &[])?.status(),
+        StatusCode::NOT_FOUND
+    );
     Ok(())
 }

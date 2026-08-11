@@ -37,7 +37,7 @@ pub(crate) trait UriGenerator<'sch> {
 pub(crate) struct CanonicalUriGenerator<'sch, 'req, Adapter: AdapterInterface> {
     base: &'req BaseUri<'sch>,
     mount_table: &'req MountTable<'sch, Adapter>,
-    route: &'req RouteParameters,
+    route: &'req RouteParameters<'sch, 'req>,
     headers: &'req HeaderMap,
 }
 
@@ -47,7 +47,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch>
     pub(crate) fn new(
         base: &'req BaseUri<'sch>,
         mount_table: &'req MountTable<'sch, Adapter>,
-        route: &'req RouteParameters,
+        route: &'req RouteParameters<'sch, 'req>,
         headers: &'req HeaderMap,
     ) -> Self {
         Self {

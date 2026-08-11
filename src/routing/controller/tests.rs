@@ -113,7 +113,7 @@ fn build_request(
         .body(stream)?)
 }
 
-fn route_id(id: &str) -> RouteParameters {
+fn route_id(id: &str) -> RouteParameters<'static, '_> {
     let mut route = RouteParameters::new();
     route.insert("id", id);
     route

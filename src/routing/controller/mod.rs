@@ -408,7 +408,7 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
                 } else {
                     route
                         .get(parameter)
-                        .map(|value| Cow::Borrowed(value.as_str()))
+                        .map(|value| Cow::Borrowed(value.as_ref()))
                 };
                 value.map(|value| (parameter, value))
             })
