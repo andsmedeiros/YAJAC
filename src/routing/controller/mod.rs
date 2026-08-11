@@ -392,8 +392,8 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
         record: &'req Record<'sch>,
         route: &'req RouteParameters,
         _headers: &'req HeaderMap,
-        required_parameters: &[&'sch str],
-    ) -> HashMap<&'sch str, Cow<'req, str>>
+        required_parameters: &[&'req str],
+    ) -> HashMap<&'req str, Cow<'req, str>>
     where
         'sch: 'req,
     {

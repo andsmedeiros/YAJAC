@@ -66,12 +66,9 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch>
         template: &[Cow<'sch, str>],
         controller_factory: ControllerFactory<'sch, Adapter>,
     ) -> Result<Uri, Error> {
-        let required: Vec<&'sch str> = template
+        let required: Vec<&str> = template
             .iter()
-            .filter_map(|segment| match segment {
-                Cow::Borrowed(name) => name.strip_prefix(':'),
-                Cow::Owned(_) => None,
-            })
+            .filter_map(|segment| segment.strip_prefix(':'))
             .collect();
 
         let resolved = if required.is_empty() {
