@@ -29,48 +29,24 @@ pub trait RouteBuilder<'sch, Adapter: AdapterInterface + 'sch>: Sized {
     fn middleware(&self) -> &[Middleware<'sch, Adapter>];
     fn routes_mut(&mut self) -> &mut MaterialisedRoutes<'sch, Adapter>;
     fn into_routes(self) -> MaterialisedRoutes<'sch, Adapter>;
-    fn spawn(&self, path: Vec<Cow<'sch, str>>, middleware: Vec<Middleware<'sch, Adapter>>) -> Self;
+    /// Constructs a sibling of the same builder kind, extending this level's path and middleware
+    /// with `segments` and `middleware` respectively (either may be empty).
+    fn spawn(
+        &self,
+        segments: impl IntoIterator<Item = Cow<'sch, str>>,
+        middleware: impl IntoIterator<Item = Middleware<'sch, Adapter>>,
+    ) -> Self;
 
     /// Spawns a sibling one path segment deeper, carrying this level's middleware unchanged — the
     /// primitive behind `scope`.
-    fn spawn_with_path(&self, segment: &'sch str) -> Self {
-        let path = self
-            .path()
-            .iter()
-            .cloned()
-            .chain(split_segments(segment))
-            .collect();
-        self.spawn(path, self.middleware().to_vec())
+    fn spawn_with_path(&self, segment: impl Into<Cow<'sch, str>>) -> Self {
+        self.spawn(split_segments(segment), [])
     }
 
     /// Spawns a sibling at the same path, carrying this level's middleware plus `middleware` — the
     /// primitive behind `middleware`.
     fn spawn_with_middleware(&self, middleware: Middleware<'sch, Adapter>) -> Self {
-        let middleware = self
-            .middleware()
-            .iter()
-            .cloned()
-            .chain([middleware])
-            .collect();
-        self.spawn(self.path().to_vec(), middleware)
-    }
-
-    /// Spawns a sibling one segment deeper *and* carrying an extra middleware — the primitive behind
-    /// `middleware_at`.
-    fn spawn_with(&self, segment: &'sch str, middleware: Middleware<'sch, Adapter>) -> Self {
-        let path = self
-            .path()
-            .iter()
-            .cloned()
-            .chain(split_segments(segment))
-            .collect();
-        let middleware = self
-            .middleware()
-            .iter()
-            .cloned()
-            .chain([middleware])
-            .collect();
-        self.spawn(path, middleware)
+        self.spawn([], [middleware])
     }
 
     /// Mounts `handler` for `method` at `segments` relative to this builder's path, stamping the
@@ -90,6 +66,17 @@ pub trait RouteBuilder<'sch, Adapter: AdapterInterface + 'sch>: Sized {
         let path: Vec<Cow<'sch, str>> = self.path().iter().cloned().chain(segments).collect();
         let middleware = self.middleware().to_vec();
 
+        if path.iter().any(|segment| {
+            segment
+                .strip_prefix('*')
+                .is_some_and(|name| !name.is_empty())
+        }) {
+            self.routes_mut().push_error(RouterError::NamedGlob {
+                path: path.iter().join("/"),
+            });
+            return;
+        }
+
         if path
             .iter()
             .rev()
@@ -105,11 +92,7 @@ pub trait RouteBuilder<'sch, Adapter: AdapterInterface + 'sch>: Sized {
         let mut captures = HashSet::new();
         for name in path
             .iter()
-            .filter_map(|segment| {
-                segment
-                    .strip_prefix(':')
-                    .or_else(|| segment.strip_prefix('*'))
-            })
+            .filter_map(|segment| segment.strip_prefix(':'))
             .filter(|name| !name.is_empty())
         {
             if !captures.insert(name) {
@@ -138,7 +121,11 @@ pub trait RouteBuilder<'sch, Adapter: AdapterInterface + 'sch>: Sized {
 
     /// Opens a nested scope at `segment`: builds a sibling inheriting this level's middleware, runs
     /// `configure`, merges it back.
-    fn scope(mut self, segment: &'sch str, configure: impl FnOnce(Self) -> Self) -> Self {
+    fn scope(
+        mut self,
+        segment: impl Into<Cow<'sch, str>>,
+        configure: impl FnOnce(Self) -> Self,
+    ) -> Self {
         let child = configure(self.spawn_with_path(segment));
         self.routes_mut().absorb(child.into_routes());
         self
@@ -152,7 +139,7 @@ pub trait UnboundVerbs<'sch, Adapter: AdapterInterface + 'sch>:
 {
     fn get(
         mut self,
-        segment: &'sch str,
+        segment: impl Into<Cow<'sch, str>>,
         handler: impl PrimaryEndpointHandler<'sch, Adapter>,
     ) -> Self {
         self.mount(
@@ -165,7 +152,7 @@ pub trait UnboundVerbs<'sch, Adapter: AdapterInterface + 'sch>:
 
     fn post(
         mut self,
-        segment: &'sch str,
+        segment: impl Into<Cow<'sch, str>>,
         handler: impl PrimaryEndpointHandler<'sch, Adapter>,
     ) -> Self {
         self.mount(
@@ -178,7 +165,7 @@ pub trait UnboundVerbs<'sch, Adapter: AdapterInterface + 'sch>:
 
     fn put(
         mut self,
-        segment: &'sch str,
+        segment: impl Into<Cow<'sch, str>>,
         handler: impl PrimaryEndpointHandler<'sch, Adapter>,
     ) -> Self {
         self.mount(
@@ -191,7 +178,7 @@ pub trait UnboundVerbs<'sch, Adapter: AdapterInterface + 'sch>:
 
     fn patch(
         mut self,
-        segment: &'sch str,
+        segment: impl Into<Cow<'sch, str>>,
         handler: impl PrimaryEndpointHandler<'sch, Adapter>,
     ) -> Self {
         self.mount(
@@ -204,7 +191,7 @@ pub trait UnboundVerbs<'sch, Adapter: AdapterInterface + 'sch>:
 
     fn delete(
         mut self,
-        segment: &'sch str,
+        segment: impl Into<Cow<'sch, str>>,
         handler: impl PrimaryEndpointHandler<'sch, Adapter>,
     ) -> Self {
         self.mount(
@@ -227,7 +214,7 @@ pub trait ResourceVerbs<'sch, Adapter: AdapterInterface + 'sch>:
 
     fn get(
         mut self,
-        segment: &'sch str,
+        segment: impl Into<Cow<'sch, str>>,
         handler: impl ResourceEndpointHandler<'sch, Adapter>,
     ) -> Self {
         let schema = self.schema();
@@ -241,7 +228,7 @@ pub trait ResourceVerbs<'sch, Adapter: AdapterInterface + 'sch>:
 
     fn post(
         mut self,
-        segment: &'sch str,
+        segment: impl Into<Cow<'sch, str>>,
         handler: impl ResourceEndpointHandler<'sch, Adapter>,
     ) -> Self {
         let schema = self.schema();
@@ -255,7 +242,7 @@ pub trait ResourceVerbs<'sch, Adapter: AdapterInterface + 'sch>:
 
     fn put(
         mut self,
-        segment: &'sch str,
+        segment: impl Into<Cow<'sch, str>>,
         handler: impl ResourceEndpointHandler<'sch, Adapter>,
     ) -> Self {
         let schema = self.schema();
@@ -269,7 +256,7 @@ pub trait ResourceVerbs<'sch, Adapter: AdapterInterface + 'sch>:
 
     fn patch(
         mut self,
-        segment: &'sch str,
+        segment: impl Into<Cow<'sch, str>>,
         handler: impl ResourceEndpointHandler<'sch, Adapter>,
     ) -> Self {
         let schema = self.schema();
@@ -283,7 +270,7 @@ pub trait ResourceVerbs<'sch, Adapter: AdapterInterface + 'sch>:
 
     fn delete(
         mut self,
-        segment: &'sch str,
+        segment: impl Into<Cow<'sch, str>>,
         handler: impl ResourceEndpointHandler<'sch, Adapter>,
     ) -> Self {
         let schema = self.schema();
@@ -335,10 +322,14 @@ impl<'sch, Adapter: AdapterInterface + 'sch> RouteBuilder<'sch, Adapter>
         self.routes
     }
 
-    fn spawn(&self, path: Vec<Cow<'sch, str>>, middleware: Vec<Middleware<'sch, Adapter>>) -> Self {
+    fn spawn(
+        &self,
+        segments: impl IntoIterator<Item = Cow<'sch, str>>,
+        middleware: impl IntoIterator<Item = Middleware<'sch, Adapter>>,
+    ) -> Self {
         Self {
-            path,
-            middleware,
+            path: self.path.iter().cloned().chain(segments).collect(),
+            middleware: self.middleware.iter().cloned().chain(middleware).collect(),
             routes: MaterialisedRoutes::new(),
         }
     }
@@ -374,16 +365,19 @@ impl<'sch, Adapter: AdapterInterface + 'sch> PrimaryRouteBuilder<'sch, Adapter> 
     /// `scope` and `middleware` in one: opens a nested scope at `segment` under `middleware`.
     pub fn middleware_at(
         mut self,
-        segment: &'sch str,
+        segment: impl Into<Cow<'sch, str>>,
         middleware: impl PrimaryMiddleware<'sch, Adapter>,
         build: impl FnOnce(Self) -> Self,
     ) -> Self {
-        let child = build(self.spawn_with(segment, Middleware::Primary(Arc::new(middleware))));
+        let child = build(self.spawn(
+            split_segments(segment),
+            [Middleware::Primary(Arc::new(middleware))],
+        ));
         self.routes.absorb(child.into_routes());
         self
     }
 
-    pub fn resource<T>(self, segment: &'sch str, schema: &'sch Schema<'sch>) -> Self
+    pub fn resource<T>(self, segment: impl Into<Cow<'sch, str>>, schema: &'sch Schema<'sch>) -> Self
     where
         T: ResourceController<'sch, Adapter> + Default + 'sch,
     {
@@ -394,7 +388,7 @@ impl<'sch, Adapter: AdapterInterface + 'sch> PrimaryRouteBuilder<'sch, Adapter> 
 
     pub fn resource_with<T>(
         mut self,
-        segment: &'sch str,
+        segment: impl Into<Cow<'sch, str>>,
         schema: &'sch Schema<'sch>,
         configure: impl FnOnce(
             ResourceRouteBuilder<'sch, T, Adapter>,
@@ -420,7 +414,11 @@ impl<'sch, Adapter: AdapterInterface + 'sch> PrimaryRouteBuilder<'sch, Adapter> 
         self
     }
 
-    pub fn read_only_resource<T>(self, segment: &'sch str, schema: &'sch Schema<'sch>) -> Self
+    pub fn read_only_resource<T>(
+        self,
+        segment: impl Into<Cow<'sch, str>>,
+        schema: &'sch Schema<'sch>,
+    ) -> Self
     where
         T: ResourceController<'sch, Adapter> + Default + 'sch,
     {
@@ -431,7 +429,7 @@ impl<'sch, Adapter: AdapterInterface + 'sch> PrimaryRouteBuilder<'sch, Adapter> 
 
     pub fn read_only_resource_with<T>(
         mut self,
-        segment: &'sch str,
+        segment: impl Into<Cow<'sch, str>>,
         schema: &'sch Schema<'sch>,
         configure: impl FnOnce(
             ResourceRouteBuilder<'sch, T, Adapter>,
@@ -504,9 +502,13 @@ impl<'sch> RelationshipConfig<'sch> {
         self
     }
 
-    pub fn at(mut self, segment: &'sch str, keyword: &'sch str) -> Self {
-        self.segment = Some(Cow::Borrowed(segment));
-        self.keyword = Some(Cow::Borrowed(keyword));
+    pub fn at(
+        mut self,
+        segment: impl Into<Cow<'sch, str>>,
+        keyword: impl Into<Cow<'sch, str>>,
+    ) -> Self {
+        self.segment = Some(segment.into());
+        self.keyword = Some(keyword.into());
         self
     }
 
@@ -533,8 +535,8 @@ impl<'sch> RelationshipsConfig<'sch> {
         self
     }
 
-    pub fn at(mut self, keyword: &'sch str) -> Self {
-        self.keyword = Some(Cow::Borrowed(keyword));
+    pub fn at(mut self, keyword: impl Into<Cow<'sch, str>>) -> Self {
+        self.keyword = Some(keyword.into());
         self
     }
 
@@ -580,12 +582,16 @@ impl<'sch, T, Adapter: AdapterInterface + 'sch> RouteBuilder<'sch, Adapter>
         self.routes
     }
 
-    fn spawn(&self, path: Vec<Cow<'sch, str>>, middleware: Vec<Middleware<'sch, Adapter>>) -> Self {
+    fn spawn(
+        &self,
+        segments: impl IntoIterator<Item = Cow<'sch, str>>,
+        middleware: impl IntoIterator<Item = Middleware<'sch, Adapter>>,
+    ) -> Self {
         Self {
-            path,
+            path: self.path.iter().cloned().chain(segments).collect(),
             schema: self.schema,
             read_only: self.read_only,
-            middleware,
+            middleware: self.middleware.iter().cloned().chain(middleware).collect(),
             routes: MaterialisedRoutes::new(),
             mounted: HashSet::new(),
             relationships: IndexMap::new(),
@@ -1043,11 +1049,15 @@ impl<'sch, Adapter: AdapterInterface + 'sch> RouteBuilder<'sch, Adapter>
         self.routes
     }
 
-    fn spawn(&self, path: Vec<Cow<'sch, str>>, middleware: Vec<Middleware<'sch, Adapter>>) -> Self {
+    fn spawn(
+        &self,
+        segments: impl IntoIterator<Item = Cow<'sch, str>>,
+        middleware: impl IntoIterator<Item = Middleware<'sch, Adapter>>,
+    ) -> Self {
         Self {
-            path,
+            path: self.path.iter().cloned().chain(segments).collect(),
             schema: self.schema,
-            middleware,
+            middleware: self.middleware.iter().cloned().chain(middleware).collect(),
             routes: MaterialisedRoutes::new(),
         }
     }

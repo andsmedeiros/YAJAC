@@ -1,43 +1,68 @@
 use super::error::{Error, FailedToParseParameterError, RequiredParameterMissingError};
-use std::{borrow::Borrow, collections::HashMap, fmt::Display, str::FromStr};
+use std::{borrow::Borrow, borrow::Cow, collections::HashMap, fmt::Display, str::FromStr};
 
-#[derive(Debug, Clone)]
-pub struct RouteParameters(HashMap<String, String>);
-
-impl Default for RouteParameters {
-    fn default() -> Self {
-        Self::new()
-    }
+/// What a matched route captured: its named single-segment parameters (`:name`), and — kept
+/// distinct — the optional trailing glob (`*`). A name borrows the route template (`'sch`) when the
+/// template segment is borrowed and owns it when it was computed; a value borrows the request path
+/// (`'req`) when it needed no decoding and owns a decoded string otherwise. The glob is a raw,
+/// multi-segment tail handed over verbatim for the handler to interpret, never decoded.
+#[derive(Debug, Clone, Default)]
+pub struct RouteParameters<'sch, 'req> {
+    named: HashMap<Cow<'sch, str>, Cow<'req, str>>,
+    glob: Option<Cow<'req, str>>,
 }
 
-impl RouteParameters {
-    pub fn new() -> RouteParameters {
-        RouteParameters(HashMap::new())
+impl<'sch, 'req> RouteParameters<'sch, 'req> {
+    pub fn new() -> RouteParameters<'sch, 'req> {
+        RouteParameters::default()
     }
 
     pub fn insert<K, V>(&mut self, key: K, value: V)
     where
-        K: Into<String>,
-        V: Into<String>,
+        K: Into<Cow<'sch, str>>,
+        V: Into<Cow<'req, str>>,
     {
-        self.0.insert(key.into(), value.into());
+        self.named.insert(key.into(), value.into());
+    }
+
+    /// Records the trailing glob's captured tail — the remaining segments joined by `/`, verbatim.
+    pub fn set_glob<V>(&mut self, tail: V)
+    where
+        V: Into<Cow<'req, str>>,
+    {
+        self.glob = Some(tail.into());
+    }
+
+    /// The trailing glob's captured tail, if the route matched one — a raw, unencoded path.
+    pub fn get_glob(&self) -> Option<&Cow<'req, str>> {
+        self.glob.as_ref()
+    }
+
+    /// The trailing glob's captured tail, erroring if the route has no glob (a handler misuse).
+    pub fn require_glob(&self) -> Result<&Cow<'req, str>, Error> {
+        self.get_glob().ok_or_else(|| {
+            RequiredParameterMissingError {
+                parameter: "glob".into(),
+            }
+            .into()
+        })
     }
 
     pub fn has<K>(&self, key: K) -> bool
     where
         K: Borrow<str>,
     {
-        self.0.contains_key(key.borrow())
+        self.named.contains_key(key.borrow())
     }
 
-    pub fn get<K>(&self, key: K) -> Option<&String>
+    pub fn get<K>(&self, key: K) -> Option<&Cow<'req, str>>
     where
         K: Borrow<str>,
     {
-        self.0.get(key.borrow())
+        self.named.get(key.borrow())
     }
 
-    pub fn require<K>(&self, key: K) -> Result<&String, Error>
+    pub fn require<K>(&self, key: K) -> Result<&Cow<'req, str>, Error>
     where
         K: Borrow<str> + Display,
     {

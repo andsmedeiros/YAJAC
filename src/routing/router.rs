@@ -16,7 +16,8 @@ use crate::{
 };
 use http::{HeaderMap, Method, Response};
 use indexmap::IndexMap;
-use log::debug;
+use itertools::Itertools;
+use log::{debug, error};
 use std::borrow::Cow;
 use std::fmt::{self, Display};
 use std::io::Cursor;
@@ -111,37 +112,55 @@ impl<'sch, Adapter: AdapterInterface + 'sch> Route<'sch, Adapter> {
     /// A trailing `*name` template segment is a glob: it matches one-or-more remaining path segments,
     /// captured joined under `name` (a bare `*` matches without capturing). Every other segment
     /// matches exactly one path segment — literally, or capturing a `:name` dynamic segment.
-    fn match_path(&self, method: &Method, path_segments: &[&str]) -> Option<RouteParameters> {
+    fn match_path<'req>(
+        &self,
+        method: &Method,
+        path_segments: &[&'req str],
+    ) -> Option<RouteParameters<'sch, 'req>> {
+        let mut params = RouteParameters::new();
         if self.method != method {
             return None;
         }
 
-        let glob = self
+        if let Some(name) = self
             .path
             .last()
-            .and_then(|segment| segment.strip_prefix('*'));
-
-        if (glob.is_none() && path_segments.len() != self.path.len())
-            || path_segments.len() < self.path.len()
+            .and_then(|segment| segment.strip_prefix('*'))
         {
+            if path_segments.len() < self.path.len() {
+                return None;
+            }
+
+            if !name.is_empty() {
+                error!(
+                    "A wildcard parameter cannot have a name, but a registered route contains such a wildcard ({}).\nThis syntax is invalid, a wildcard should always be anonymous.",
+                    self.path.join("/")
+                );
+                return None;
+            }
+
+            params.set_glob(path_segments[self.path.len() - 1..].join("/"));
+        } else if path_segments.len() != self.path.len() {
             return None;
         }
 
-        let partition = self.path.len() - glob.is_some() as usize;
+        for (segment, &path_segment) in self.path.iter().zip(path_segments) {
+            if segment == "*" {
+                continue;
+            }
 
-        let mut params = RouteParameters::new();
-        for (segment, &path_segment) in self.path[..partition].iter().zip(path_segments) {
-            if let Some(param_name) = segment.strip_prefix(':') {
-                params.insert(param_name, path_segment);
+            let name = match segment {
+                Cow::Borrowed(value) => value.strip_prefix(':').map(Cow::Borrowed),
+                Cow::Owned(value) => value
+                    .strip_prefix(':')
+                    .map(|name| Cow::Owned(name.to_owned())),
+            };
+
+            if let Some(name) = name {
+                params.insert(name, urlencoding::decode(path_segment).ok()?);
             } else if segment != path_segment {
                 return None;
             }
-        }
-
-        if let Some(name) = glob
-            && !name.is_empty()
-        {
-            params.insert(name, path_segments[partition..].join("/"));
         }
 
         Some(params)
@@ -150,13 +169,13 @@ impl<'sch, Adapter: AdapterInterface + 'sch> Route<'sch, Adapter> {
     /// Matches the request line, then every middleware guard against the request head and the
     /// captured parameters. A guard that rejects the request makes the route not match — it falls
     /// through to the next route, or to a 404.
-    fn matches(
+    fn matches<'req>(
         &self,
         method: &Method,
-        path_segments: &[&str],
+        path_segments: &[&'req str],
         uri: &Uri,
         headers: &HeaderMap,
-    ) -> Option<RouteParameters> {
+    ) -> Option<RouteParameters<'sch, 'req>> {
         let params = self.match_path(method, path_segments)?;
         self.middleware
             .iter()
@@ -165,13 +184,25 @@ impl<'sch, Adapter: AdapterInterface + 'sch> Route<'sch, Adapter> {
     }
 }
 
-/// Splits a `/`-delimited path fragment into its template segments, dropping empties. Segments
-/// borrow the fragment, which — being computed at router-definition time — lives for `'sch`.
-pub(crate) fn split_segments<'sch>(segment: &'sch str) -> impl Iterator<Item = Cow<'sch, str>> {
-    segment
-        .split('/')
-        .filter(|s| !s.is_empty())
-        .map(Cow::Borrowed)
+/// Splits a `/`-delimited path fragment into its template segments, dropping empties. A borrowed
+/// fragment yields borrowed segments; an owned (computed) fragment yields owned ones, so a segment
+/// built at router-definition time is stored directly rather than needing a `'sch` borrow.
+pub(crate) fn split_segments<'sch>(
+    segment: impl Into<Cow<'sch, str>>,
+) -> impl Iterator<Item = Cow<'sch, str>> {
+    match segment.into() {
+        Cow::Borrowed(fragment) => fragment
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .map(Cow::Borrowed)
+            .collect_vec(),
+        Cow::Owned(fragment) => fragment
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .map(|segment| Cow::Owned(segment.to_owned()))
+            .collect_vec(),
+    }
+    .into_iter()
 }
 
 /// The two per-relationship canonical endpoints, each independently mountable.
@@ -208,9 +239,14 @@ pub enum RouterError {
     ResourceMiddlewareOnPrimaryRoute {
         path: String,
     },
-    /// A `*name` glob segment appears anywhere but the end of a path template. A glob consumes the
+    /// A glob segment (`*`) appears anywhere but the end of a path template. A glob consumes the
     /// rest of the path, so any segment after it could never match.
     MisplacedGlob {
+        path: String,
+    },
+    /// A glob segment carries a name (`*name`). Globs are anonymous — the tail is captured under no
+    /// name — so only a bare `*` is a valid glob.
+    NamedGlob {
         path: String,
     },
     /// A path template captures the same parameter name in more than one segment. Both would resolve
@@ -246,6 +282,12 @@ impl Display for RouterError {
                 write!(
                     f,
                     "route '/{path}' contains a wildcard segment in an invalid position"
+                )
+            }
+            RouterError::NamedGlob { path } => {
+                write!(
+                    f,
+                    "route '/{path}' contains a named wildcard; a wildcard must be the anonymous '*'"
                 )
             }
             RouterError::DuplicateParameter { path, parameter } => {

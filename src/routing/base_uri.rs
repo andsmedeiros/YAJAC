@@ -36,6 +36,10 @@ impl<'sch> BaseUri<'sch> {
                     .ok_or_else(|| Error::LinkGenerationError {
                         message: format!("dynamic segment ':{name}' was not resolved"),
                     })
+            } else if segment.starts_with('*') {
+                Err(Error::LinkGenerationError {
+                    message: "a wildcard segment cannot appear in a generated link".to_string(),
+                })
             } else {
                 Ok(segment)
             }
@@ -132,6 +136,14 @@ mod tests {
         let error = BaseUri::Relative
             .render(&template(&["articles", ":id"]), &resolved(&[]))
             .expect_err("an unresolved segment must fail");
+        assert!(matches!(error, Error::LinkGenerationError { .. }));
+    }
+
+    #[test]
+    fn a_wildcard_segment_is_a_link_generation_error() {
+        let error = BaseUri::Relative
+            .render(&template(&["files", "*"]), &resolved(&[]))
+            .expect_err("a wildcard cannot appear in a generated link");
         assert!(matches!(error, Error::LinkGenerationError { .. }));
     }
 }

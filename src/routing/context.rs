@@ -37,7 +37,7 @@ where
     /// Whether the body carries content, filled once by the first `contains_body` probe.
     body_present: OnceCell<bool>,
     headers: HeaderMap,
-    route: RouteParameters,
+    route: RouteParameters<'sch, 'req>,
     connection: LazyConnection<'sch, Adapter>,
 }
 
@@ -49,7 +49,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> PrimaryContext<'sch, 'req, Ada
         base_uri: &'req BaseUri<'sch>,
         mount_table: &'req MountTable<'sch, Adapter>,
         uri: &'req Uri,
-        route: RouteParameters,
+        route: RouteParameters<'sch, 'req>,
         request: PrimaryRequest,
     ) -> Self {
         let (parts, body) = request.into_parts();
@@ -147,7 +147,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> PrimaryContext<'sch, 'req, Ada
         &self.headers
     }
 
-    pub fn route_parameters(&self) -> &RouteParameters {
+    pub fn route_parameters(&self) -> &RouteParameters<'sch, 'req> {
         &self.route
     }
 

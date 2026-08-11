@@ -113,7 +113,7 @@ fn build_request(
         .body(stream)?)
 }
 
-fn route_id(id: &str) -> RouteParameters {
+fn route_id(id: &str) -> RouteParameters<'static, '_> {
     let mut route = RouteParameters::new();
     route.insert("id", id);
     route
@@ -1209,8 +1209,8 @@ impl<'sch> ResourceController<'sch, SqliteAdapter> for SluggedBooks {
         record: &'req Record<'sch>,
         _route: &'req RouteParameters,
         _headers: &'req HeaderMap,
-        required_parameters: &[&'sch str],
-    ) -> HashMap<&'sch str, Cow<'req, str>>
+        required_parameters: &[&'req str],
+    ) -> HashMap<&'req str, Cow<'req, str>>
     where
         'sch: 'req,
     {

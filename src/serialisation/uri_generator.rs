@@ -37,7 +37,7 @@ pub(crate) trait UriGenerator<'sch> {
 pub(crate) struct CanonicalUriGenerator<'sch, 'req, Adapter: AdapterInterface> {
     base: &'req BaseUri<'sch>,
     mount_table: &'req MountTable<'sch, Adapter>,
-    route: &'req RouteParameters,
+    route: &'req RouteParameters<'sch, 'req>,
     headers: &'req HeaderMap,
 }
 
@@ -47,7 +47,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch>
     pub(crate) fn new(
         base: &'req BaseUri<'sch>,
         mount_table: &'req MountTable<'sch, Adapter>,
-        route: &'req RouteParameters,
+        route: &'req RouteParameters<'sch, 'req>,
         headers: &'req HeaderMap,
     ) -> Self {
         Self {
@@ -66,12 +66,9 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch>
         template: &[Cow<'sch, str>],
         controller_factory: ControllerFactory<'sch, Adapter>,
     ) -> Result<Uri, Error> {
-        let required: Vec<&'sch str> = template
+        let required: Vec<&str> = template
             .iter()
-            .filter_map(|segment| match segment {
-                Cow::Borrowed(name) => name.strip_prefix(':'),
-                Cow::Owned(_) => None,
-            })
+            .filter_map(|segment| segment.strip_prefix(':'))
             .collect();
 
         let resolved = if required.is_empty() {
