@@ -53,6 +53,18 @@ impl From<Uri> for http::Uri {
     }
 }
 
+impl PartialEq<http::Uri> for Uri {
+    fn eq(&self, other: &http::Uri) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<Uri> for http::Uri {
+    fn eq(&self, other: &Uri) -> bool {
+        *self == other.0
+    }
+}
+
 impl FromStr for Uri {
     type Err = <http::Uri as FromStr>::Err;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -91,5 +103,31 @@ impl<'de> Deserialize<'de> for Uri {
         D: Deserializer<'de>,
     {
         Ok(Uri(deserializer.deserialize_string(UriVisitor)?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn equals_its_inner_uri_in_both_directions() -> Result<(), Box<dyn std::error::Error>> {
+        let inner = "https://example.com/articles/1".parse::<http::Uri>()?;
+        let wrapper = Uri::from(inner.clone());
+
+        assert_eq!(wrapper, inner);
+        assert_eq!(inner, wrapper);
+        Ok(())
+    }
+
+    #[test]
+    fn differs_from_another_inner_uri_in_both_directions() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let wrapper = Uri::from("https://example.com/articles/1".parse::<http::Uri>()?);
+        let other = "https://example.com/articles/2".parse::<http::Uri>()?;
+
+        assert_ne!(wrapper, other);
+        assert_ne!(other, wrapper);
+        Ok(())
     }
 }

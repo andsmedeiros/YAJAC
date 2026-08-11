@@ -8,12 +8,13 @@ use super::{ResourceHandler, ResourceMiddleware};
 use crate::database::adapters::Adapter as AdapterInterface;
 use crate::http_wrappers::StatusCode;
 use crate::json_api::error::Error as JsonApiError;
+use crate::json_api::primary_content::PrimaryContent;
 use crate::routing::controller::ResourceContext;
 use crate::routing::{Error, ResourceResult, respond_with};
 use crate::serialisation::factories::to_document;
 use crate::serialisation::uri_generator::NullUriGenerator;
 use http::HeaderValue;
-use http::header::CONTENT_TYPE;
+use http::header::{CONTENT_TYPE, LOCATION};
 use log::error;
 use media_type::{JSONAPI_MEDIA_TYPE, JsonApiMediaType};
 use negotiation::ContentNegotiator;
@@ -54,17 +55,37 @@ impl<'sch, Adapter: AdapterInterface + 'sch> ResourceMiddleware<'sch, Adapter> f
                     content_type.profiles.push(FILTER_PROFILE);
                 }
 
-                if response.body().as_ref().is_some_and(|document| {
-                    document.links.as_ref().is_some_and(|links| {
-                        links.pagination.as_ref().is_some_and(|pagination| {
-                            pagination.first.is_some()
-                                || pagination.last.is_some()
-                                || pagination.prev.is_some()
-                                || pagination.next.is_some()
-                        })
-                    })
-                }) {
-                    content_type.profiles.push(PAGINATION_PROFILE);
+                if let Some(document) = response.body() {
+                    if let Some(ref links) = document.links
+                        && let Some(ref pagination) = links.pagination
+                        && [
+                            &pagination.first,
+                            &pagination.last,
+                            &pagination.prev,
+                            &pagination.next,
+                        ]
+                        .into_iter()
+                        .any(Option::is_some)
+                    {
+                        content_type.profiles.push(PAGINATION_PROFILE);
+                    }
+
+                    if response.status() == StatusCode::CREATED
+                        && let PrimaryContent::Record { ref data } = document.content
+                        && let Some(ref links) = data.links
+                    {
+                        let location =
+                            HeaderValue::try_from(links.this.to_string()).map_err(|error| {
+                                Error::new(
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    "GeneratedInvalidLocation",
+                                    format!(
+                                        "The server generated an invalid 'Location' header: {error}"
+                                    ),
+                                )
+                            })?;
+                        response.headers_mut().insert(LOCATION, location);
+                    }
                 }
 
                 let content_type =
