@@ -16,6 +16,7 @@ use crate::{
 };
 use http::{HeaderMap, Method, Response};
 use indexmap::IndexMap;
+use itertools::Itertools;
 use log::debug;
 use std::borrow::Cow;
 use std::fmt::{self, Display};
@@ -165,13 +166,25 @@ impl<'sch, Adapter: AdapterInterface + 'sch> Route<'sch, Adapter> {
     }
 }
 
-/// Splits a `/`-delimited path fragment into its template segments, dropping empties. Segments
-/// borrow the fragment, which — being computed at router-definition time — lives for `'sch`.
-pub(crate) fn split_segments<'sch>(segment: &'sch str) -> impl Iterator<Item = Cow<'sch, str>> {
-    segment
-        .split('/')
-        .filter(|s| !s.is_empty())
-        .map(Cow::Borrowed)
+/// Splits a `/`-delimited path fragment into its template segments, dropping empties. A borrowed
+/// fragment yields borrowed segments; an owned (computed) fragment yields owned ones, so a segment
+/// built at router-definition time is stored directly rather than needing a `'sch` borrow.
+pub(crate) fn split_segments<'sch>(
+    segment: impl Into<Cow<'sch, str>>,
+) -> impl Iterator<Item = Cow<'sch, str>> {
+    match segment.into() {
+        Cow::Borrowed(fragment) => fragment
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .map(Cow::Borrowed)
+            .collect_vec(),
+        Cow::Owned(fragment) => fragment
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .map(|segment| Cow::Owned(segment.to_owned()))
+            .collect_vec(),
+    }
+    .into_iter()
 }
 
 /// The two per-relationship canonical endpoints, each independently mountable.
