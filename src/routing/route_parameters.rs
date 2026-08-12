@@ -1,4 +1,4 @@
-use super::error::{Error, FailedToParseParameterError, RequiredParameterMissingError};
+use super::error::Error;
 use std::{borrow::Borrow, borrow::Cow, collections::HashMap, fmt::Display, str::FromStr};
 
 /// What a matched route captured: its named single-segment parameters (`:name`), and — kept
@@ -40,12 +40,10 @@ impl<'sch, 'req> RouteParameters<'sch, 'req> {
 
     /// The trailing glob's captured tail, erroring if the route has no glob (a handler misuse).
     pub fn require_glob(&self) -> Result<&Cow<'req, str>, Error> {
-        self.get_glob().ok_or_else(|| {
-            RequiredParameterMissingError {
-                parameter: "glob".into(),
-            }
-            .into()
-        })
+        self.get_glob()
+            .ok_or_else(|| Error::RequiredRouteParameterMissing {
+                parameter: "glob".to_string(),
+            })
     }
 
     pub fn has<K>(&self, key: K) -> bool
@@ -66,12 +64,10 @@ impl<'sch, 'req> RouteParameters<'sch, 'req> {
     where
         K: Borrow<str> + Display,
     {
-        self.get(key.borrow()).ok_or_else(|| {
-            RequiredParameterMissingError {
-                parameter: key.borrow().into(),
-            }
-            .into()
-        })
+        self.get(key.borrow())
+            .ok_or_else(|| Error::RequiredRouteParameterMissing {
+                parameter: key.borrow().to_string(),
+            })
     }
 
     pub fn get_as<T, K>(&self, key: K) -> Result<Option<T>, Error>
@@ -81,13 +77,12 @@ impl<'sch, 'req> RouteParameters<'sch, 'req> {
     {
         self.get(key.borrow())
             .map(|value| {
-                value.parse::<T>().map_err(|_| {
-                    FailedToParseParameterError {
-                        parameter: key.borrow().into(),
-                        message: "Provided parameter contains an unexpected value".to_string(),
-                    }
-                    .into()
-                })
+                value
+                    .parse::<T>()
+                    .map_err(|_| Error::FailedToParseRouteParameter {
+                        parameter: key.borrow().to_string(),
+                        message: "The provided value has an unexpected format".to_string(),
+                    })
             })
             .transpose()
     }
@@ -97,11 +92,9 @@ impl<'sch, 'req> RouteParameters<'sch, 'req> {
         T: FromStr,
         K: Borrow<str> + Display,
     {
-        self.get_as(key.borrow())?.ok_or_else(|| {
-            RequiredParameterMissingError {
-                parameter: key.borrow().into(),
-            }
-            .into()
-        })
+        self.get_as(key.borrow())?
+            .ok_or_else(|| Error::RequiredRouteParameterMissing {
+                parameter: key.borrow().to_string(),
+            })
     }
 }

@@ -6,7 +6,7 @@ use crate::{
         adapters::Adapter as AdapterInterface, connection::Connection as ConnectionInterface,
         connection_manager::ConnectionManager, query_parameters::QueryParameters, store::Store,
     },
-    http_wrappers::{StatusCode, Uri},
+    http_wrappers::Uri,
     routing::{BaseUri, Error as RoutingError, MountTable, RouteParameters},
     serialisation::ByteStream,
     serialisation::uri_generator::CanonicalUriGenerator,
@@ -80,13 +80,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> PrimaryContext<'sch, 'req, Ada
     /// context is always built with a body, `None` means it was already consumed upstream, an
     /// internal invariant violation rather than a client fault — hence the 500.
     pub fn require_body(&mut self) -> Result<ByteStream, RoutingError> {
-        self.body.take().ok_or_else(|| {
-            RoutingError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "BodyConsumed",
-                "The request body has already been consumed",
-            )
-        })
+        self.body.take().ok_or(RoutingError::RequestBodyConsumed)
     }
 
     /// Tests the request for body content, probed once and cached.
@@ -103,12 +97,8 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> PrimaryContext<'sch, 'req, Ada
         let mut body = self.require_body()?;
         let count = body
             .read(std::slice::from_mut(&mut byte))
-            .map_err(|error| {
-                RoutingError::new(
-                    StatusCode::BAD_REQUEST,
-                    "BodyPeekFailed",
-                    format!("Failed to peek the request body: {error}"),
-                )
+            .map_err(|error| RoutingError::RequestBodyPeekFailed {
+                message: error.to_string(),
             })?;
 
         if count == 0 {

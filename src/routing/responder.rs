@@ -1,9 +1,14 @@
+use crate::error::Error;
 use crate::json_api::document::Document;
-use crate::routing::Error;
+use crate::routing::error::Error as RoutingError;
 use http::{Response, StatusCode};
 
 pub fn respond_with<T>(code: impl Into<StatusCode>, payload: T) -> Result<Response<T>, Error> {
-    Ok(Response::builder().status(code.into()).body(payload)?)
+    Response::builder()
+        .status(code.into())
+        .body(payload)
+        .map_err(RoutingError::from)
+        .map_err(Error::from)
 }
 
 pub fn respond<T>(payload: T) -> Result<Response<T>, Error> {
