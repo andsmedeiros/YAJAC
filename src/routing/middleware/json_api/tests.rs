@@ -116,16 +116,10 @@ fn stamps_the_json_api_content_type_on_a_rendered_error() -> TestResult {
     let response = handle(
         &manager,
         request("GET", "/articles", "", &[])?,
-        |_context| {
-            Err(Error::new(
-                StatusCode::NOT_FOUND,
-                "NotFound",
-                "The article does not exist",
-            ))
-        },
+        |_context| Err(Error::UnsupportedOperation.into()),
     )?;
 
-    assert_eq!(response.status().as_u16(), 404);
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert_eq!(
         content_type(&response).as_deref(),
         Some("application/vnd.api+json")

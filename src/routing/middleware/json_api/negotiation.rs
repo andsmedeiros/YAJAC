@@ -1,6 +1,5 @@
 use super::media_type::{ACCEPTED_MEDIA_TYPES, JSONAPI_MEDIA_TYPE, JsonApiMediaType};
 use crate::database::adapters::Adapter as AdapterInterface;
-use crate::http_wrappers::StatusCode;
 use crate::routing::Error;
 use crate::routing::controller::ResourceContext;
 use crate::utils::MediaType;
@@ -31,23 +30,24 @@ impl ContentNegotiator {
     /// of the JSON:API media type.
     ///
     /// On validation, a media type's extensions are matched against a list of supported extensions,
-    /// raising an error on failure. Profiles are informative and ignored.
+    /// raising an error naming the offenders on failure. Profiles are informative and ignored.
     pub(super) fn negotiate<'sch: 'req, 'req, Adapter: AdapterInterface>(
         context: &mut ResourceContext<'sch, 'req, Adapter>,
     ) -> Result<(), Error> {
         let content_type_required = context.contains_body()?;
-        if let Some(content_type) =
+        if let Some(extensions) =
             Self::extract_json_api_content_type(context.headers(), content_type_required)?
-            && content_type
-                .extensions
-                .iter()
-                .any(|extension| !SUPPORTED_EXTENSIONS.contains(extension))
+                .map(|content_type| {
+                    content_type
+                        .extensions
+                        .iter()
+                        .filter(|extension| !SUPPORTED_EXTENSIONS.contains(*extension))
+                        .map(|extension| extension.to_string())
+                        .collect_vec()
+                })
+                .filter(|extensions| !extensions.is_empty())
         {
-            return Err(Error::new(
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "UnsupportedJsonApiExtension",
-                "The 'Content-Type' header contains a JSON:API extension that is not supported by the server",
-            ));
+            return Err(Error::UnsupportedJsonApiExtension { extensions });
         }
 
         if let Some(media_types) = Self::extract_json_api_accept(context.headers())?
@@ -58,11 +58,15 @@ impl ContentNegotiator {
                     .any(|extension| !SUPPORTED_EXTENSIONS.contains(extension))
             })
         {
-            return Err(Error::new(
-                StatusCode::NOT_ACCEPTABLE,
-                "UnsupportedJsonApiExtension",
-                "The 'Accept' header contains only JSON:API media types with extension that are not supported by the server",
-            ));
+            return Err(Error::UnsatisfiableJsonApiExtension {
+                extensions: media_types
+                    .iter()
+                    .flat_map(|accept| accept.extensions.iter())
+                    .filter(|extension| !SUPPORTED_EXTENSIONS.contains(*extension))
+                    .map(|extension| extension.to_string())
+                    .unique()
+                    .collect(),
+            });
         }
 
         Ok(())
@@ -73,15 +77,12 @@ impl ContentNegotiator {
     /// error.
     fn read_header(headers: &HeaderMap, header: HeaderName) -> Result<Option<&str>, Error> {
         headers
-            .get(header)
+            .get(&header)
             .map(|header_value| header_value.to_str())
             .transpose()
-            .map_err(|error| {
-                Error::new(
-                    StatusCode::BAD_REQUEST,
-                    "InvalidHeaderValue",
-                    format!("A header value contains invalid characters and could not be parsed: {error}"),
-                )
+            .map_err(|error| Error::InvalidHeaderValue {
+                header: header.to_string(),
+                message: error.to_string(),
             })
     }
 
@@ -97,40 +98,21 @@ impl ContentNegotiator {
     ) -> Result<Option<JsonApiMediaType<'_>>, Error> {
         let Some(header) = Self::read_header(headers, CONTENT_TYPE)? else {
             return required
-                .then(|| {
-                    Err(Error::new(
-                        StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                        "MissingContentType",
-                        "A 'Content-Type' header must be present and valid.",
-                    ))
-                })
+                .then_some(Err(Error::MissingContentType))
                 .transpose();
         };
 
         match MediaType::list_from(header).collect_array() {
             Some([media_type]) if media_type.essence.eq_ignore_ascii_case(JSONAPI_MEDIA_TYPE) => {
                 JsonApiMediaType::try_new(media_type)
-                    .and_then(|media_type| {
-                        media_type.quality.is_none().then_some(Ok(media_type)).unwrap_or_else(|| {
-                            Err(Error::new(
-                                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                                "ContentTypeContainsQuality",
-                                "The 'Content-Type' header contains an unsupported quality value",
-                            ))
-                        })
+                    .and_then(|media_type| match media_type.quality {
+                        None => Ok(media_type),
+                        Some(_) => Err(Error::ContentTypeCarriesQuality),
                     })
                     .map(Some)
             }
-            Some([_]) => Err(Error::new(
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "UnsupportedContentType",
-                "This endpoint does not accept the provided 'Content-Type' header",
-            )),
-            _ => Err(Error::new(
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "InvalidContentType",
-                "The 'Content-Type' header provided contains an invalid value",
-            )),
+            Some([_]) => Err(Error::UnsupportedContentType),
+            _ => Err(Error::InvalidContentType),
         }
     }
 
@@ -149,11 +131,7 @@ impl ContentNegotiator {
 
         let media_types = MediaType::list_from(header).collect_vec();
         if media_types.is_empty() {
-            return Err(Error::new(
-                StatusCode::NOT_ACCEPTABLE,
-                "InvalidAccept",
-                "The 'Accept' header provided contains an invalid value that cannot be parsed",
-            ));
+            return Err(Error::InvalidAcceptHeader);
         }
 
         let matching_media_types = media_types
@@ -166,11 +144,7 @@ impl ContentNegotiator {
             .collect_vec();
 
         if matching_media_types.is_empty() {
-            return Err(Error::new(
-                StatusCode::NOT_ACCEPTABLE,
-                "NotAcceptable",
-                "This endpoint cannot produce a response matching the provided 'Accept' header",
-            ));
+            return Err(Error::NoAcceptableMediaType);
         }
 
         let json_api_media_types: Vec<JsonApiMediaType> = matching_media_types
@@ -184,11 +158,7 @@ impl ContentNegotiator {
             .try_collect()?;
 
         if json_api_media_types.is_empty() {
-            return Err(Error::new(
-                StatusCode::NOT_ACCEPTABLE,
-                "NotAcceptable",
-                "Every JSON:API media type accepted contains an invalid parameter",
-            ));
+            return Err(Error::UnusableAcceptMediaTypes);
         }
 
         Ok(Some(json_api_media_types))
@@ -199,7 +169,6 @@ impl ContentNegotiator {
 mod tests {
     use super::super::media_type::JsonApiMediaType;
     use super::ContentNegotiator;
-    use crate::http_wrappers::StatusCode;
     use crate::routing::Error;
     use http::header::{ACCEPT, CONTENT_TYPE};
     use http::{HeaderMap, HeaderName, HeaderValue};
@@ -231,7 +200,7 @@ mod tests {
         let error =
             ContentNegotiator::extract_json_api_content_type(&HeaderMap::new(), true).unwrap_err();
 
-        assert_eq!(error.status_code(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(error, Error::MissingContentType);
     }
 
     #[test]
@@ -252,7 +221,12 @@ mod tests {
         )
         .unwrap_err();
 
-        assert_eq!(error.status_code(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(
+            error,
+            Error::UnsupportedMediaTypeParameter {
+                parameter: "charset".to_string()
+            }
+        );
     }
 
     #[test]
@@ -263,7 +237,7 @@ mod tests {
         )
         .unwrap_err();
 
-        assert_eq!(error.status_code(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(error, Error::ContentTypeCarriesQuality);
     }
 
     #[test]
@@ -274,7 +248,7 @@ mod tests {
         )
         .unwrap_err();
 
-        assert_eq!(error.status_code(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(error, Error::UnsupportedContentType);
     }
 
     #[test]
@@ -285,7 +259,7 @@ mod tests {
         )
         .unwrap_err();
 
-        assert_eq!(error.status_code(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(error, Error::UnsupportedContentType);
     }
 
     #[test]
@@ -296,7 +270,7 @@ mod tests {
         )
         .unwrap_err();
 
-        assert_eq!(error.status_code(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(error, Error::InvalidContentType);
     }
 
     // --- Accept ------------------------------------------------------------
@@ -356,7 +330,7 @@ mod tests {
         let error = ContentNegotiator::extract_json_api_accept(&with_header(ACCEPT, "text/html"))
             .unwrap_err();
 
-        assert_eq!(error.status_code(), StatusCode::NOT_ACCEPTABLE);
+        assert_eq!(error, Error::NoAcceptableMediaType);
     }
 
     #[test]
@@ -367,7 +341,7 @@ mod tests {
         ))
         .unwrap_err();
 
-        assert_eq!(error.status_code(), StatusCode::NOT_ACCEPTABLE);
+        assert_eq!(error, Error::UnusableAcceptMediaTypes);
     }
 
     #[test]
@@ -378,7 +352,7 @@ mod tests {
         ))
         .unwrap_err();
 
-        assert_eq!(error.status_code(), StatusCode::NOT_ACCEPTABLE);
+        assert_eq!(error, Error::UnusableAcceptMediaTypes);
     }
 
     #[test]
@@ -386,6 +360,6 @@ mod tests {
         let error =
             ContentNegotiator::extract_json_api_accept(&with_header(ACCEPT, "")).unwrap_err();
 
-        assert_eq!(error.status_code(), StatusCode::NOT_ACCEPTABLE);
+        assert_eq!(error, Error::InvalidAcceptHeader);
     }
 }

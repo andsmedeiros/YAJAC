@@ -6,11 +6,12 @@ mod tests;
 
 use super::{ResourceHandler, ResourceMiddleware};
 use crate::database::adapters::Adapter as AdapterInterface;
+use crate::error::Error;
 use crate::http_wrappers::StatusCode;
 use crate::json_api::error::Error as JsonApiError;
 use crate::json_api::primary_content::PrimaryContent;
 use crate::routing::controller::ResourceContext;
-use crate::routing::{Error, ResourceResult, respond_with};
+use crate::routing::{Error as RoutingError, ResourceResult, respond_with};
 use crate::serialisation::factories::to_document;
 use crate::serialisation::uri_generator::NullUriGenerator;
 use http::HeaderValue;
@@ -18,6 +19,7 @@ use http::header::{CONTENT_TYPE, LOCATION};
 use log::error;
 use media_type::{JSONAPI_MEDIA_TYPE, JsonApiMediaType};
 use negotiation::ContentNegotiator;
+use std::borrow::Cow;
 
 /// The profiles the server applies natively.
 /// TODO: Spec and publish those profiles.
@@ -47,6 +49,7 @@ impl<'sch, Adapter: AdapterInterface + 'sch> ResourceMiddleware<'sch, Adapter> f
             .map(|parameters| parameters.filter.is_some());
 
         ContentNegotiator::negotiate(&mut context)
+            .map_err(Error::from)
             .and_then(|()| next(context))
             .and_then(|mut response| {
                 let mut content_type = JsonApiMediaType::default();
@@ -76,13 +79,10 @@ impl<'sch, Adapter: AdapterInterface + 'sch> ResourceMiddleware<'sch, Adapter> f
                     {
                         let location =
                             HeaderValue::try_from(links.this.to_string()).map_err(|error| {
-                                Error::new(
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    "GeneratedInvalidLocation",
-                                    format!(
-                                        "The server generated an invalid 'Location' header: {error}"
-                                    ),
-                                )
+                                RoutingError::GeneratedInvalidHeader {
+                                    header: LOCATION.to_string(),
+                                    message: error.to_string(),
+                                }
                             })?;
                         response.headers_mut().insert(LOCATION, location);
                     }
@@ -90,35 +90,27 @@ impl<'sch, Adapter: AdapterInterface + 'sch> ResourceMiddleware<'sch, Adapter> f
 
                 let content_type =
                     HeaderValue::try_from(content_type.to_string()).map_err(|error| {
-                        Error::new(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "GeneratedInvalidContentType",
-                            format!(
-                                "The server generated an invalid 'Content-Type' header: {error}"
-                            ),
-                        )
+                        RoutingError::GeneratedInvalidHeader {
+                            header: CONTENT_TYPE.to_string(),
+                            message: error.to_string(),
+                        }
                     })?;
                 response.headers_mut().insert(CONTENT_TYPE, content_type);
                 Ok(response)
             })
-            .or_else(|error| {
-                // Render any resource-tier error into an error document, redacting (and logging) a
-                // 5xx so nothing internal leaks.
-                let status = error.status_code();
-                let error = if status.is_server_error() {
+            .or_else(|mut error| {
+                // Render any resource-tier error into an error document. A 5xx is logged whole and
+                // then stripped, so the detail reaches the operator and never the client.
+                let status = error.status.clone();
+
+                if status.is_server_error() {
                     error!("{uri} failed: {error:?}");
-                    if cfg!(debug_assertions) {
-                        error
-                    } else {
-                        Error::new(
-                            status.clone(),
-                            "InternalServerError",
-                            "Internal server error",
-                        )
+
+                    let is_development = cfg!(debug_assertions);
+                    if !is_development {
+                        redact_error(&mut error);
                     }
-                } else {
-                    error
-                };
+                }
 
                 // An errors document renders no per-record links, so it needs no request-bound
                 // generator: the null generator refuses any link, asserting exactly that.
@@ -136,4 +128,18 @@ impl<'sch, Adapter: AdapterInterface + 'sch> ResourceMiddleware<'sch, Adapter> f
                 })
             })
     }
+}
+
+/// Strips an error bound for a client down to its status. A `5xx` names broken internals — schema
+/// and column names, adapter messages, unmet invariants — none of which is the client's to see, and
+/// all of which the boundary has already logged.
+fn redact_error(error: &mut Error) {
+    *error = Error {
+        status: error.status.clone(),
+        code: Cow::Borrowed("InternalServerError"),
+        title: Cow::Borrowed("An unexpected error occurred"),
+        detail: "The server failed to process this request".to_string(),
+        source: None,
+        meta: None,
+    };
 }
