@@ -13,7 +13,6 @@ use crate::database::{
     adapters::Adapter as AdapterInterface,
     schema::{RelationshipKind, Schema},
 };
-use crate::http_wrappers::StatusCode;
 use http::Method;
 use indexmap::IndexMap;
 use itertools::Itertools;
@@ -288,11 +287,7 @@ pub trait ResourceVerbs<'sch, Adapter: AdapterInterface + 'sch>:
 fn forbidden<'sch, 'req, Adapter: AdapterInterface>(
     _context: ResourceContext<'sch, 'req, Adapter>,
 ) -> ResourceResult {
-    Err(Error::new(
-        StatusCode::FORBIDDEN,
-        "Forbidden",
-        "This endpoint does not support the requested operation",
-    ))
+    Err(Error::UnsupportedOperation.into())
 }
 
 /// The top-level builder: mounts raw routes and resources at the router root, and yields the same

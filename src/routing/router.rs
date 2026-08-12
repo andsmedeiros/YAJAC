@@ -410,11 +410,7 @@ where
         }
         // The chain is partitioned schema-less-first, so a schema-less middleware here means the
         // partition was built wrong — a router-assembly bug, surfaced rather than passed over.
-        Some((Middleware::Primary(_), _)) => Err(Error::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "MisorderedMiddleware",
-            "A schema-less middleware appears within the schema-bound middleware chain",
-        )),
+        Some((Middleware::Primary(_), _)) => Err(Error::MisorderedMiddleware.into()),
         None => handler(context),
     }
 }

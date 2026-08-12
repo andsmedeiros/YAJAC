@@ -1,4 +1,3 @@
-use crate::http_wrappers::StatusCode;
 use crate::routing::Error;
 use crate::utils::MediaType;
 use itertools::Itertools;
@@ -34,38 +33,27 @@ impl<'a> JsonApiMediaType<'a> {
 
                 for (parameter, value) in media_type.parameters {
                     if parameter.eq_ignore_ascii_case("profile") {
-                        json_api_media_type.profiles.append(&mut value.split(' ').collect());
+                        json_api_media_type
+                            .profiles
+                            .append(&mut value.split(' ').collect());
                     } else if parameter.eq_ignore_ascii_case("ext") {
-                        json_api_media_type.extensions.append(&mut value.split(' ').collect());
+                        json_api_media_type
+                            .extensions
+                            .append(&mut value.split(' ').collect());
                     } else if parameter.eq_ignore_ascii_case("q") {
-                        let value = value.parse().map_err(|_| {
-                            Error::new(
-                                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                                "UnsupportedQualityValue",
-                                "A media type parameter contains a quality value in an unsupported format",
-                            )
-                        })?;
+                        let value = value.parse().map_err(|_| Error::UnsupportedQualityValue)?;
                         json_api_media_type.quality = Some(value);
                     } else {
-                        return Err(Error::new(
-                            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                            "UnsupportedMediaTypeParameter",
-                            "An unsupported media type parameter was specified",
-                        ));
+                        return Err(Error::UnsupportedMediaTypeParameter {
+                            parameter: parameter.to_string(),
+                        });
                     }
                 }
 
                 Ok(json_api_media_type)
             })
-            .ok_or_else(|| {
-                Error::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "InvalidJsonApiMediaType",
-                    format!(
-                        "Attempted to build a JSON:API media type from a header of type {}",
-                        media_type.essence
-                    ),
-                )
+            .ok_or_else(|| Error::NotAJsonApiMediaType {
+                media_type: media_type.essence.to_string(),
             })?
     }
 }
@@ -89,7 +77,6 @@ impl<'a> Display for JsonApiMediaType<'a> {
 #[cfg(test)]
 mod tests {
     use super::JsonApiMediaType;
-    use crate::http_wrappers::StatusCode;
     use crate::routing::Error;
     use crate::utils::MediaType;
 
@@ -155,7 +142,7 @@ mod tests {
         let error =
             JsonApiMediaType::try_new(media_type("application/vnd.api+json; q=high")).unwrap_err();
 
-        assert_eq!(error.status_code(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(error, Error::UnsupportedQualityValue);
     }
 
     #[test]
@@ -164,14 +151,24 @@ mod tests {
             JsonApiMediaType::try_new(media_type("application/vnd.api+json; charset=utf-8"))
                 .unwrap_err();
 
-        assert_eq!(error.status_code(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(
+            error,
+            Error::UnsupportedMediaTypeParameter {
+                parameter: "charset".to_string()
+            }
+        );
     }
 
     #[test]
     fn rejects_a_foreign_media_type() {
         let error = JsonApiMediaType::try_new(media_type("text/html")).unwrap_err();
 
-        assert_eq!(error.status_code(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            error,
+            Error::NotAJsonApiMediaType {
+                media_type: "text/html".to_string()
+            }
+        );
     }
 
     #[test]

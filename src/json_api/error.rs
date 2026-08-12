@@ -13,24 +13,15 @@ pub struct Links {
     pub kind: Option<Link>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A reference to whatever in the request caused an error: a JSON Pointer into the request document,
+/// a query parameter name, or a request header name. Exactly one, serialised under the member the
+/// standard names it by.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Source {
     Pointer(String),
     Parameter(String),
     Header(String),
-}
-
-impl Source {
-    pub fn pointer_for_primary_data() -> Source {
-        Source::Pointer("/data".to_string())
-    }
-
-    pub fn pointer_for_attribute<T>(attribute: T) -> Source
-    where
-        T: Display,
-    {
-        Source::Pointer(format!("/data/attributes/{}", attribute))
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,3 +73,44 @@ impl Display for Error {
 }
 
 impl StdError for Error {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_pointer_source_names_the_pointer_member() -> Result<(), serde_json::Error> {
+        assert_eq!(
+            serde_json::to_value(Source::Pointer("/data/attributes/title".to_string()))?,
+            json!({ "pointer": "/data/attributes/title" })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_parameter_source_names_the_parameter_member() -> Result<(), serde_json::Error> {
+        assert_eq!(
+            serde_json::to_value(Source::Parameter("sort".to_string()))?,
+            json!({ "parameter": "sort" })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_header_source_names_the_header_member() -> Result<(), serde_json::Error> {
+        assert_eq!(
+            serde_json::to_value(Source::Header("Accept".to_string()))?,
+            json!({ "header": "Accept" })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_source_round_trips_through_its_member_name() -> Result<(), serde_json::Error> {
+        let deserialised: Source = serde_json::from_value(json!({ "pointer": "/data" }))?;
+
+        assert_eq!(deserialised, Source::Pointer("/data".to_string()));
+        Ok(())
+    }
+}

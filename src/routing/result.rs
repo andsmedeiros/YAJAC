@@ -1,11 +1,11 @@
-use super::error::Error;
+use crate::error::Error;
 use crate::json_api::document::Document;
 use crate::serialisation::ByteStream;
 use http::Response;
 use std::error::Error as StdError;
 use std::result::Result as StdResult;
 
-/// The resource-tier handler result: a document response, or a `routing::Error` the crossing renders
+/// The resource-tier handler result: a document response, or the crate error the crossing renders
 /// into a JSON:API error document.
 pub type ResourceResult = StdResult<Response<Option<Document>>, Error>;
 

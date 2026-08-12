@@ -6,12 +6,12 @@ use crate::database::connection_manager::ConnectionManager;
 use crate::database::record::{Builder, Record};
 use crate::database::registry::Registry;
 use crate::database::schema::{AttributeType, Related, Schema, SchemaBuilder};
-use crate::http_wrappers::Uri;
+use crate::http_wrappers::{StatusCode, Uri};
 use crate::json_api::document::Document;
 use crate::routing::mount_table::{RelationshipMounts, ResourceMount};
 use crate::routing::{BaseUri, MountTable, PrimaryContext, PrimaryRequest, RouteParameters};
 use crate::serialisation::ByteStream;
-use http::{HeaderMap, StatusCode};
+use http::HeaderMap;
 use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -207,8 +207,7 @@ fn test_show_missing_is_not_found() -> TestResult {
     match Books::default().show(ResourceContext::new(schema(&manager, "books"), context)) {
         Ok(_) => Err("a missing record must error".into()),
         Err(error) => {
-            let status: StatusCode = error.status_code().into();
-            assert_eq!(status, StatusCode::NOT_FOUND);
+            assert_eq!(error.status, StatusCode::NOT_FOUND);
             Ok(())
         }
     }
@@ -294,8 +293,7 @@ fn test_create_refuses_unaccepted_client_generated_id() -> TestResult {
     match Books::default().create(ResourceContext::new(schema(&manager, "books"), context)) {
         Ok(_) => Err("an unaccepted client-generated id must be refused".into()),
         Err(error) => {
-            let status: StatusCode = error.status_code().into();
-            assert_eq!(status, StatusCode::FORBIDDEN);
+            assert_eq!(error.status, StatusCode::FORBIDDEN);
             Ok(())
         }
     }
@@ -404,8 +402,7 @@ fn test_create_rejects_type_mismatch() -> TestResult {
     match Books::default().create(ResourceContext::new(schema(&manager, "books"), context)) {
         Ok(_) => Err("a type mismatch must error".into()),
         Err(error) => {
-            let status: StatusCode = error.status_code().into();
-            assert_eq!(status, StatusCode::CONFLICT);
+            assert_eq!(error.status, StatusCode::CONFLICT);
             Ok(())
         }
     }
@@ -434,8 +431,7 @@ fn test_create_rejects_unknown_attribute() -> TestResult {
     match Books::default().create(ResourceContext::new(schema(&manager, "books"), context)) {
         Ok(_) => Err("an unknown attribute must error".into()),
         Err(error) => {
-            let status: StatusCode = error.status_code().into();
-            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(error.status, StatusCode::UNPROCESSABLE_ENTITY);
             Ok(())
         }
     }
@@ -461,8 +457,7 @@ fn test_create_rejects_non_resource_document() -> TestResult {
     match Books::default().create(ResourceContext::new(schema(&manager, "books"), context)) {
         Ok(_) => Err("a non-resource document must error".into()),
         Err(error) => {
-            let status: StatusCode = error.status_code().into();
-            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(error.status, StatusCode::UNPROCESSABLE_ENTITY);
             Ok(())
         }
     }
@@ -513,8 +508,7 @@ fn test_update_missing_is_not_found() -> TestResult {
     match Books::default().update(ResourceContext::new(schema(&manager, "books"), context)) {
         Ok(_) => Err("a missing record must error".into()),
         Err(error) => {
-            let status: StatusCode = error.status_code().into();
-            assert_eq!(status, StatusCode::NOT_FOUND);
+            assert_eq!(error.status, StatusCode::NOT_FOUND);
             Ok(())
         }
     }
@@ -569,8 +563,7 @@ fn test_update_rejects_type_mismatch() -> TestResult {
     match Books::default().update(ResourceContext::new(schema(&manager, "books"), context)) {
         Ok(_) => Err("a type mismatch must error".into()),
         Err(error) => {
-            let status: StatusCode = error.status_code().into();
-            assert_eq!(status, StatusCode::CONFLICT);
+            assert_eq!(error.status, StatusCode::CONFLICT);
             Ok(())
         }
     }
@@ -593,8 +586,7 @@ fn test_update_rejects_id_mismatch() -> TestResult {
     match Books::default().update(ResourceContext::new(schema(&manager, "books"), context)) {
         Ok(_) => Err("an id mismatch must error".into()),
         Err(error) => {
-            let status: StatusCode = error.status_code().into();
-            assert_eq!(status, StatusCode::CONFLICT);
+            assert_eq!(error.status, StatusCode::CONFLICT);
             Ok(())
         }
     }
@@ -624,8 +616,7 @@ fn test_delete_removes_record() -> TestResult {
     match Books::default().show(ResourceContext::new(schema(&manager, "books"), context)) {
         Ok(_) => Err("a deleted record must be gone".into()),
         Err(error) => {
-            let status: StatusCode = error.status_code().into();
-            assert_eq!(status, StatusCode::NOT_FOUND);
+            assert_eq!(error.status, StatusCode::NOT_FOUND);
             Ok(())
         }
     }
@@ -740,8 +731,7 @@ fn test_linkage_unknown_relationship_is_internal_error() -> TestResult {
     ) {
         Ok(_) => Err("an unknown relationship must error".into()),
         Err(error) => {
-            let status: StatusCode = error.status_code().into();
-            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
             Ok(())
         }
     }
@@ -919,8 +909,7 @@ fn test_relink_missing_target_is_not_found() -> TestResult {
     ) {
         Ok(_) => Err("a missing target must error".into()),
         Err(error) => {
-            let status: StatusCode = error.status_code().into();
-            assert_eq!(status, StatusCode::NOT_FOUND);
+            assert_eq!(error.status, StatusCode::NOT_FOUND);
             Ok(())
         }
     }
@@ -946,8 +935,7 @@ fn test_link_rejects_to_one_linkage() -> TestResult {
     ) {
         Ok(_) => Err("a to-one linkage on a to-many endpoint must error".into()),
         Err(error) => {
-            let status: StatusCode = error.status_code().into();
-            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(error.status, StatusCode::UNPROCESSABLE_ENTITY);
             Ok(())
         }
     }
@@ -973,8 +961,7 @@ fn test_link_missing_target_is_not_found() -> TestResult {
     ) {
         Ok(_) => Err("a missing target must error".into()),
         Err(error) => {
-            let status: StatusCode = error.status_code().into();
-            assert_eq!(status, StatusCode::NOT_FOUND);
+            assert_eq!(error.status, StatusCode::NOT_FOUND);
             Ok(())
         }
     }
@@ -1000,8 +987,7 @@ fn test_relink_missing_parent_is_not_found() -> TestResult {
     ) {
         Ok(_) => Err("a missing parent must error".into()),
         Err(error) => {
-            let status: StatusCode = error.status_code().into();
-            assert_eq!(status, StatusCode::NOT_FOUND);
+            assert_eq!(error.status, StatusCode::NOT_FOUND);
             Ok(())
         }
     }
@@ -1027,8 +1013,7 @@ fn test_relink_unknown_relationship_is_internal_error() -> TestResult {
     ) {
         Ok(_) => Err("an unknown relationship must error".into()),
         Err(error) => {
-            let status: StatusCode = error.status_code().into();
-            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
             Ok(())
         }
     }
@@ -1050,8 +1035,7 @@ fn test_relink_without_body_is_unprocessable() -> TestResult {
     ) {
         Ok(_) => Err("a missing body must error".into()),
         Err(error) => {
-            let status: StatusCode = error.status_code().into();
-            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(error.status, StatusCode::UNPROCESSABLE_ENTITY);
             Ok(())
         }
     }
@@ -1077,8 +1061,7 @@ fn test_link_on_to_one_is_kind_mismatch() -> TestResult {
     ) {
         Ok(_) => Err("adding to a to-one must error".into()),
         Err(error) => {
-            let status: StatusCode = error.status_code().into();
-            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
             Ok(())
         }
     }
@@ -1104,8 +1087,7 @@ fn test_unlink_on_to_one_is_kind_mismatch() -> TestResult {
     ) {
         Ok(_) => Err("removing from a to-one must error".into()),
         Err(error) => {
-            let status: StatusCode = error.status_code().into();
-            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
             Ok(())
         }
     }
@@ -1387,8 +1369,7 @@ fn test_related_unknown_relationship_is_internal_error() -> TestResult {
     ) {
         Ok(_) => Err("an unknown relationship must error".into()),
         Err(error) => {
-            let status: StatusCode = error.status_code().into();
-            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
             Ok(())
         }
     }

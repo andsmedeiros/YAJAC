@@ -19,10 +19,7 @@ use crate::{
         document::Document, identifier::Identifier as JsonApiIdentifier,
         primary_content::PrimaryContent, relationship::Linkage, resource::Resource,
     },
-    routing::{
-        Error, PrimaryContext, ResourceResult, RouteParameters,
-        error::ClientGeneratedIdNotSupportedError, responder::*,
-    },
+    routing::{Error, PrimaryContext, ResourceResult, RouteParameters, responder::*},
     serialisation::factories::{Content, to_document},
 };
 use http::HeaderMap;
@@ -105,16 +102,13 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> ResourceContext<'sch, '
                 .unwrap_or_default()
                 .into_iter()
                 .map(|(name, value)| {
-                    let column = schema.attribute(&name).ok_or_else(|| {
-                        Error::new(
-                            StatusCode::UNPROCESSABLE_ENTITY,
-                            "UnknownAttribute",
-                            format!(
-                                "The resource type '{}' has no attribute named '{name}'",
-                                schema.name()
-                            ),
-                        )
-                    })?;
+                    let column =
+                        schema
+                            .attribute(&name)
+                            .ok_or_else(|| Error::UnknownAttribute {
+                                kind: schema.name().to_string(),
+                                attribute: name.clone(),
+                            })?;
 
                     Ok((column.name, serde_json::from_value(value)?))
                 })
@@ -148,22 +142,15 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> ResourceContext<'sch, '
     /// targeted endpoint — its id against the `:id` route parameter.
     pub fn require_resource(&mut self) -> std::result::Result<Resource, Error> {
         let schema = self.schema;
-        let document = self.parse_body()?.ok_or_else(|| {
-            Error::new(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "MissingBody",
-                "This request requires a body containing a resource object",
-            )
-        })?;
+        let document = self.parse_body()?.ok_or(Error::MissingResourceBody)?;
 
-        let PrimaryContent::Record { data } = document.content else {
-            return Err(Error::new(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "InvalidDocument",
-                "The request body must contain a single resource object as its primary data",
-            ));
+        let resource = match document.content {
+            PrimaryContent::Record { data } => *data,
+            PrimaryContent::Errors { .. } => return Err(Error::ErrorDocumentSubmitted),
+            PrimaryContent::Collection { .. } | PrimaryContent::Empty { .. } => {
+                return Err(Error::PrimaryDataIsNotAResource);
+            }
         };
-        let resource = *data;
 
         let (kind, id) = match &resource.identifier {
             JsonApiIdentifier::Existing { kind, id } => (kind.as_str(), Some(id)),
@@ -171,35 +158,24 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> ResourceContext<'sch, '
         };
 
         if kind != schema.name() {
-            return Err(Error::new(
-                StatusCode::CONFLICT,
-                "ResourceTypeMismatch",
-                format!(
-                    "The resource type '{kind}' does not match the '{}' resource served at this endpoint",
-                    schema.name()
-                ),
-            ));
+            return Err(Error::ResourceTypeMismatch {
+                expected: schema.name().to_string(),
+                actual: kind.to_string(),
+            });
         }
 
         if let Some(expected) = self.route_parameters().get("id") {
             match id {
                 Some(sent) if sent != expected => {
-                    return Err(Error::new(
-                        StatusCode::CONFLICT,
-                        "ResourceIdMismatch",
-                        format!(
-                            "The resource id '{sent}' does not match the id '{expected}' targeted by this endpoint"
-                        ),
-                    ));
+                    return Err(Error::ResourceIdMismatch {
+                        expected: expected.to_string(),
+                        actual: sent.to_string(),
+                    });
                 }
                 None => {
-                    return Err(Error::new(
-                        StatusCode::CONFLICT,
-                        "ResourceIdMissing",
-                        format!(
-                            "The submitted resource must carry the id '{expected}' targeted by this endpoint"
-                        ),
-                    ));
+                    return Err(Error::ResourceIdMissing {
+                        expected: expected.to_string(),
+                    });
                 }
                 _ => {}
             }
@@ -250,13 +226,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> ResourceContext<'sch, '
     /// attributes, relationships, or links makes it a resource rather than linkage and is rejected.
     /// Type and id validation against the target resource is deferred to materialisation.
     pub fn require_linkage(&mut self) -> std::result::Result<Linkage, Error> {
-        let document = self.parse_body()?.ok_or_else(|| {
-            Error::new(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "MissingBody",
-                "This request requires a body containing relationship linkage",
-            )
-        })?;
+        let document = self.parse_body()?.ok_or(Error::MissingLinkageBody)?;
 
         match document.content {
             PrimaryContent::Empty { .. } => Ok(Linkage::Empty),
@@ -266,11 +236,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> ResourceContext<'sch, '
                     .map(Self::require_identifier)
                     .try_collect()?,
             )),
-            PrimaryContent::Errors { .. } => Err(Error::new(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "InvalidDocument",
-                "The request body must contain relationship linkage as its primary data",
-            )),
+            PrimaryContent::Errors { .. } => Err(Error::ErrorDocumentSubmitted),
         }
     }
 
@@ -287,11 +253,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> ResourceContext<'sch, '
         {
             Ok(identifier)
         } else {
-            Err(Error::new(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "InvalidLinkage",
-                "Relationship linkage must contain resource identifier objects, not full resources",
-            ))
+            Err(Error::InvalidLinkage)
         }
     }
 
@@ -306,30 +268,21 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> ResourceContext<'sch, '
         let schema = self.context.manager.registry().schema(schema)?;
         let identifier = match identifier {
             JsonApiIdentifier::Existing { kind, id } if kind.as_str() == schema.name() => id,
-            JsonApiIdentifier::New { .. } => {
-                return Err(Error::new(
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    "UnresolvableIdentifier",
-                    "This identifier must reference an existing resource by its id",
-                ));
-            }
-            _ => {
-                return Err(Error::new(
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    "IdentifierTypeMismatch",
-                    "This identifier references a resource of the wrong type",
-                ));
+            JsonApiIdentifier::New { .. } => return Err(Error::UnresolvableIdentifier),
+            JsonApiIdentifier::Existing { kind, .. } => {
+                return Err(Error::IdentifierTypeMismatch {
+                    expected: schema.name().to_string(),
+                    actual: kind,
+                });
             }
         };
 
         match schema.primary_key().kind {
             IdentifierType::Text => Ok(Identifier::Text(identifier)),
             IdentifierType::Integer => identifier.parse().map(Identifier::Integer).map_err(|_| {
-                Error::new(
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    "InvalidIdentifier",
-                    format!("The id '{identifier}' is not a valid integer identifier"),
-                )
+                Error::InvalidIntegerIdentifier {
+                    id: identifier.clone(),
+                }
             }),
         }
     }
@@ -450,7 +403,10 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
         let record = context.require_record()?;
 
         if record.id.is_some() && !self.configuration().accepts_client_ids {
-            return Err(ClientGeneratedIdNotSupportedError.into());
+            return Err(Error::ClientGeneratedIdNotSupported {
+                kind: record.schema.name().to_string(),
+            }
+            .into());
         }
 
         let parameters = context.query_parameters()?;
