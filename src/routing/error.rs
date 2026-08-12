@@ -547,3 +547,140 @@ impl From<JsonError> for Error {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_type_mismatch_points_at_the_submitted_type() {
+        let error = Error::ResourceTypeMismatch {
+            expected: "articles".to_string(),
+            actual: "comments".to_string(),
+        };
+
+        assert_eq!(error.status(), StatusCode::CONFLICT);
+        assert_eq!(error.source(), Some(pointer::for_member("type")));
+    }
+
+    #[test]
+    fn an_unknown_attribute_points_at_the_attribute() {
+        let error = Error::UnknownAttribute {
+            kind: "articles".to_string(),
+            attribute: "subtitle".to_string(),
+        };
+
+        assert_eq!(error.source(), Some(pointer::for_attribute("subtitle")));
+    }
+
+    #[test]
+    fn a_negotiation_failure_names_the_header_it_read() {
+        assert_eq!(
+            Error::MissingContentType.source(),
+            Some(Source::Header("Content-Type".to_string()))
+        );
+        assert_eq!(
+            Error::NoAcceptableMediaType.source(),
+            Some(Source::Header("Accept".to_string()))
+        );
+    }
+
+    /// A pointer must address a value present in the request document, so a refusal of an absent or
+    /// unreadable body names nothing.
+    #[test]
+    fn a_body_that_never_arrived_names_no_source() {
+        assert_eq!(Error::MissingResourceBody.source(), None);
+        assert_eq!(Error::ErrorDocumentSubmitted.source(), None);
+        assert_eq!(
+            Error::MalformedRequestBody {
+                line: 1,
+                column: 4,
+                message: "expected value".to_string(),
+            }
+            .source(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_title_carries_no_occurrence_detail() {
+        let one = Error::ResourceIdMismatch {
+            expected: "1".to_string(),
+            actual: "2".to_string(),
+        };
+        let another = Error::ResourceIdMismatch {
+            expected: "7".to_string(),
+            actual: "9".to_string(),
+        };
+
+        assert_eq!(one.title(), another.title());
+        assert_ne!(one.to_string(), another.to_string());
+    }
+
+    #[test]
+    fn a_body_parse_failure_carries_its_position() {
+        let error = Error::InvalidRequestBodyContent {
+            line: 3,
+            column: 17,
+            message: "invalid type".to_string(),
+        };
+
+        assert_eq!(error.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(error.meta(), Some(json!({ "line": 3, "column": 17 })));
+    }
+
+    #[test]
+    fn a_refusal_with_nothing_to_add_carries_no_meta() {
+        assert_eq!(Error::InvalidLinkage.meta(), None);
+    }
+
+    #[test]
+    fn malformed_json_is_a_bad_request_and_invalid_content_is_unprocessable() {
+        let malformed = Error::from(
+            serde_json::from_str::<Value>("{").expect_err("unterminated json should not parse"),
+        );
+        let invalid = Error::from(
+            serde_json::from_str::<u32>("\"seven\"").expect_err("a string is not a number"),
+        );
+
+        assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(malformed.code(), "MalformedRequestBody");
+        assert_eq!(invalid.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(invalid.code(), "InvalidRequestBodyContent");
+    }
+
+    /// A funnelled layer is carried whole: every accessor answers as the nested error would.
+    #[test]
+    fn a_nested_database_failure_answers_for_itself() {
+        let nested = DatabaseError::RecordNotFound;
+        let error = Error::from(nested.clone());
+
+        assert_eq!(error.status(), nested.status());
+        assert_eq!(error.code(), nested.code());
+        assert_eq!(error.title(), nested.title());
+        assert_eq!(error.to_string(), nested.to_string());
+        assert_eq!(error.source(), None);
+    }
+
+    #[test]
+    fn a_nested_serialisation_failure_answers_for_itself() {
+        let nested = SerialisationError::LinkGenerationError {
+            message: "the ':tenant' segment was not resolved".to_string(),
+        };
+        let error = Error::from(nested.clone());
+
+        assert_eq!(error.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error.code(), nested.code());
+        assert_eq!(error.to_string(), nested.to_string());
+    }
+
+    #[test]
+    fn a_response_construction_failure_is_internal() {
+        let error = Error::ResponseConstructionFailed {
+            message: "invalid header value".to_string(),
+        };
+
+        assert_eq!(error.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error.source(), None);
+    }
+}

@@ -16,6 +16,9 @@
 //! `title` — leaving `Display` to supply the per-occurrence `detail`. A downstream embedder joins
 //! the same way, by implementing `From<TheirError>` for this type.
 
+#[cfg(test)]
+mod tests;
+
 pub mod pointer;
 
 use crate::{
