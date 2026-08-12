@@ -1,9 +1,10 @@
-use super::{FILTER_PROFILE, JsonApi, PAGINATION_PROFILE};
+use super::{FILTER_PROFILE, JsonApi, PAGINATION_PROFILE, redact_error};
 use crate::database::adapters::SqliteAdapter;
 use crate::database::adapters::sqlite::Pool;
 use crate::database::connection_manager::ConnectionManager;
 use crate::database::registry::Registry;
 use crate::database::schema::{AttributeType, Schema, SchemaBuilder};
+use crate::error::{Error as RootError, pointer};
 use crate::http_wrappers::{StatusCode, Uri};
 use crate::json_api::document::{Document, Links, Pagination};
 use crate::json_api::links::Link;
@@ -16,6 +17,8 @@ use crate::routing::{ResourceResult, respond_with};
 use crate::serialisation::ByteStream;
 use http::header::CONTENT_TYPE;
 use http::{HeaderName, Response};
+use serde_json::json;
+use std::borrow::Cow;
 use std::error::Error as StdError;
 use std::io::Cursor;
 
@@ -129,6 +132,46 @@ fn stamps_the_json_api_content_type_on_a_rendered_error() -> TestResult {
     assert!(document["errors"].is_array());
 
     Ok(())
+}
+
+/// The internals a `5xx` may carry, as a data-loading fault would.
+fn internal_error(status: StatusCode) -> RootError {
+    RootError {
+        status,
+        code: Cow::Borrowed("IndexEntryFailure"),
+        title: Cow::Borrowed("Failed to derive an index entry"),
+        detail: "Foreign key 'author_id' of schema 'articles' is not loaded".to_string(),
+        source: Some(Box::new(pointer::for_attribute("title"))),
+        meta: Some(Box::new(json!({ "line": 3, "column": 17 }))),
+    }
+}
+
+#[test]
+fn redaction_replaces_every_internal_member() {
+    let mut error = internal_error(StatusCode::INTERNAL_SERVER_ERROR);
+
+    redact_error(&mut error);
+
+    assert_eq!(
+        error,
+        RootError {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: Cow::Borrowed("InternalServerError"),
+            title: Cow::Borrowed("An unexpected error occurred"),
+            detail: "The server failed to process this request".to_string(),
+            source: None,
+            meta: None,
+        }
+    );
+}
+
+#[test]
+fn redaction_keeps_the_status_it_was_given() {
+    let mut error = internal_error(StatusCode::BAD_GATEWAY);
+
+    redact_error(&mut error);
+
+    assert_eq!(error.status, StatusCode::BAD_GATEWAY);
 }
 
 #[test]
