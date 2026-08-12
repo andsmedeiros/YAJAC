@@ -16,18 +16,31 @@ Rules the codebase already follows. Keep new code homogeneous with them. This co
   schema-consistency faults → 500 (`InconsistentSchema`), generic bad accessor input → 500
   (`InvalidAttributeAccess`), and so on. Pick the variant by *who caused it and what it means*, not by
   the current call site.
-- **Named error types over inline construction.** An error raised at a call site gets a **named type
-  defined in the error module** — a payload struct with `Display` + `StdError` + `From<…> for Error`
-  (the sole place its status/code/title live), used via `?` / `.into()` (e.g. `routing::error`'s
-  `RequiredParameterMissingError`, `ClientGeneratedIdNotSupportedError`). Don't inline
-  `Error::new(status, code, title)` where the error is raised; keep construction in the error module,
-  and prefer a chain that breaks on it (`cond.then_some(x).ok_or(TheError)?`) over an imperative
-  `if !cond { return Err(…) }`.
-- **Lossless outward, redacted at the boundary.** `From<database::Error> for routing::Error` preserves
-  status/code/title/detail. 5xx **detail redaction** (to a generic `InternalServerError`) and
-  **logging** happen *only* at the router response boundary (`Router::handle`), and only in non-debug
-  builds — dev builds return full detail. Do not scatter redaction or logging into `From` impls or
-  handlers.
+- **One error enum per layer; never build an error inline.** Every layer — `database`, `serialisation`,
+  `routing` — owns a single `Error` enum with a **variant per fault**, and a fault is raised by naming
+  its variant. No layer error has a `new(status, code, title)` constructor, so a call site cannot mint
+  an anonymous error: if there is no variant for what went wrong, add one. Prefer a chain that breaks
+  on it (`cond.then_some(x).ok_or(Error::TheFault)?`) over an imperative `if !cond { return Err(…) }`.
+- **Variants carry, messages interpolate.** A variant holds the *data* the raising site knew — the
+  submitted type, the offending attribute, the media type parameter — and `Display` interpolates it.
+  Never pre-format a message into a `String` field. `title()` is generic and identical across
+  occurrences (the standard requires it); the occurrence-specific text is `Display`, which becomes
+  `detail`. If a variant's `detail` would read exactly like its `title`, it is missing a field.
+- **Two error shapes, one conversion.** `yajac::Error` is the funnel — mandatory status, borrowed
+  `code`/`title`, rare members boxed — shaped for travelling the stack; `json_api::error::Error` models
+  the standard's error object and is shaped for serialisation. Layer errors drain into the funnel via
+  `From` impls that live in `yajac::error` (not beside either error), and the funnel converts to the
+  wire object **once**, where the error document is built. Handler signatures return the funnel;
+  helpers behind them keep their layer's enum, so a failure stays matchable until it crosses.
+- **A `source` is named only where it can be named truthfully.** The standard requires a `pointer` to
+  address a value that *exists in the request document*, so only layers holding that document may emit
+  one: `routing` and `serialisation` name pointers, `database` names at most a query parameter (its
+  errors are raised on the read path too, where no request document exists). Build pointers with
+  `yajac::error::pointer`, never by formatting a path — it escapes each reference token per RFC 6901.
+- **Redacted at the boundary, not before.** 5xx **detail redaction** (`redact_error`, leaving only the
+  status) and **logging** happen *only* at the JSON:API middleware's response boundary, and only in
+  non-debug builds — dev builds return full detail. Do not scatter redaction or logging into `From`
+  impls or handlers.
 - **`cfg!(debug_assertions)`** is the dev/non-dev signal (matches the migrator precedent).
 
 ## Panics & fallibility

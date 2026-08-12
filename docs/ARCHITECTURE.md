@@ -13,7 +13,7 @@ lifecycle*). YAJAC owns serialisation — the embedder receives bytes, not a `Do
 
 ## Module map
 
-The crate root (`src/lib.rs`) exposes six top-level modules, layered from the wire inward:
+The crate root (`src/lib.rs`) exposes seven top-level modules, layered from the wire inward:
 
 | Module          | Role                                                                                                        |
 | --------------- | ---------------------------------------------------------------------------------------------------------- |
@@ -21,6 +21,7 @@ The crate root (`src/lib.rs`) exposes six top-level modules, layered from the wi
 | `json_api`      | JSON:API v1.1 document model — the serialised wire types.                                                   |
 | `serialisation` | Builds JSON:API documents from records: the document factory (`to_document`), link generation (the `UriGenerator` trait over a `BaseUri`), the `ByteStream` body currency, and its error type. |
 | `database`      | Schema-driven data layer: schema, registry, store, records, query building, adapters.                      |
+| `error`         | The error funnel every layer drains into, the projection onto the wire error object, and the RFC 6901 pointer builders. Sits above all the others. |
 | `http_wrappers` | Serde-friendly newtypes over the `http` crate (`StatusCode`, `Uri`).                                       |
 | `utils`         | Generic, domain-agnostic helpers — the `indexing` iterator adaptors and the `MediaType` header parser.     |
 
@@ -117,7 +118,7 @@ oblivious to which implementor they hold:
 
 `ByteStream` (`Box<dyn Read + Send>`) is the body currency both ways — a request body streamed in, a
 serialised document streamed out. The generator's `Error` carries document-serialisation and
-link-generation faults (both internal `500`, both folding into `routing::Error`). Both `to_document` and
+link-generation faults (both internal `500`, carried whole by `routing::Error`). Both `to_document` and
 the generators are crate-private: the public serialisation entry point is `Router::handle`.
 
 ### `database`
@@ -251,18 +252,34 @@ A raw handler is `for<'req> Fn(PrimaryContext<'sch, 'req, Adapter>) -> PrimaryRe
 
 ## Error flow
 
-Error types translate outward toward the wire, everything funnelling into `routing::Error`:
+Each layer owns an error enum; all of them drain into one funnel, which is projected onto the wire
+object exactly once:
 
-`database::Error` → `routing::Error` → `json_api::error::Error`, with `serialisation::Error`
-(document-serialisation and link-generation faults) folding into `routing::Error` alongside them.
+`database::Error` ┐
+`serialisation::Error` ├→ `yajac::Error` → `json_api::error::Error`
+`routing::Error` ┘
 
-- `database::Error` is **source-classified**: each variant carries a single HTTP meaning exposed via
-  `status()` / `code()` / `title()`, and a consumer-facing `Display` message.
-- `routing::Error` is built either from a `database::Error` (a **lossless** `From`, status/code/title/
-  detail preserved), from a `serialisation::Error` (surfaced as a `500`), or from a **named payload type**
-  defined in `routing::error` (e.g. `RequiredParameterMissingError`, `ClientGeneratedIdNotSupportedError`)
-  via its `From` impl — call sites raise the named type rather than inlining `Error::new`.
-- Redaction of 5xx detail happens at the JSON:API boundary, never in the `From`.
+- Every layer enum answers the same three questions — `status()`, `code()`, `title()` — with `Display`
+  supplying the occurrence text. Variants are **source-classified**: each carries a single HTTP meaning,
+  chosen by who caused the fault, not by the call site.
+- `routing::Error` additionally **carries the layers it drives** (`Database`, `Serialisation` variants)
+  rather than flattening them, and every accessor delegates through, so a nested failure projects
+  exactly as it would alone. Its own variants cover the request path: route parameters, body shape,
+  submitted resources, content negotiation, response construction, and the two router invariants the
+  types cannot enforce.
+- **`yajac::Error` is the funnel, not the wire type.** It carries a mandatory `status`, borrowed
+  `code`/`title`, an owned `detail`, and boxed `source`/`meta` — shaped for travelling the stack.
+  `json_api::error::Error` remains a faithful model of the standard's error object, shaped for
+  serialisation; the two are converted once, at the boundary that builds the error document.
+- The `From` impls all live in **`yajac::error`**, above every layer, so `json_api` stays pure spec
+  modelling and no layer below learns what a JSON:API error object is.
+- A `source` is attached only where the raising site can name one truthfully — the standard requires a
+  pointer to address a value that exists in the request document. `routing` and `serialisation` may
+  point into a document; `database` may not, since its errors are also raised serving reads. Pointers
+  come from `yajac::error::pointer`, which escapes each reference token per RFC 6901.
+- **Handlers return the funnel; the helpers behind them return their layer's enum**, so a fault stays
+  matchable — and unit-testable by variant — right up to the point it crosses into a handler.
+- Redaction of 5xx detail happens at the JSON:API boundary, never in a `From`.
 
 See [CONVENTIONS.md](CONVENTIONS.md) for the error-message rules.
 
