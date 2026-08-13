@@ -170,6 +170,17 @@ fn publishers() -> SchemaBuilder<'static> {
         )
 }
 
+/// Every resource the set declares, in foreign-key order: referencing a name from here is what a
+/// test does instead of asking a builder what it was called.
+pub(crate) const TABLES: [&str; 6] = [
+    "authors",
+    "publishers",
+    "articles",
+    "comments",
+    "profiles",
+    "summaries",
+];
+
 /// The whole set, in the order a reader meets it: the writers, what they write, and the satellites.
 pub(crate) fn all() -> [SchemaBuilder<'static>; 6] {
     [

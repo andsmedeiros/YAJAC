@@ -11,6 +11,7 @@
 //! |---|---|---|
 //! | schemas | [`schemas::build_registry`] | registry, schema, builder, query parameters, query builder, attributes |
 //! | database | [`database::build_connection_manager`] | table, connection, store, data loader |
+//! | data | [`fixtures`] | anything standing on the database stage |
 //!
 //! A schema-level suite stops at the first stage and never opens a database.
 //!
@@ -18,6 +19,7 @@
 //! alone, which the compiler enforces by keeping the internals used here out of its reach.
 
 pub(crate) mod database;
+pub(crate) mod fixtures;
 pub(crate) mod schemas;
 
 mod tests;
