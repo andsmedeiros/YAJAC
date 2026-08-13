@@ -6,4 +6,7 @@ pub mod routing;
 pub mod serialisation;
 pub mod utils;
 
+#[cfg(test)]
+mod test_support;
+
 pub use error::Error;
