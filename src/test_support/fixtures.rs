@@ -1,13 +1,8 @@
-//! The data stage: named rows a test inserts to give itself a population.
+//! Named rows, grouped by the table they belong to.
 //!
-//! There is deliberately no shared seed. A test states the world its assertion is about and nothing
-//! else exists to reason around: it inserts the rows it needs, in foreign-key order, and reads its
-//! expectations off what came back. A row a test needs only once it writes inline — what lives here
-//! is the recurring cast.
-//!
-//! Every fixture writes through the framework's own insert path and yields the persisted row, so a
-//! test never has to guess what the database stored. Ids are explicit and stable, which is what lets
-//! one fixture reference another.
+//! Each writes through the framework's insert path and yields the persisted row. Ids are explicit
+//! and stable, so one fixture references another by a known value, and a fixture referencing another
+//! requires it to be inserted first.
 
 use super::Result;
 use crate::database::adapters::SqliteAdapter;
@@ -20,9 +15,8 @@ use Attribute::*;
 
 type Manager<'sch> = ConnectionManager<'sch, SqliteAdapter>;
 
-/// Two authors: enough for a reassignment to have somewhere to move a record to. `ann` is the
-/// prolific one, `bob` the counterweight — inactive, younger, lower rated, so an ordering by any of
-/// those columns differs from insertion order.
+/// Two authors. `ann` is active, older and higher rated; `bob` is inactive, younger and lower
+/// rated, so an ordering by any of those columns differs from insertion order.
 pub(crate) mod authors {
     use super::*;
 
@@ -86,9 +80,8 @@ pub(crate) mod publishers {
     }
 }
 
-/// Three articles. `first` is fully attributed — author, editor and publisher all set; `second`
-/// shares its author but has no editor; `unattributed` is attached to nobody at all, which is where
-/// a null to-one on every side comes from.
+/// Three articles. `first` carries an author, an editor and a publisher; `second` shares `first`'s
+/// author and publisher and has no editor; `unattributed` carries none of the three.
 pub(crate) mod articles {
     use super::*;
 
@@ -162,8 +155,7 @@ pub(crate) mod articles {
     }
 }
 
-/// A two-deep thread on `articles::first`: `praise` is top-level and `reply` answers it, which is
-/// the self-reference's shortest walk.
+/// A two-deep thread on `articles::first`: `praise` is top-level, and `reply` answers it.
 pub(crate) mod comments {
     use super::*;
 

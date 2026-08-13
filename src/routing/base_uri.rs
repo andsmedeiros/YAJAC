@@ -6,6 +6,7 @@ use std::collections::HashMap;
 /// How generated links are rooted. The sole public knob for link generation: passed to
 /// `Router::try_new`, it decides whether every link the router mints is a bare path or an absolute
 /// URL. The path *structure* is not configured here — it comes from where each resource is mounted.
+#[derive(Clone)]
 pub enum BaseUri<'sch> {
     /// Path-only links (`/articles/1`), resolved by the client against the document's `self` link.
     Relative,

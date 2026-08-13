@@ -112,7 +112,7 @@ impl<'sch, Adapter: AdapterInterface + 'sch> Route<'sch, Adapter> {
     /// A trailing `*name` template segment is a glob: it matches one-or-more remaining path segments,
     /// captured joined under `name` (a bare `*` matches without capturing). Every other segment
     /// matches exactly one path segment — literally, or capturing a `:name` dynamic segment.
-    fn match_path<'req>(
+    pub(crate) fn match_path<'req>(
         &self,
         method: &Method,
         path_segments: &[&'req str],
@@ -419,7 +419,7 @@ where
 /// and the mount table its handlers resolve controllers and link templates through.
 pub struct Router<'sch, Adapter: AdapterInterface> {
     base_uri: BaseUri<'sch>,
-    routes: Vec<Route<'sch, Adapter>>,
+    pub(crate) routes: Vec<Route<'sch, Adapter>>,
     pub(crate) mount_table: MountTable<'sch, Adapter>,
 }
 

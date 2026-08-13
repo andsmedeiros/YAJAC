@@ -1,25 +1,19 @@
-//! The one schema set every in-crate suite is written against.
+//! The shared schema set: a publishing domain of authors, publishers, articles, comments, profiles
+//! and summaries. Authors write articles for publishers, readers comment on them, and an article may
+//! carry a summary.
 //!
-//! A publishing domain: authors write articles for publishers, readers comment on them, and each
-//! article may carry a summary. Its shape is chosen so that every relational case the framework
-//! distinguishes is reachable from it:
+//! Across its six resources it carries:
 //!
-//! - **two `belongs_to` onto one table** — `articles.author` and `articles.editor`, without which
-//!   relationship disambiguation and link generation have no subject
-//! - **self-reference** — `comments.parent` / `comments.replies`
-//! - **a join on a non-primary-key text column** — `authors.handle` ↔ `profiles.author_handle`,
-//!   reaching the relationship branches that primary-key joins never do, from both sides
-//! - **a text primary key with no server-side default** — `publishers`, which is what makes
-//!   client-generated ids expressible
+//! - **two `belongs_to` onto one table** — `articles.author` and `articles.editor`
+//! - **a self-reference** — `comments.parent` / `comments.replies`
+//! - **a join on a non-primary-key text column, from both sides** — `authors.handle` ↔
+//!   `profiles.author_handle`
+//! - **a text primary key with no server-side default** — `publishers`
 //! - **every attribute type** — `authors` carries text, integer, float, boolean and date-time
-//! - **full-text search** — `articles` alone declares a text index, leaving the other resources to
-//!   exercise search's refusal on an unindexed resource
+//! - **a text index** — on `articles`
 //!
-//! Which of the joins may be detached is a matter of column nullability, and so lives with the
-//! tables in [`super::database`].
-//!
-//! Read-only is deliberately absent: mounting a resource read-only is a routing decision, so it
-//! belongs to a router a test builds, not to the schema.
+//! Column nullability, which decides what may be detached, lives with the tables in
+//! [`super::database`].
 
 use super::Result;
 use crate::database::registry::Registry;

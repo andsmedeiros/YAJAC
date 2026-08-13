@@ -1,16 +1,13 @@
-//! The database stage: the tables behind [`super::schemas`], and a manager bound to them.
+//! The tables behind [`super::schemas`], and a connection manager bound to them.
 //!
-//! Nullability here is load-bearing, and mirrors what the relational shape alone cannot say:
+//! Their foreign keys divide as:
 //!
-//! - **nullable foreign keys** — `articles.author_id`, `articles.editor_id`, `comments.author_id`
-//!   and `profiles.author_handle`, so detaching those joins is a legal write
-//! - **`NOT NULL` foreign keys** — `comments.article_id` and `summaries.article_id`, so a missing
-//!   reference stays distinguishable from a constraint violation
-//! - **`UNIQUE` foreign keys** — `profiles.author_handle` and `summaries.article_id`, the has-one
-//!   path and the conflict that guards it
+//! - **nullable** — `articles.author_id`, `articles.editor_id`, `comments.author_id` and
+//!   `profiles.author_handle`, which may therefore be detached
+//! - **`NOT NULL`** — `comments.article_id` and `summaries.article_id`
+//! - **`UNIQUE`** — `profiles.author_handle` and `summaries.article_id`, the has-one joins
 //!
-//! `authors.handle` is `UNIQUE` because `profiles` joins against it, and SQLite will only reference
-//! a uniquely indexed column.
+//! `authors.handle` carries a `UNIQUE` index, which is what `profiles.author_handle` references.
 
 use super::{Result, schemas};
 use crate::database::adapters::SqliteAdapter;
