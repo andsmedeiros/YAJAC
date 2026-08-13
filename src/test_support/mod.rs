@@ -3,8 +3,8 @@
 //! | Stage | Entry point | Yields |
 //! |---|---|---|
 //! | schemas | [`schemas::build_registry`] | a validated registry over the shared schema set |
-//! | database | [`database::build_connection_manager`] | that registry, bound to a fresh in-memory database |
-//! | data | [`fixtures`] | named rows, inserted and handed back as persisted |
+//! | database | [`database::build_database`] | that registry, bound to a fresh in-memory database, seeded |
+//! | data | [`fixtures`] | named rows, as declared |
 //! | routing | [`routing`] | request contexts, built from a router |
 //!
 //! Each stage stands on the ones above it.

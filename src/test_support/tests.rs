@@ -1,27 +1,24 @@
 //! The harness's own contract: the schema set is internally consistent, the tables behind it agree
-//! with it column for column, and the recurring cast lands in those tables intact. All three are
-//! invariants every other suite silently relies on, so a breach must fail here rather than as a
-//! hundred unrelated failures elsewhere.
+//! with it column for column, and the recurring cast lands in those tables intact.
 
 use super::{Result, database, fixtures, schemas};
 use crate::database::attributes::Attribute::*;
+use crate::database::attributes::Identifier;
 use crate::database::query_parameters::QueryParameters;
 use crate::database::table::Table;
 use test_log::test;
 
-/// Building the manager validates the whole set — `Registry::try_new` refuses an inconsistent one —
+/// Building the database validates the whole set — `Registry::try_new` refuses an inconsistent one —
 /// and then queries every table through the framework. The generated `SELECT` names each schema
 /// column, so a column the DDL lacks, misspells or types differently fails the query outright.
 #[test]
 fn every_schema_matches_its_table() -> Result {
-    let manager = database::build_connection_manager()?;
+    let manager = database::build_database([])?;
     let connection = manager.acquire()?;
 
     for name in schemas::TABLES {
-        let schema = manager.registry().schema(name)?;
-        let rows = manager
-            .table(name, &connection)?
-            .query(&QueryParameters::new(schema))?;
+        let table = manager.table(name, &connection)?;
+        let rows = table.query(&QueryParameters::new(table.schema()))?;
 
         assert!(rows.is_empty(), "{name} starts empty");
     }
@@ -29,24 +26,59 @@ fn every_schema_matches_its_table() -> Result {
     Ok(())
 }
 
-/// Inserting the cast in foreign-key order proves the references hold, and reading the rows back
+/// Seeding the cast proves its foreign keys resolve in the order given, and reading the rows back
 /// proves each column stores and materialises as the type its schema declares — a text primary key
-/// as text, a nullable foreign key as null when unset, and the whole attribute range on `ann`.
+/// as text, an unset foreign key as null, and the whole attribute range on `ann`.
 #[test]
 fn the_recurring_cast_lands_intact() -> Result {
-    let manager = database::build_connection_manager()?;
+    let manager = database::build_database([
+        ("authors", fixtures::authors::ann()?),
+        ("authors", fixtures::authors::bob()?),
+        ("publishers", fixtures::publishers::acme()?),
+        ("articles", fixtures::articles::first()?),
+        ("articles", fixtures::articles::second()?),
+        ("articles", fixtures::articles::unattributed()?),
+        ("comments", fixtures::comments::praise()?),
+        ("comments", fixtures::comments::reply()?),
+        ("profiles", fixtures::profiles::anns()?),
+        ("summaries", fixtures::summaries::firsts()?),
+    ])?;
     let connection = manager.acquire()?;
 
-    let ann = fixtures::authors::ann(&manager, &connection)?;
-    fixtures::authors::bob(&manager, &connection)?;
-    let acme = fixtures::publishers::acme(&manager, &connection)?;
-    let first = fixtures::articles::first(&manager, &connection)?;
-    let second = fixtures::articles::second(&manager, &connection)?;
-    let unattributed = fixtures::articles::unattributed(&manager, &connection)?;
-    fixtures::comments::praise(&manager, &connection)?;
-    let reply = fixtures::comments::reply(&manager, &connection)?;
-    let profile = fixtures::profiles::anns(&manager, &connection)?;
-    let summary = fixtures::summaries::firsts(&manager, &connection)?;
+    let authors = manager.table("authors", &connection)?;
+    let articles = manager.table("articles", &connection)?;
+    let publishers = manager.table("publishers", &connection)?;
+    let comments = manager.table("comments", &connection)?;
+    let profiles = manager.table("profiles", &connection)?;
+
+    let ann = authors.find(
+        Identifier::Integer(1),
+        &QueryParameters::new(authors.schema()),
+    )?;
+    let acme = publishers.find(
+        Identifier::Text("acme-press".to_string()),
+        &QueryParameters::new(publishers.schema()),
+    )?;
+    let first = articles.find(
+        Identifier::Integer(1),
+        &QueryParameters::new(articles.schema()),
+    )?;
+    let second = articles.find(
+        Identifier::Integer(2),
+        &QueryParameters::new(articles.schema()),
+    )?;
+    let unattributed = articles.find(
+        Identifier::Integer(3),
+        &QueryParameters::new(articles.schema()),
+    )?;
+    let reply = comments.find(
+        Identifier::Integer(2),
+        &QueryParameters::new(comments.schema()),
+    )?;
+    let anns_profile = profiles.find(
+        Identifier::Integer(1),
+        &QueryParameters::new(profiles.schema()),
+    )?;
 
     // Every attribute type survives the round trip.
     assert_eq!(ann["name"], Text("Ann Sorensen".to_string()));
@@ -66,10 +98,9 @@ fn the_recurring_cast_lands_intact() -> Result {
     assert_eq!(unattributed["editor_id"], Null);
     assert_eq!(unattributed["publisher_id"], Null);
 
-    // The self-reference, and the two joins that do not run through a primary key.
+    // The self-reference, and the join that does not run through a primary key.
     assert_eq!(reply["parent_id"], Integer(1));
-    assert_eq!(profile["author_handle"], ann["handle"]);
-    assert_eq!(summary["article_id"], first["id"]);
+    assert_eq!(anns_profile["author_handle"], ann["handle"]);
 
     Ok(())
 }

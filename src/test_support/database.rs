@@ -12,7 +12,10 @@
 use super::{Result, schemas};
 use crate::database::adapters::SqliteAdapter;
 use crate::database::adapters::sqlite::Pool;
+use crate::database::attributes::Row;
 use crate::database::connection_manager::ConnectionManager;
+use crate::database::query_parameters::QueryParameters;
+use crate::database::table::Table;
 
 /// The tables the schema set describes, plus the full-text shadow and triggers that back the text
 /// index `articles` declares.
@@ -78,13 +81,24 @@ const DDL: &str = "
     END;
 ";
 
-/// A registry bound to a fresh, empty in-memory database with the tables created. The pool holds a
-/// single connection, and that connection is what keeps the database alive — every acquisition
-/// lands on the same one, so a test may drop and re-acquire freely.
-pub(crate) fn build_connection_manager() -> Result<ConnectionManager<'static, SqliteAdapter>> {
+/// A registry bound to a fresh in-memory database with the tables created and `seed` written into
+/// them, each row paired with the table it belongs to and inserted in the order given.
+///
+/// Seeding is part of construction because the pool holds a single connection: the manager is handed
+/// over only once every row is in place and that connection is back in the pool.
+pub(crate) fn build_database<'a>(
+    seed: impl IntoIterator<Item = (&'a str, Row<'static>)>,
+) -> Result<ConnectionManager<'static, SqliteAdapter>> {
     let manager: ConnectionManager<SqliteAdapter> =
         ConnectionManager::new(schemas::build_registry()?, Pool::memory()?);
-    manager.acquire()?.execute_batch(DDL)?;
+    let connection = manager.acquire()?;
+    connection.execute_batch(DDL)?;
+
+    for (table, row) in seed {
+        manager
+            .table(table, &connection)
+            .and_then(|table| table.insert(row, &QueryParameters::new(table.schema())))?;
+    }
 
     Ok(manager)
 }
