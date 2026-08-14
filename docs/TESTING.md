@@ -26,10 +26,31 @@ applies everywhere afterwards.
 
 - Never assert on an error's message text. Messages change with rewording and translation; assert the
   variant, the status, or a structural property.
-- `Document` and `Resource` are serialisation concerns. A test whose subject is not serialisation
-  leaves them as early as it can and asserts in record terms, where an attribute is an `Attribute`
-  rather than a `serde_json::Value`. Serialising a response to `Value` and walking it by pointer is
-  never the way.
+- A failure crossing a boundary that renders `Error` is pinned by **both** its status and its code —
+  the status alone is shared by too many causes to identify one. Take the pair in a single
+  destructuring expression:
+
+  ```rust
+  let (status, code) = Articles
+      .show(context)
+      .err()
+      .map(|error| (error.status, error.code.to_string()))
+      .unzip();
+
+  assert_eq!(status, Some(StatusCode::NOT_FOUND));
+  assert_eq!(code, Some("RecordNotFound".to_string()));
+  ```
+- `Document` and `Resource` are the serialisation types, and `Value` is the correct value type at
+  that boundary — `Attribute` is record-land, which lives inside a handler. So a controller test
+  asserts on `PrimaryContent`, `Resource` and `Identifier`, and reads an attribute as the `Value` it
+  is. Serialising a response back into a `Value` and walking it by pointer is never the way.
+- No logic inside an assertion. Bind what is being asserted first, then compare — an assertion should
+  be readable at a glance:
+
+  ```rust
+  let titles: Vec<Option<&Value>> = records.iter().map(|record| record.attributes.get("title")).collect();
+  assert_eq!(titles, vec![Some(&json!("On Borrowed Lifetimes"))]);
+  ```
 
 ## Where expectations come from
 
@@ -54,9 +75,12 @@ applies everywhere afterwards.
   would want (`Clone` on a value type), that is a library decision, made on its own merits.
 - Data is rows or records. YAJAC has no models and no ORM, so no test invents typed per-table
   structs.
-- There is no seed shared across the crate. A test inserts the rows its assertion is about; anything
+- There is no seed shared across the crate. A test declares the rows its assertion is about; anything
   needed once it builds inline. Where most tests in one file start from the same population, that
   file may reach for a preset — always optional, always named, always called explicitly.
+- Seeding happens as part of building the database, and only there. The in-memory pool holds a single
+  connection, so a write attempted once a test has taken one out would block until the pool timed
+  out.
 
 ## Helpers
 
