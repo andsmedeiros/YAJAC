@@ -20,6 +20,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{self, Cursor, empty};
 use std::sync::Arc;
+use std::thread;
 use test_log::test;
 
 /// A guard admitting only requests that carry a given header, mountable on either tier.
@@ -350,6 +351,47 @@ fn the_first_template_that_matches_wins() -> Result {
 }
 
 #[test]
+fn a_raw_route_and_a_resource_route_contend_by_mount_order() -> Result {
+    let connection_manager = database::build_database([])?;
+    let articles = connection_manager.registry().schema("articles")?;
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.get("articles/featured", |_context| {
+            let stream: ByteStream = Box::new(Cursor::new(b"served raw".to_vec()));
+            respond_with(StatusCode::OK, Some(stream)).map_err(Into::into)
+        })
+        .resource::<Articles>("articles", articles)
+    })?;
+
+    let raw_stream: ByteStream = Box::new(empty());
+    let raw = http::Request::builder()
+        .method(Method::GET)
+        .uri("/articles/featured")
+        .body(raw_stream)?;
+
+    let resourceful_stream: ByteStream = Box::new(empty());
+    let resourceful = http::Request::builder()
+        .method(Method::GET)
+        .uri("/articles/1")
+        .body(resourceful_stream)?;
+
+    let (raw_parts, raw_body) = router.handle(&connection_manager, raw)?.into_parts();
+    let served = raw_body
+        .map(io::read_to_string)
+        .transpose()?
+        .unwrap_or_default();
+    let resourceful = router.handle(&connection_manager, resourceful)?;
+
+    assert_eq!(served, "served raw");
+    assert_eq!(raw_parts.headers.get(CONTENT_TYPE), None);
+    assert_eq!(
+        resourceful.headers().get(CONTENT_TYPE),
+        Some(&HeaderValue::from_static("application/vnd.api+json"))
+    );
+
+    Ok(())
+}
+
+#[test]
 fn a_template_matches_only_its_own_segment_count() -> Result {
     let connection_manager = database::build_database([])?;
     let router = Router::try_new(BaseUri::Relative, |root| {
@@ -542,6 +584,49 @@ fn every_verb_dispatches_to_the_handler_mounted_for_it() -> Result {
             StatusCode::RESET_CONTENT,
         ]
     );
+
+    Ok(())
+}
+
+#[test]
+fn one_router_serves_several_threads_at_once() -> Result {
+    let connection_manager = database::build_database([])?;
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.get("health", |_context| {
+            respond_with(StatusCode::OK, None).map_err(Into::into)
+        })
+    })?;
+
+    let answered: Vec<std::result::Result<StatusCode, String>> = thread::scope(|threads| {
+        let dispatches: Vec<_> = (0..4)
+            .map(|_| {
+                threads.spawn(|| {
+                    let stream: ByteStream = Box::new(empty());
+                    let request = http::Request::builder()
+                        .method(Method::GET)
+                        .uri("/health")
+                        .body(stream)
+                        .map_err(|error| error.to_string())?;
+
+                    router
+                        .handle(&connection_manager, request)
+                        .map(|response| response.status().into())
+                        .map_err(|error| error.to_string())
+                })
+            })
+            .collect();
+
+        dispatches
+            .into_iter()
+            .map(|dispatch| {
+                dispatch
+                    .join()
+                    .unwrap_or_else(|_| Err("a dispatching thread panicked".to_string()))
+            })
+            .collect()
+    });
+
+    assert_eq!(answered, vec![Ok(StatusCode::OK); 4]);
 
     Ok(())
 }
