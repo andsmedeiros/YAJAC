@@ -74,7 +74,7 @@ The embedder-facing layer.
   `.middleware`). Both `.middleware` forms and `scope` are **spawn-then-absorb** (`spawn_with_path` /
   `spawn_with_middleware` / `spawn_with` extend a level's path and/or middleware). `RelationshipConfig` /
   `RelationshipsConfig` carry per-relationship options (read-only, path/keyword relocation via `*_with`).
-- **`controller`** (a directory module — `controller/{mod.rs, tests.rs}`) — `ResourceController`, the trait
+- **`controller`** (a directory module — `controller/{mod.rs, tests/}`) — `ResourceController`, the trait
   an embedder implements per resource as a **stateless marker type** — every method has a default, so a
   bare `impl` is a complete controller, and it must be `Default` for the mount to build one per request.
   Its default handler methods receive a `ResourceContext<'sch, 'req, Adapter>` —

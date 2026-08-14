@@ -105,6 +105,10 @@ applies everywhere afterwards.
   `#[cfg(test)] mod tests`. Tests never live in a `mod.rs`.
 - A file module whose inline suite has outgrown it is promoted to a directory module, so its tests
   get a file of their own.
+- A `tests.rs` that has outgrown one file becomes `tests/` in turn, split **by concern** — what a
+  caller does, not one file per method. The controllers, routers and accessors the whole suite shares
+  stay in its `mod.rs`, which holds no tests itself; each sibling opens with `use super::*` and its
+  own `use test_log::test`, which a glob import cannot supply.
 - Shared scaffolding lives in `src/test_support`, gated on `#[cfg(test)]`. It cannot live under
   `tests/`, which compiles as a separate crate and cannot see either the unit suites or the
   `pub(crate)` items they rely on.
