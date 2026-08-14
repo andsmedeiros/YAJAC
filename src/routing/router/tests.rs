@@ -18,7 +18,7 @@ use http::{HeaderMap, HeaderValue, Method};
 use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::io::{self, Cursor, empty};
+use std::io::{self, Cursor, Read, empty};
 use std::sync::Arc;
 use std::thread;
 use test_log::test;
@@ -1267,6 +1267,62 @@ fn a_guard_on_the_resource_tier_gates_matching_too() -> Result {
     Ok(())
 }
 
+#[test]
+fn a_route_guarded_on_both_tiers_admits_only_what_passes_both() -> Result {
+    let connection_manager = database::build_database([])?;
+    let articles = connection_manager.registry().schema("articles")?;
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.middleware(RequireHeader("x-key"), |keyed| {
+            keyed.resource_with::<Articles>("articles", articles, |resource| {
+                resource.middleware(RequireHeader("x-tenant"), |tenanted| {
+                    tenanted.get("marked", |_context| {
+                        respond_with(StatusCode::NO_CONTENT, None)
+                    })
+                })
+            })
+        })
+    })?;
+
+    let unkeyed_stream: ByteStream = Box::new(empty());
+    let unkeyed = http::Request::builder()
+        .method(Method::GET)
+        .uri("/articles/marked")
+        .body(unkeyed_stream)?;
+
+    let partial_stream: ByteStream = Box::new(empty());
+    let partial = http::Request::builder()
+        .method(Method::GET)
+        .uri("/articles/marked")
+        .header("x-key", "present")
+        .body(partial_stream)?;
+
+    let complete_stream: ByteStream = Box::new(empty());
+    let complete = http::Request::builder()
+        .method(Method::GET)
+        .uri("/articles/marked")
+        .header("x-key", "present")
+        .header("x-tenant", "acme")
+        .body(complete_stream)?;
+
+    let admitted = router.handle(&connection_manager, complete)?;
+
+    assert_eq!(
+        router.handle(&connection_manager, unkeyed)?.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        router.handle(&connection_manager, partial)?.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(admitted.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        admitted.headers().get(CONTENT_TYPE),
+        Some(&HeaderValue::from_static("application/vnd.api+json"))
+    );
+
+    Ok(())
+}
+
 // --- backstops --------------------------------------------------------------
 //
 // Both guards below cover an invariant the builders uphold but the type system cannot carry, so
@@ -1598,6 +1654,35 @@ fn a_raw_response_reaches_the_client_untouched() -> Result {
 
     assert_eq!(served, "the bytes a handler streamed");
     assert_eq!(parts.headers.get(CONTENT_TYPE), None);
+
+    Ok(())
+}
+
+#[test]
+fn the_raw_tier_carries_bytes_that_are_not_text() -> Result {
+    let connection_manager = database::build_database([])?;
+    let payload = vec![0xFFu8, 0x00, 0xFE, 0x01, 0x80];
+    let streamed = payload.clone();
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.get("download", move |_context| {
+            let stream: ByteStream = Box::new(Cursor::new(streamed.clone()));
+            respond_with(StatusCode::OK, Some(stream)).map_err(Into::into)
+        })
+    })?;
+
+    let stream: ByteStream = Box::new(empty());
+    let request = http::Request::builder()
+        .method(Method::GET)
+        .uri("/download")
+        .body(stream)?;
+
+    let body = router.handle(&connection_manager, request)?.into_body();
+    let mut served = Vec::new();
+    if let Some(mut stream) = body {
+        stream.read_to_end(&mut served)?;
+    }
+
+    assert_eq!(served, payload);
 
     Ok(())
 }
