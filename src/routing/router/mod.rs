@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod tests;
+
 use super::{
     BaseUri, Error, PrimaryContext, PrimaryRequest, PrimaryResult, ResourceContext, ResourceResult,
     RouteParameters,
