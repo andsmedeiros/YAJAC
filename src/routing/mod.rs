@@ -19,7 +19,7 @@ pub use builders::{
     PrimaryRouteBuilder, RelationshipConfig, RelationshipsConfig, ResourceRouteBuilder,
     ResourceVerbs, RouteBuilder, SubordinateRouteBuilder, UnboundVerbs,
 };
-pub use context::PrimaryContext;
+pub use context::{PrimaryContext, ResourceContext};
 pub use controller::DefaultController;
 pub use error::Error;
 pub use middleware::{PrimaryHandler, PrimaryMiddleware, ResourceHandler, ResourceMiddleware};
