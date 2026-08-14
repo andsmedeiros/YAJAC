@@ -5,7 +5,7 @@
 //! | schemas | [`schemas::build_registry`] | a validated registry over the shared schema set |
 //! | database | [`database::build_database`] | that registry, bound to a fresh in-memory database, seeded |
 //! | data | [`fixtures`] | named rows, as declared |
-//! | routing | [`routing`] | request contexts, built from a router |
+//! | routing | [`routing`] | controllers to mount, and request contexts built from a router |
 //!
 //! Each stage stands on the ones above it.
 

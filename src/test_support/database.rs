@@ -13,9 +13,14 @@ use super::{Result, schemas};
 use crate::database::adapters::SqliteAdapter;
 use crate::database::adapters::sqlite::Pool;
 use crate::database::attributes::Row;
-use crate::database::connection_manager::ConnectionManager;
+use crate::database::connection_manager;
 use crate::database::query_parameters::QueryParameters;
 use crate::database::table::Table;
+
+/// The crate's connection manager, bound to the adapter every suite runs against, so a signature
+/// naming one carries only its lifetime.
+pub(crate) type ConnectionManager<'sch> =
+    connection_manager::ConnectionManager<'sch, SqliteAdapter>;
 
 /// The tables the schema set describes, plus the full-text shadow and triggers that back the text
 /// index `articles` declares.
@@ -88,17 +93,16 @@ const DDL: &str = "
 /// over only once every row is in place and that connection is back in the pool.
 pub(crate) fn build_database<'a>(
     seed: impl IntoIterator<Item = (&'a str, Row<'static>)>,
-) -> Result<ConnectionManager<'static, SqliteAdapter>> {
-    let manager: ConnectionManager<SqliteAdapter> =
-        ConnectionManager::new(schemas::build_registry()?, Pool::memory()?);
-    let connection = manager.acquire()?;
+) -> Result<ConnectionManager<'static>> {
+    let connection_manager = ConnectionManager::new(schemas::build_registry()?, Pool::memory()?);
+    let connection = connection_manager.acquire()?;
     connection.execute_batch(DDL)?;
 
     for (table, row) in seed {
-        manager
+        connection_manager
             .table(table, &connection)
             .and_then(|table| table.insert(row, &QueryParameters::new(table.schema())))?;
     }
 
-    Ok(manager)
+    Ok(connection_manager)
 }
