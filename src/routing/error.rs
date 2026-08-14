@@ -81,6 +81,9 @@ pub enum Error {
     InvalidIntegerIdentifier {
         id: String,
     },
+    UnsupportedQueryParameter {
+        parameter: String,
+    },
 
     InvalidHeaderValue {
         header: String,
@@ -141,6 +144,7 @@ impl Error {
             | FailedToParseRouteParameter { .. }
             | MalformedRequestBody { .. }
             | RequestBodyPeekFailed { .. }
+            | UnsupportedQueryParameter { .. }
             | InvalidHeaderValue { .. } => StatusCode::BAD_REQUEST,
 
             MissingResourceBody
@@ -208,6 +212,7 @@ impl Error {
             UnresolvableIdentifier => "UnresolvableIdentifier",
             IdentifierTypeMismatch { .. } => "IdentifierTypeMismatch",
             InvalidIntegerIdentifier { .. } => "InvalidIntegerIdentifier",
+            UnsupportedQueryParameter { .. } => "UnsupportedQueryParameter",
             InvalidHeaderValue { .. } => "InvalidHeaderValue",
             MissingContentType => "MissingContentType",
             UnsupportedContentType => "UnsupportedContentType",
@@ -257,6 +262,9 @@ impl Error {
             UnresolvableIdentifier => "This identifier does not reference an existing resource",
             IdentifierTypeMismatch { .. } => "This identifier references the wrong resource type",
             InvalidIntegerIdentifier { .. } => "The identifier is not a valid integer",
+            UnsupportedQueryParameter { .. } => {
+                "This endpoint does not support this query parameter"
+            }
             InvalidHeaderValue { .. } => "A request header could not be read",
             MissingContentType => "A 'Content-Type' header is required",
             UnsupportedContentType => "This endpoint does not accept the provided 'Content-Type'",
@@ -299,6 +307,7 @@ impl Error {
             | IdentifierTypeMismatch { .. }
             | InvalidIntegerIdentifier { .. } => Some(pointer::for_primary_data()),
             UnknownAttribute { attribute, .. } => Some(pointer::for_attribute(attribute)),
+            UnsupportedQueryParameter { parameter } => Some(Source::Parameter(parameter.clone())),
             ResourceTypeMismatch { .. } => Some(pointer::for_member("type")),
             ResourceIdMismatch { .. }
             | ResourceIdMissing { .. }
@@ -433,6 +442,10 @@ impl Display for Error {
             InvalidIntegerIdentifier { id } => {
                 write!(f, "The id '{id}' is not a valid integer identifier")
             }
+            UnsupportedQueryParameter { parameter } => write!(
+                f,
+                "This endpoint does not support the query parameter '{parameter}'"
+            ),
             InvalidHeaderValue { header, message } => write!(
                 f,
                 "The '{header}' header contains invalid characters and could not be parsed: {message}"
