@@ -28,7 +28,7 @@ pub(crate) struct ResourceMount<'sch, Adapter: AdapterInterface> {
 }
 
 /// Resolves a resource kind to its mount: the controller factory and the link templates the router
-/// captured for it. A kind with no mounted resource resolves to `DefaultController` and no links.
+/// captured for it. A kind the router never mounted has no entry, and so no links.
 pub(crate) struct MountTable<'sch, Adapter: AdapterInterface> {
     mounts: IndexMap<&'sch str, ResourceMount<'sch, Adapter>>,
 }
