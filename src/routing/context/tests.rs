@@ -9,6 +9,7 @@ use crate::json_api::relationship::Linkage;
 use crate::json_api::resource::Resource;
 use crate::routing::{BaseUri, Error, Router};
 use crate::serialisation::ByteStream;
+use crate::serialisation::uri_generator::UriGenerator;
 use crate::test_support::database::ConnectionManager;
 use crate::test_support::routing::{Articles, Publishers};
 use crate::test_support::{Result, database, fixtures, routing};
@@ -59,6 +60,39 @@ fn a_context_lends_the_schema_and_the_uri_it_was_built_from() -> Result {
 
     assert_eq!(context.schema().name(), "articles");
     assert_eq!(context.uri(), &uri);
+
+    Ok(())
+}
+
+#[test]
+fn a_context_lends_a_generator_rooted_at_the_base_it_was_built_with() -> Result {
+    let manager = database::build_database([])?;
+    let base = BaseUri::Absolute(Cow::Borrowed("https://api.example.com"));
+    let router = build_router(&manager, base.clone())?;
+
+    let body = json!({ "data": { "type": "articles", "id": "1" } });
+    let stream: ByteStream = Box::new(Cursor::new(serde_json::to_vec(&body)?));
+    let request = http::Request::builder()
+        .method(Method::PATCH)
+        .uri("/articles/1")
+        .body(stream)?;
+    let uri: Uri = request.uri().clone().into();
+    let mut context = routing::build_resource_context(
+        &manager,
+        &router,
+        &base,
+        &uri,
+        request,
+        manager.registry().schema("articles")?,
+    )?;
+
+    let record = context.require_record()?;
+    let generated = context.uri_generator().uri_for_resource(&record)?;
+
+    assert_eq!(
+        generated,
+        Some("https://api.example.com/articles/1".parse()?)
+    );
 
     Ok(())
 }
