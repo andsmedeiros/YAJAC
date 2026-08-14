@@ -153,7 +153,7 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
             }
         })?;
         let related_schema = context
-            .manager
+            .connection_manager
             .registry()
             .schema(descriptor.related.resource)?;
 
@@ -197,7 +197,7 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
             }
         })?;
 
-        let registry = context.manager.registry();
+        let registry = context.connection_manager.registry();
         let related_schema = registry.schema(descriptor.related.resource)?;
         let store = context.store()?;
 
@@ -247,7 +247,7 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
             }
         })?;
         let related_schema = context
-            .manager
+            .connection_manager
             .registry()
             .schema(descriptor.related.resource)?;
 
@@ -298,7 +298,7 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
             }
         })?;
         let related_schema = context
-            .manager
+            .connection_manager
             .registry()
             .schema(descriptor.related.resource)?;
 
@@ -349,7 +349,7 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
             }
         })?;
         let related_schema = context
-            .manager
+            .connection_manager
             .registry()
             .schema(descriptor.related.resource)?;
 

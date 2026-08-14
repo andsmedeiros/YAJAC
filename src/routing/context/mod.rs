@@ -50,7 +50,7 @@ pub struct PrimaryContext<'sch, 'req, Adapter: AdapterInterface>
 where
     'sch: 'req,
 {
-    pub manager: &'sch ConnectionManager<'sch, Adapter>,
+    pub connection_manager: &'sch ConnectionManager<'sch, Adapter>,
     pub uri: &'req Uri,
     base_uri: &'req BaseUri<'sch>,
     mount_table: &'req MountTable<'sch, Adapter>,
@@ -66,7 +66,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> PrimaryContext<'sch, 'req, Ada
     /// Builds a context from the request, harvesting its streamed body and headers and discarding
     /// the rest; `uri` is lent separately so the borrowing query parameters can reference it.
     pub(crate) fn from_request(
-        manager: &'sch ConnectionManager<'sch, Adapter>,
+        connection_manager: &'sch ConnectionManager<'sch, Adapter>,
         base_uri: &'req BaseUri<'sch>,
         mount_table: &'req MountTable<'sch, Adapter>,
         uri: &'req Uri,
@@ -75,10 +75,10 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> PrimaryContext<'sch, 'req, Ada
     ) -> Self {
         let (parts, body) = request.into_parts();
         let acquire: Box<dyn FnOnce() -> Result<Adapter::Connection, Error> + 'sch> =
-            Box::new(move || manager.acquire().map_err(Into::into));
+            Box::new(move || connection_manager.acquire().map_err(Into::into));
 
         Self {
-            manager,
+            connection_manager,
             uri,
             base_uri,
             mount_table,
@@ -139,13 +139,13 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> PrimaryContext<'sch, 'req, Ada
     }
 
     pub fn table(&self, name: &str) -> Result<Adapter::Table<'sch, '_>, Error> {
-        self.manager
+        self.connection_manager
             .table(name, self.connection()?)
             .map_err(Into::into)
     }
 
     pub fn store(&self) -> Result<Store<'sch, '_, Adapter>, Error> {
-        Ok(Store::new(self.manager, self.connection()?))
+        Ok(Store::new(self.connection_manager, self.connection()?))
     }
 
     pub fn headers(&self) -> &HeaderMap {
@@ -163,7 +163,8 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface> PrimaryContext<'sch, 'req, Ada
         &self,
         schema: &'sch Schema<'sch>,
     ) -> Result<QueryParameters<'sch, 'req>, Error> {
-        QueryParameters::parse(self.uri, schema, self.manager.registry()).map_err(Into::into)
+        QueryParameters::parse(self.uri, schema, self.connection_manager.registry())
+            .map_err(Into::into)
     }
 }
 
@@ -179,7 +180,7 @@ pub struct ResourceContext<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> {
 impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> ResourceContext<'sch, 'req, Adapter> {
     pub fn new(schema: &'sch Schema<'sch>, context: PrimaryContext<'sch, 'req, Adapter>) -> Self {
         let uri = context.uri;
-        let registry = context.manager.registry();
+        let registry = context.connection_manager.registry();
         Self {
             schema,
             context,
@@ -394,7 +395,7 @@ impl<'sch: 'req, 'req, Adapter: AdapterInterface + 'sch> ResourceContext<'sch, '
         identifier: JsonApiIdentifier,
         schema: &str,
     ) -> Result<Identifier, Error> {
-        let schema = self.context.manager.registry().schema(schema)?;
+        let schema = self.context.connection_manager.registry().schema(schema)?;
         let identifier = match identifier {
             JsonApiIdentifier::Existing { kind, id } if kind.as_str() == schema.name() => id,
             JsonApiIdentifier::New { .. } => return Err(Error::UnresolvableIdentifier),
