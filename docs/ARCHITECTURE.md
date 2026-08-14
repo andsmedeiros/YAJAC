@@ -83,13 +83,15 @@ The embedder-facing layer.
   record, others echoed from the request) for link rendering — **infallible**, omitting anything it cannot
   resolve. Overriding `configuration()` returns a `Configuration` shaping framework behaviour (today,
   whether the resource accepts **client-generated ids**).
-- **`context`** — `PrimaryContext<'sch, 'req, Adapter>`, the raw-tier per-request bundle (connection
-  manager, uri, route params, headers, the streamed body, and — lent by the router — the `BaseUri` and
-  `MountTable`, from which it lazily builds the per-request link generator). The body is taken by value
-  (`require_body`); `contains_body` probes and caches whether it carries content (one byte, prepended back)
-  so negotiation and parsing agree without re-reading. `ResourceContext` wraps it (and `Deref`s to it),
-  adding schema-bound document parsing (`require_record` / `require_resource` / `require_linkage`,
-  `parse_body` straight off the stream) and the cached, own-schema query parameters.
+- **`context`** — both request tiers. `PrimaryContext<'sch, 'req, Adapter>` is the raw-tier per-request
+  bundle (connection manager, uri, route params, headers, the streamed body, and — lent by the router — the
+  `BaseUri` and `MountTable`, from which it lazily builds the per-request link generator). The body is taken
+  by value (`require_body`); `contains_body` probes and caches whether it carries content (one byte,
+  prepended back) so negotiation and parsing agree without re-reading. `ResourceContext` wraps it (and
+  `Deref`s to it), adding schema-bound document parsing (`require_record` / `require_resource` /
+  `require_linkage`, `parse_body` straight off the stream) and the cached, own-schema query parameters.
+  Every fallible method on either tier answers with the routing `Error`, converting at the lazy cell it
+  fills.
 - **`request` / `responder` / `result` / `route_parameters` / `base_uri` / `mount_table` / `error`** — the
   primary request wrapper (`PrimaryRequest`), response builders, the tier result aliases
   (`PrimaryResult` / `ResourceResult`), captured path params, the `BaseUri` link-rooting knob, the router's
