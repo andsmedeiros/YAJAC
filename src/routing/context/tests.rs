@@ -1,6 +1,5 @@
 use crate::database::adapters::SqliteAdapter;
 use crate::database::attributes::{Attribute, Identifier};
-use crate::database::connection_manager::ConnectionManager;
 use crate::database::query_parameters::{SortDirection, SortingAttribute};
 use crate::database::relationships::Relationship;
 use crate::database::table::Table;
@@ -8,9 +7,10 @@ use crate::http_wrappers::{StatusCode, Uri};
 use crate::json_api::identifier::Identifier as JsonApiIdentifier;
 use crate::json_api::relationship::Linkage;
 use crate::json_api::resource::Resource;
-use crate::routing::controller::ResourceController;
 use crate::routing::{BaseUri, Error, Router};
 use crate::serialisation::ByteStream;
+use crate::test_support::database::ConnectionManager;
+use crate::test_support::routing::{Articles, Publishers};
 use crate::test_support::{Result, database, fixtures, routing};
 use http::Method;
 use serde_json::json;
@@ -20,24 +20,14 @@ use std::collections::HashMap;
 use std::io::{Cursor, empty};
 use test_log::test;
 
-type Manager<'sch> = ConnectionManager<'sch, SqliteAdapter>;
-
-#[derive(Default)]
-struct Articles;
-impl<'sch> ResourceController<'sch, SqliteAdapter> for Articles {}
-
-#[derive(Default)]
-struct Publishers;
-impl<'sch> ResourceController<'sch, SqliteAdapter> for Publishers {}
-
 /// A router mounting an integer-keyed resource and a text-keyed one, so a request can be resolved
 /// against either kind of primary key.
 fn build_router<'sch>(
-    manager: &'sch Manager<'sch>,
+    connection_manager: &'sch ConnectionManager<'sch>,
     base_uri: BaseUri<'sch>,
 ) -> Result<Router<'sch, SqliteAdapter>> {
-    let articles = manager.registry().schema("articles")?;
-    let publishers = manager.registry().schema("publishers")?;
+    let articles = connection_manager.registry().schema("articles")?;
+    let publishers = connection_manager.registry().schema("publishers")?;
 
     Router::try_new(base_uri, |root| {
         root.resource::<Articles>("articles", articles)
