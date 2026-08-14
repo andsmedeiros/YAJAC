@@ -220,7 +220,7 @@ impl Display for MountSlot {
 
 /// A fault detected while assembling a router: a misconfiguration in how resources, their
 /// relationship endpoints, or their middleware were mounted.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum RouterError {
     DuplicateResource {
         kind: String,
