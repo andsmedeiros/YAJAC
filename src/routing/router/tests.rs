@@ -1,4 +1,4 @@
-use super::RouterError;
+use super::{EndpointHandler, Route, RouterError, serve_resource};
 use crate::database::adapters::SqliteAdapter;
 use crate::http_wrappers::{StatusCode, Uri};
 use crate::json_api::document::Document;
@@ -6,21 +6,30 @@ use crate::json_api::identifier::Identifier;
 use crate::json_api::primary_content::PrimaryContent;
 use crate::json_api::resource::{Links, Resource};
 use crate::routing::builders::{ResourceVerbs, RouteBuilder, UnboundVerbs};
-use crate::routing::middleware::PrimaryMiddleware;
-use crate::routing::{BaseUri, MountSlot, PrimaryResult, RouteParameters, respond_with};
+use crate::routing::middleware::{Middleware, PrimaryMiddleware, ResourceMiddleware};
+use crate::routing::{
+    BaseUri, MountSlot, PrimaryResult, ResourceContext, RouteParameters, respond_with,
+};
 use crate::serialisation::ByteStream;
 use crate::test_support::routing::{Articles, Comments, Router};
-use crate::test_support::{Result, database};
+use crate::test_support::{Result, database, routing};
 use http::header::CONTENT_TYPE;
 use http::{HeaderMap, HeaderValue, Method};
 use serde_json::{Value, json};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{self, Cursor, empty};
+use std::sync::Arc;
 use test_log::test;
 
-/// A guard admitting only requests that carry a given header.
+/// A guard admitting only requests that carry a given header, mountable on either tier.
 struct RequireHeader(&'static str);
 impl<'sch> PrimaryMiddleware<'sch, SqliteAdapter> for RequireHeader {
+    fn matches(&self, headers: &HeaderMap, _uri: &Uri, _route: &RouteParameters) -> bool {
+        headers.contains_key(self.0)
+    }
+}
+impl<'sch> ResourceMiddleware<'sch, SqliteAdapter> for RequireHeader {
     fn matches(&self, headers: &HeaderMap, _uri: &Uri, _route: &RouteParameters) -> bool {
         headers.contains_key(self.0)
     }
@@ -605,6 +614,77 @@ fn a_dynamic_segment_is_captured_percent_decoded() -> Result {
 }
 
 #[test]
+fn a_dynamic_segment_decodes_an_encoded_slash_into_its_value() -> Result {
+    let connection_manager = database::build_database([])?;
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.get("items/:id", |context| {
+            let captured = context
+                .route_parameters()
+                .get("id")
+                .map(|id| id.to_string())
+                .unwrap_or_default();
+            let stream: ByteStream = Box::new(Cursor::new(captured.into_bytes()));
+            respond_with(StatusCode::OK, Some(stream)).map_err(Into::into)
+        })
+    })?;
+
+    let stream: ByteStream = Box::new(empty());
+    let request = http::Request::builder()
+        .method(Method::GET)
+        .uri("/items/a%2Fb")
+        .body(stream)?;
+
+    let body = router.handle(&connection_manager, request)?.into_body();
+    let captured = body
+        .map(io::read_to_string)
+        .transpose()?
+        .unwrap_or_default();
+
+    assert_eq!(captured, "a/b");
+
+    Ok(())
+}
+
+#[test]
+fn a_template_captures_every_dynamic_segment_it_declares() -> Result {
+    let connection_manager = database::build_database([])?;
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.get("tenants/:tenant/items/:id", |context| {
+            let parameters = context.route_parameters();
+            let captured = format!(
+                "{}/{}",
+                parameters
+                    .get("tenant")
+                    .map(|tenant| tenant.to_string())
+                    .unwrap_or_default(),
+                parameters
+                    .get("id")
+                    .map(|id| id.to_string())
+                    .unwrap_or_default(),
+            );
+            let stream: ByteStream = Box::new(Cursor::new(captured.into_bytes()));
+            respond_with(StatusCode::OK, Some(stream)).map_err(Into::into)
+        })
+    })?;
+
+    let stream: ByteStream = Box::new(empty());
+    let request = http::Request::builder()
+        .method(Method::GET)
+        .uri("/tenants/acme/items/42")
+        .body(stream)?;
+
+    let body = router.handle(&connection_manager, request)?.into_body();
+    let captured = body
+        .map(io::read_to_string)
+        .transpose()?
+        .unwrap_or_default();
+
+    assert_eq!(captured, "acme/42");
+
+    Ok(())
+}
+
+#[test]
 fn a_dynamic_segment_that_cannot_be_decoded_matches_nothing() -> Result {
     let connection_manager = database::build_database([])?;
     let router = Router::try_new(BaseUri::Relative, |root| {
@@ -1054,6 +1134,107 @@ fn a_guard_reads_the_parameters_its_template_captured() -> Result {
         router.handle(&connection_manager, refused)?.status(),
         StatusCode::NOT_FOUND
     );
+
+    Ok(())
+}
+
+#[test]
+fn a_guard_on_the_resource_tier_gates_matching_too() -> Result {
+    let connection_manager = database::build_database([])?;
+    let articles = connection_manager.registry().schema("articles")?;
+    let router = Router::try_new(BaseUri::Relative, |root| {
+        root.resource_with::<Articles>("articles", articles, |resource| {
+            resource.middleware(RequireHeader("x-key"), |guarded| {
+                guarded.get("marked", |_context| {
+                    respond_with(StatusCode::NO_CONTENT, None)
+                })
+            })
+        })
+    })?;
+
+    let unkeyed_stream: ByteStream = Box::new(empty());
+    let unkeyed = http::Request::builder()
+        .method(Method::GET)
+        .uri("/articles/marked")
+        .body(unkeyed_stream)?;
+
+    let keyed_stream: ByteStream = Box::new(empty());
+    let keyed = http::Request::builder()
+        .method(Method::GET)
+        .uri("/articles/marked")
+        .header("x-key", "present")
+        .body(keyed_stream)?;
+
+    assert_eq!(
+        router.handle(&connection_manager, unkeyed)?.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        router.handle(&connection_manager, keyed)?.status(),
+        StatusCode::NO_CONTENT
+    );
+
+    Ok(())
+}
+
+// --- backstops --------------------------------------------------------------
+//
+// Both guards below cover an invariant the builders uphold but the type system cannot carry, so
+// their triggering state is reachable only by assembling a route by hand.
+
+#[test]
+fn a_route_carrying_a_named_wildcard_matches_nothing() -> Result {
+    let route: Route<SqliteAdapter> = Route::new(
+        Method::GET,
+        vec![Cow::Borrowed("files"), Cow::Borrowed("*rest")],
+        Vec::new(),
+        EndpointHandler::primary(|_context| respond_with(StatusCode::OK, None).map_err(Into::into)),
+    );
+
+    assert!(
+        route
+            .match_path(&Method::GET, &["files", "*rest"])
+            .is_none()
+    );
+
+    Ok(())
+}
+
+#[test]
+fn a_primary_middleware_reaching_the_resource_tier_is_refused() -> Result {
+    let connection_manager = database::build_database([])?;
+    let articles = connection_manager.registry().schema("articles")?;
+    let base = BaseUri::Relative;
+    let router = Router::try_new(base.clone(), |root| {
+        root.resource::<Articles>("articles", articles)
+    })?;
+
+    let stream: ByteStream = Box::new(empty());
+    let request = http::Request::builder()
+        .method(Method::GET)
+        .uri("/articles/1")
+        .body(stream)?;
+    let uri: Uri = request.uri().clone().into();
+    let context = routing::build_resource_context(
+        &connection_manager,
+        &router,
+        &base,
+        &uri,
+        request,
+        articles,
+    )?;
+
+    let misordered = [Middleware::Primary(Arc::new(RequireHeader("x-key")))];
+    let handler =
+        |_context: ResourceContext<'_, '_, SqliteAdapter>| respond_with(StatusCode::OK, None);
+
+    let (status, code) = serve_resource(&misordered, &handler, context)
+        .err()
+        .map(|error| (error.status, error.code.to_string()))
+        .unzip();
+
+    assert_eq!(status, Some(StatusCode::INTERNAL_SERVER_ERROR));
+    assert_eq!(code, Some("MisorderedMiddleware".to_string()));
 
     Ok(())
 }
