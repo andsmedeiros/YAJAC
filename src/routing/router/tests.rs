@@ -597,7 +597,7 @@ fn one_router_serves_several_threads_at_once() -> Result {
         })
     })?;
 
-    let answered: Vec<std::result::Result<StatusCode, String>> = thread::scope(|threads| {
+    let dispatched: Vec<PrimaryResult> = thread::scope(|threads| {
         let dispatches: Vec<_> = (0..4)
             .map(|_| {
                 threads.spawn(|| {
@@ -605,13 +605,9 @@ fn one_router_serves_several_threads_at_once() -> Result {
                     let request = http::Request::builder()
                         .method(Method::GET)
                         .uri("/health")
-                        .body(stream)
-                        .map_err(|error| error.to_string())?;
+                        .body(stream)?;
 
-                    router
-                        .handle(&connection_manager, request)
-                        .map(|response| response.status().into())
-                        .map_err(|error| error.to_string())
+                    router.handle(&connection_manager, request)
                 })
             })
             .collect();
@@ -621,12 +617,21 @@ fn one_router_serves_several_threads_at_once() -> Result {
             .map(|dispatch| {
                 dispatch
                     .join()
-                    .unwrap_or_else(|_| Err("a dispatching thread panicked".to_string()))
+                    .unwrap_or_else(|_| Err("a dispatching thread panicked".into()))
             })
             .collect()
     });
+    let answered: Vec<Option<StatusCode>> = dispatched
+        .iter()
+        .map(|dispatch| {
+            dispatch
+                .as_ref()
+                .ok()
+                .map(|response| response.status().into())
+        })
+        .collect();
 
-    assert_eq!(answered, vec![Ok(StatusCode::OK); 4]);
+    assert_eq!(answered, vec![Some(StatusCode::OK); 4]);
 
     Ok(())
 }
