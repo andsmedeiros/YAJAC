@@ -392,12 +392,3 @@ pub trait ResourceController<'sch, Adapter: AdapterInterface + 'sch> {
         respond(Some(document))
     }
 }
-
-/// A controller that customises nothing — every endpoint uses the framework default.
-#[derive(Default)]
-pub struct DefaultController;
-
-impl<'sch, Adapter: AdapterInterface + 'sch> ResourceController<'sch, Adapter>
-    for DefaultController
-{
-}

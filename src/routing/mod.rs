@@ -20,7 +20,6 @@ pub use builders::{
     ResourceVerbs, RouteBuilder, SubordinateRouteBuilder, UnboundVerbs,
 };
 pub use context::{PrimaryContext, ResourceContext};
-pub use controller::DefaultController;
 pub use error::Error;
 pub use middleware::{PrimaryHandler, PrimaryMiddleware, ResourceHandler, ResourceMiddleware};
 pub(crate) use mount_table::MountTable;
