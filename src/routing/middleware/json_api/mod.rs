@@ -10,7 +10,7 @@ use crate::error::Error;
 use crate::http_wrappers::StatusCode;
 use crate::json_api::error::Error as JsonApiError;
 use crate::json_api::primary_content::PrimaryContent;
-use crate::routing::controller::ResourceContext;
+use crate::routing::context::ResourceContext;
 use crate::routing::{Error as RoutingError, ResourceResult, respond_with};
 use crate::serialisation::factories::to_document;
 use crate::serialisation::uri_generator::NullUriGenerator;

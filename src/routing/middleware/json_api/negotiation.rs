@@ -1,7 +1,7 @@
 use super::media_type::{ACCEPTED_MEDIA_TYPES, JSONAPI_MEDIA_TYPE, JsonApiMediaType};
 use crate::database::adapters::Adapter as AdapterInterface;
 use crate::routing::Error;
-use crate::routing::controller::ResourceContext;
+use crate::routing::context::ResourceContext;
 use crate::utils::MediaType;
 use http::header::{ACCEPT, CONTENT_TYPE};
 use http::{HeaderMap, HeaderName};

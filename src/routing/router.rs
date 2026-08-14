@@ -1,7 +1,7 @@
 use super::{
-    BaseUri, Error, PrimaryContext, PrimaryRequest, PrimaryResult, ResourceResult, RouteParameters,
+    BaseUri, Error, PrimaryContext, PrimaryRequest, PrimaryResult, ResourceContext, ResourceResult,
+    RouteParameters,
     builders::{PrimaryRouteBuilder, RouteBuilder},
-    controller::ResourceContext,
     middleware::Middleware,
     respond_with,
 };

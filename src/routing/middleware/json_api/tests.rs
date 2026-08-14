@@ -9,7 +9,7 @@ use crate::http_wrappers::{StatusCode, Uri};
 use crate::json_api::document::{Document, Links, Pagination};
 use crate::json_api::links::Link;
 use crate::json_api::primary_content::PrimaryContent;
-use crate::routing::controller::ResourceContext;
+use crate::routing::context::ResourceContext;
 use crate::routing::middleware::ResourceMiddleware;
 use crate::routing::mount_table::MountTable;
 use crate::routing::{BaseUri, Error, PrimaryContext, PrimaryRequest, RouteParameters};

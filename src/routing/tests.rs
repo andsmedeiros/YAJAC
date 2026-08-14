@@ -5,7 +5,8 @@ use crate::database::registry::Registry as DatabaseRegistry;
 use crate::database::schema::{AttributeType, Related, SchemaBuilder};
 use crate::http_wrappers::Uri;
 use crate::routing::builders::RouteBuilder;
-use crate::routing::controller::{ResourceContext, ResourceController};
+use crate::routing::context::ResourceContext;
+use crate::routing::controller::ResourceController;
 use crate::routing::middleware::{PrimaryMiddleware, ResourceMiddleware};
 use crate::routing::responder::respond_with;
 use crate::routing::{

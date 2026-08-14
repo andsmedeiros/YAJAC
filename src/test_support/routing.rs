@@ -9,7 +9,7 @@ use crate::database::adapters::SqliteAdapter;
 use crate::database::connection_manager::ConnectionManager;
 use crate::database::schema::Schema;
 use crate::http_wrappers::Uri;
-use crate::routing::controller::ResourceContext;
+use crate::routing::context::ResourceContext;
 use crate::routing::{BaseUri, PrimaryContext, PrimaryRequest, Router};
 
 type Manager<'sch> = ConnectionManager<'sch, SqliteAdapter>;

@@ -1,6 +1,6 @@
 use super::{
-    Error, ResourceResult,
-    controller::{ResourceContext, ResourceController},
+    Error, ResourceContext, ResourceResult,
+    controller::ResourceController,
     middleware::json_api::JsonApi,
     middleware::{Middleware, PrimaryMiddleware, ResourceMiddleware},
     mount_table::{RelationshipMounts, ResourceMount},

@@ -1,7 +1,6 @@
 pub mod json_api;
 
-use super::context::PrimaryContext;
-use super::controller::ResourceContext;
+use super::context::{PrimaryContext, ResourceContext};
 use super::result::{PrimaryResult, ResourceResult};
 use super::route_parameters::RouteParameters;
 use crate::database::adapters::Adapter as AdapterInterface;
