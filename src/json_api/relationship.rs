@@ -2,7 +2,7 @@ use crate::{http_wrappers::Uri, json_api::identifier::Identifier};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Linkage {
     Empty,
@@ -22,7 +22,7 @@ impl From<Vec<Identifier>> for Linkage {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Links {
     #[serde(rename = "self", skip_serializing_if = "Option::is_none")]
     pub this: Option<Uri>,
@@ -31,7 +31,7 @@ pub struct Links {
     pub related: Option<Uri>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Relationship {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub links: Option<Links>,

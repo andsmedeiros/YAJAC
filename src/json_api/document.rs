@@ -5,7 +5,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct ImplementationInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
@@ -20,7 +20,7 @@ pub struct ImplementationInfo {
     pub meta: Option<Value>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct Links {
     #[serde(rename = "self")]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -38,7 +38,7 @@ pub struct Links {
 }
 
 /// A collection's pagination links. Each key is omitted when its page is unavailable.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct Pagination {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub first: Option<Link>,
@@ -53,7 +53,7 @@ pub struct Pagination {
     pub next: Option<Link>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
     #[serde(flatten)]
     pub content: PrimaryContent,

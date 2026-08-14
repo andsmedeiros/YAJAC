@@ -1,7 +1,7 @@
 use crate::json_api::{error::Error, resource::Resource};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PrimaryContent {
     Record {

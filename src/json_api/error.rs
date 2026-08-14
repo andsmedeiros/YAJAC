@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{error::Error as StdError, fmt::Display};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Links {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub about: Option<Link>,
@@ -24,7 +24,7 @@ pub enum Source {
     Header(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Error {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,

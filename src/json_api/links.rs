@@ -2,13 +2,13 @@ use crate::http_wrappers::Uri;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LinkLang {
     Single(Uri),
     Multiple(Vec<Uri>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub struct LinkObject {
     pub href: Uri,
@@ -33,7 +33,7 @@ pub struct LinkObject {
     pub meta: Option<Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Link {
     Uri(Uri),
