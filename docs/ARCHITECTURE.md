@@ -75,8 +75,9 @@ The embedder-facing layer.
   `spawn_with_middleware` / `spawn_with` extend a level's path and/or middleware). `RelationshipConfig` /
   `RelationshipsConfig` carry per-relationship options (read-only, path/keyword relocation via `*_with`).
 - **`controller`** (a directory module — `controller/{mod.rs, tests.rs}`) — `ResourceController`, the trait
-  an embedder implements per resource as a **stateless marker type**. `DefaultController` is the
-  no-customisation impl. Its default handler methods receive a `ResourceContext<'sch, 'req, Adapter>` —
+  an embedder implements per resource as a **stateless marker type** — every method has a default, so a
+  bare `impl` is a complete controller, and it must be `Default` for the mount to build one per request.
+  Its default handler methods receive a `ResourceContext<'sch, 'req, Adapter>` —
   the resource's schema paired with the request `PrimaryContext` — and reach record parsing (off the
   streamed body), query parameters, the store, and id resolution through it, already bound to the schema.
   It carries `parameters_for_route`, which resolves a mounted route's dynamic segments (`:id` from the
