@@ -7,7 +7,7 @@ use std::{
     str::FromStr,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Uri(http::Uri);
 
 impl Display for Uri {
