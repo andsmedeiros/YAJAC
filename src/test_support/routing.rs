@@ -15,7 +15,11 @@ use crate::database::schema::Schema;
 use crate::http_wrappers::Uri;
 use crate::routing::context::ResourceContext;
 use crate::routing::controller::{Configuration, ResourceController};
-use crate::routing::{BaseUri, PrimaryContext, PrimaryRequest, Router};
+use crate::routing::{BaseUri, PrimaryContext, PrimaryRequest};
+
+/// The crate's router, bound to the adapter every suite runs against, so a suite mounting one
+/// carries no adapter turbofish.
+pub(crate) type Router<'sch> = crate::routing::Router<'sch, SqliteAdapter>;
 
 #[derive(Default)]
 pub(crate) struct Authors;
@@ -50,7 +54,7 @@ impl<'sch> ResourceController<'sch, SqliteAdapter> for Profiles {}
 /// when no route matches.
 pub(crate) fn build_primary_context<'sch, 'req>(
     connection_manager: &'sch ConnectionManager<'sch>,
-    router: &'req Router<'sch, SqliteAdapter>,
+    router: &'req Router<'sch>,
     base_uri: &'req BaseUri<'sch>,
     uri: &'req Uri,
     request: PrimaryRequest,
@@ -76,7 +80,7 @@ pub(crate) fn build_primary_context<'sch, 'req>(
 /// The same context, bound to `schema`.
 pub(crate) fn build_resource_context<'sch, 'req>(
     connection_manager: &'sch ConnectionManager<'sch>,
-    router: &'req Router<'sch, SqliteAdapter>,
+    router: &'req Router<'sch>,
     base_uri: &'req BaseUri<'sch>,
     uri: &'req Uri,
     request: PrimaryRequest,
