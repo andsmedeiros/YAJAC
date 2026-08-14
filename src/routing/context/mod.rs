@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod tests;
+
 use super::PrimaryRequest;
 use crate::{
     database::{
