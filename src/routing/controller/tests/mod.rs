@@ -5,9 +5,8 @@ mod relationship_writes;
 mod relationships;
 mod writing;
 
-use super::{Configuration, ResourceController};
+use super::ResourceController;
 use crate::database::adapters::SqliteAdapter;
-use crate::database::connection_manager::ConnectionManager;
 use crate::database::query_parameters::QueryParameters;
 use crate::database::record::Record;
 use crate::http_wrappers::{StatusCode, Uri};
@@ -18,14 +17,14 @@ use crate::json_api::resource::Resource;
 use crate::routing::builders::{ResourceVerbs, RouteBuilder};
 use crate::routing::{BaseUri, RouteParameters, Router};
 use crate::serialisation::ByteStream;
+use crate::test_support::database::ConnectionManager;
+use crate::test_support::routing::{Articles, Authors, Comments, Profiles, Publishers};
 use crate::test_support::{Result, database, fixtures, routing};
 use http::{HeaderMap, Method, Response};
 use serde_json::json;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, empty};
-
-type Manager<'sch> = ConnectionManager<'sch, SqliteAdapter>;
 
 /// The query parameter families only a collection endpoint processes, spelled against `articles`.
 const COLLECTION_PARAMETERS: [&str; 4] = [
@@ -44,34 +43,6 @@ const EVERY_PARAMETER: [&str; 6] = [
     "filter[published]=eq:true",
     "search=provenance",
 ];
-
-#[derive(Default)]
-struct Articles;
-impl<'sch> ResourceController<'sch, SqliteAdapter> for Articles {}
-
-#[derive(Default)]
-struct Authors;
-impl<'sch> ResourceController<'sch, SqliteAdapter> for Authors {}
-
-/// `publishers` is keyed by a text primary key with no server-side source, so its controller accepts
-/// the ids a client generates.
-#[derive(Default)]
-struct Publishers;
-impl<'sch> ResourceController<'sch, SqliteAdapter> for Publishers {
-    fn configuration(&self) -> Configuration {
-        Configuration {
-            accepts_client_ids: true,
-        }
-    }
-}
-
-#[derive(Default)]
-struct Profiles;
-impl<'sch> ResourceController<'sch, SqliteAdapter> for Profiles {}
-
-#[derive(Default)]
-struct Comments;
-impl<'sch> ResourceController<'sch, SqliteAdapter> for Comments {}
 
 /// Resolves every route parameter from the request headers instead of the record and the route.
 #[derive(Default)]
@@ -101,14 +72,15 @@ impl<'sch> ResourceController<'sch, SqliteAdapter> for Tenanted {
 
 /// A router mounting each resource bare, so every canonical endpoint is enumerated from its schema.
 fn build_router<'sch>(
-    manager: &'sch Manager<'sch>,
+    connection_manager: &'sch ConnectionManager<'sch>,
     base_uri: BaseUri<'sch>,
 ) -> Result<Router<'sch, SqliteAdapter>> {
-    let articles = manager.registry().schema("articles")?;
-    let authors = manager.registry().schema("authors")?;
-    let publishers = manager.registry().schema("publishers")?;
-    let profiles = manager.registry().schema("profiles")?;
-    let comments = manager.registry().schema("comments")?;
+    let registry = connection_manager.registry();
+    let articles = registry.schema("articles")?;
+    let authors = registry.schema("authors")?;
+    let publishers = registry.schema("publishers")?;
+    let profiles = registry.schema("profiles")?;
+    let comments = registry.schema("comments")?;
 
     Router::try_new(base_uri, |root| {
         root.resource::<Articles>("articles", articles)
@@ -123,10 +95,10 @@ fn build_router<'sch>(
 /// A router mounting `articles` with the relationship-write handlers hand-mounted onto `author`, a
 /// to-one relationship the default mounts serve read-only.
 fn build_miswired_router<'sch>(
-    manager: &'sch Manager<'sch>,
+    connection_manager: &'sch ConnectionManager<'sch>,
     base_uri: BaseUri<'sch>,
 ) -> Result<Router<'sch, SqliteAdapter>> {
-    let articles = manager.registry().schema("articles")?;
+    let articles = connection_manager.registry().schema("articles")?;
 
     Router::try_new(base_uri, |root| {
         root.resource_with::<Articles>("articles", articles, |resource| {
@@ -143,10 +115,10 @@ fn build_miswired_router<'sch>(
 /// A router mounting `articles` under a dynamic `:tenant` scope, so every route carries a parameter
 /// the request supplies and the record cannot.
 fn build_scoped_router<'sch>(
-    manager: &'sch Manager<'sch>,
+    connection_manager: &'sch ConnectionManager<'sch>,
     base_uri: BaseUri<'sch>,
 ) -> Result<Router<'sch, SqliteAdapter>> {
-    let articles = manager.registry().schema("articles")?;
+    let articles = connection_manager.registry().schema("articles")?;
 
     Router::try_new(base_uri, |root| {
         root.scope(":tenant", |scope| {
