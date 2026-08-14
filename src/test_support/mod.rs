@@ -16,8 +16,9 @@ pub(crate) mod schemas;
 
 mod tests;
 
-/// The error a test propagates.
-pub(crate) type Error = Box<dyn std::error::Error>;
+/// The error a test propagates, `Send + Sync` so it crosses a thread boundary as the crate's own
+/// results do.
+pub(crate) type Error = Box<dyn std::error::Error + Send + Sync>;
 
 /// The outcome of a test, defaulting to the `()` a test body yields.
 pub(crate) type Result<T = ()> = std::result::Result<T, Error>;

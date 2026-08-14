@@ -25,7 +25,7 @@ use yajac::routing::controller::{Configuration, ResourceController};
 use yajac::routing::{BaseUri, Router};
 use yajac::serialisation::ByteStream;
 
-pub type BoxError = Box<dyn std::error::Error>;
+pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 pub type TestResult = Result<(), BoxError>;
 
 /// The JSON:API media type, sans parameters.

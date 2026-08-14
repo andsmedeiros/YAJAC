@@ -11,5 +11,6 @@ pub type ResourceResult = StdResult<Response<Option<Document>>, Error>;
 
 /// The primary-tier handler result: a streamed byte response, fallible with a boxed error. The byte
 /// tier's error is not JSON:API-shaped, so it escapes `Router::handle` to the embedder rather than
-/// being rendered.
-pub type PrimaryResult = StdResult<Response<Option<ByteStream>>, Box<dyn StdError>>;
+/// being rendered. `Send + Sync` so a served request can cross a thread boundary whole, as it must
+/// under any threaded or async embedding.
+pub type PrimaryResult = StdResult<Response<Option<ByteStream>>, Box<dyn StdError + Send + Sync>>;

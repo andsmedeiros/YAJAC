@@ -15,14 +15,13 @@ use crate::routing::{
     UnboundVerbs,
 };
 use crate::serialisation::ByteStream;
+use crate::test_support::Result;
 use http::{HeaderMap, HeaderValue, Response, StatusCode};
 use serde_json::{Value, json};
 use std::borrow::Cow;
-use std::error::Error as StdError;
 use std::io::{Cursor, Read};
 
 type Manager = ConnectionManager<'static, SqliteAdapter>;
-type TestResult = Result<(), Box<dyn StdError>>;
 
 fn articles_schema() -> SchemaBuilder<'static> {
     SchemaBuilder::table("articles")
@@ -109,7 +108,7 @@ impl<'sch> ResourceController<'sch, SqliteAdapter> for Drafts {}
 struct Summaries;
 impl<'sch> ResourceController<'sch, SqliteAdapter> for Summaries {}
 
-fn manager() -> Result<Manager, Box<dyn StdError>> {
+fn manager() -> Result<Manager> {
     let manager: Manager =
         ConnectionManager::new(DatabaseRegistry::try_new(schemas())?, Pool::memory()?);
 
@@ -166,7 +165,7 @@ fn health(_context: PrimaryContext<'_, '_, SqliteAdapter>) -> PrimaryResult {
 
 // The standard resourceful mount: every resource bare, so CRUD and the full set of relationship
 // endpoints are auto-enumerated from each schema.
-fn standard_router(manager: &Manager) -> Result<Router<'_, SqliteAdapter>, Box<dyn StdError>> {
+fn standard_router(manager: &Manager) -> Result<Router<'_, SqliteAdapter>> {
     let articles = manager.registry().schema("articles")?;
     let comments = manager.registry().schema("comments")?;
     let drafts = manager.registry().schema("drafts")?;
@@ -177,7 +176,7 @@ fn standard_router(manager: &Manager) -> Result<Router<'_, SqliteAdapter>, Box<d
     })?)
 }
 
-fn read_only_router(manager: &Manager) -> Result<Router<'_, SqliteAdapter>, Box<dyn StdError>> {
+fn read_only_router(manager: &Manager) -> Result<Router<'_, SqliteAdapter>> {
     let summaries = manager.registry().schema("summaries")?;
     Ok(Router::try_new(BaseUri::Relative, |root| {
         root.read_only_resource::<Summaries>("summaries", summaries)
@@ -193,7 +192,7 @@ fn send<'a>(
     uri: &str,
     body: Value,
     headers: &[(&str, &str)],
-) -> Result<Response<Vec<u8>>, Box<dyn StdError>> {
+) -> Result<Response<Vec<u8>>> {
     // Stand in for the client: send `Content-Type` alongside any body unless a test set one, and
     // treat a `null` body as no body (streamed as zero bytes).
     let carries_body = !body.is_null();
@@ -223,12 +222,7 @@ fn send<'a>(
     Ok(Response::from_parts(parts, buffer))
 }
 
-fn serve(
-    manager: &Manager,
-    method: &str,
-    uri: &str,
-    body: Value,
-) -> Result<Response<Vec<u8>>, Box<dyn StdError>> {
+fn serve(manager: &Manager, method: &str, uri: &str, body: Value) -> Result<Response<Vec<u8>>> {
     send(manager, &standard_router(manager)?, method, uri, body, &[])
 }
 
@@ -237,7 +231,7 @@ fn read_only_serve(
     method: &str,
     uri: &str,
     body: Value,
-) -> Result<Response<Vec<u8>>, Box<dyn StdError>> {
+) -> Result<Response<Vec<u8>>> {
     send(manager, &read_only_router(manager)?, method, uri, body, &[])
 }
 
@@ -264,7 +258,7 @@ fn data_ids(response: &Response<Vec<u8>>) -> Vec<Value> {
 // --- resourceful routes: CRUD dispatch -------------------------------------
 
 #[test]
-fn test_mount_captures_link_templates() -> TestResult {
+fn test_mount_captures_link_templates() -> Result {
     let manager = manager()?;
     let router = standard_router(&manager)?;
     let mount = router
@@ -304,7 +298,7 @@ fn test_mount_captures_link_templates() -> TestResult {
 }
 
 #[test]
-fn test_index_yields_collection() -> TestResult {
+fn test_index_yields_collection() -> Result {
     let manager = manager()?;
     let response = serve(&manager, "GET", "/articles", Value::Null)?;
 
@@ -322,7 +316,7 @@ fn test_index_yields_collection() -> TestResult {
 }
 
 #[test]
-fn test_show_yields_record() -> TestResult {
+fn test_show_yields_record() -> Result {
     let manager = manager()?;
     let response = serve(&manager, "GET", "/articles/1", Value::Null)?;
 
@@ -338,7 +332,7 @@ fn test_show_yields_record() -> TestResult {
 }
 
 #[test]
-fn test_show_missing_is_not_found() -> TestResult {
+fn test_show_missing_is_not_found() -> Result {
     let manager = manager()?;
     let response = serve(&manager, "GET", "/articles/999", Value::Null)?;
 
@@ -348,7 +342,7 @@ fn test_show_missing_is_not_found() -> TestResult {
 }
 
 #[test]
-fn test_create_yields_record() -> TestResult {
+fn test_create_yields_record() -> Result {
     let manager = manager()?;
     let response = serve(
         &manager,
@@ -368,7 +362,7 @@ fn test_create_yields_record() -> TestResult {
 }
 
 #[test]
-fn test_update_yields_record() -> TestResult {
+fn test_update_yields_record() -> Result {
     let manager = manager()?;
     let response = serve(
         &manager,
@@ -387,7 +381,7 @@ fn test_update_yields_record() -> TestResult {
 }
 
 #[test]
-fn test_delete_removes_record() -> TestResult {
+fn test_delete_removes_record() -> Result {
     let manager = manager()?;
 
     let deleted = serve(&manager, "DELETE", "/comments/1", Value::Null)?;
@@ -402,7 +396,7 @@ fn test_delete_removes_record() -> TestResult {
 // A dynamic segment computed at router-build time (an owned `String`, not a `&'sch str`) still
 // mounts, matches, and resolves in generated links — the end-to-end proof of computed segments.
 #[test]
-fn test_computed_owned_scope_segment_resolves_in_self_link() -> TestResult {
+fn test_computed_owned_scope_segment_resolves_in_self_link() -> Result {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
 
@@ -433,7 +427,7 @@ fn test_computed_owned_scope_segment_resolves_in_self_link() -> TestResult {
 // A *static* segment computed at router-build time (an owned `String`) is matched literally by the
 // router and rendered verbatim — the owned counterpart of an ordinary borrowed path segment.
 #[test]
-fn test_computed_owned_static_segment_matches_and_renders() -> TestResult {
+fn test_computed_owned_static_segment_matches_and_renders() -> Result {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
 
@@ -460,7 +454,7 @@ fn test_computed_owned_static_segment_matches_and_renders() -> TestResult {
 // --- resourceful routes: relationship endpoints ----------------------------
 
 #[test]
-fn test_linkage_self_link_yields_identifiers() -> TestResult {
+fn test_linkage_self_link_yields_identifiers() -> Result {
     let manager = manager()?;
     let response = serve(
         &manager,
@@ -483,7 +477,7 @@ fn test_linkage_self_link_yields_identifiers() -> TestResult {
 }
 
 #[test]
-fn test_related_link_yields_primary_collection() -> TestResult {
+fn test_related_link_yields_primary_collection() -> Result {
     let manager = manager()?;
     let response = serve(&manager, "GET", "/articles/1/comments", Value::Null)?;
 
@@ -502,7 +496,7 @@ fn test_related_link_yields_primary_collection() -> TestResult {
 }
 
 #[test]
-fn test_to_one_linkage_self_link() -> TestResult {
+fn test_to_one_linkage_self_link() -> Result {
     let manager = manager()?;
     let response = serve(
         &manager,
@@ -519,7 +513,7 @@ fn test_to_one_linkage_self_link() -> TestResult {
 }
 
 #[test]
-fn test_to_one_related_link_yields_record() -> TestResult {
+fn test_to_one_related_link_yields_record() -> Result {
     let manager = manager()?;
     let response = serve(&manager, "GET", "/comments/1/article", Value::Null)?;
 
@@ -535,7 +529,7 @@ fn test_to_one_related_link_yields_record() -> TestResult {
 }
 
 #[test]
-fn test_link_reaches_handler() -> TestResult {
+fn test_link_reaches_handler() -> Result {
     let manager = manager()?;
     let response = serve(
         &manager,
@@ -550,7 +544,7 @@ fn test_link_reaches_handler() -> TestResult {
 }
 
 #[test]
-fn test_relink_reaches_handler() -> TestResult {
+fn test_relink_reaches_handler() -> Result {
     let manager = manager()?;
     // `drafts.article_id` is nullable, so replacement can detach the dropped member.
     let response = serve(
@@ -566,7 +560,7 @@ fn test_relink_reaches_handler() -> TestResult {
 }
 
 #[test]
-fn test_unlink_reaches_handler() -> TestResult {
+fn test_unlink_reaches_handler() -> Result {
     let manager = manager()?;
     // `drafts.article_id` is nullable, so removal can detach the member.
     let response = serve(
@@ -584,7 +578,7 @@ fn test_unlink_reaches_handler() -> TestResult {
 // --- resourceful routes: read-only mounts ----------------------------------
 
 #[test]
-fn test_read_only_index() -> TestResult {
+fn test_read_only_index() -> Result {
     let manager = manager()?;
     let response = read_only_serve(&manager, "GET", "/summaries", Value::Null)?;
 
@@ -595,7 +589,7 @@ fn test_read_only_index() -> TestResult {
 }
 
 #[test]
-fn test_read_only_show() -> TestResult {
+fn test_read_only_show() -> Result {
     let manager = manager()?;
     let response = read_only_serve(&manager, "GET", "/summaries/1", Value::Null)?;
 
@@ -606,7 +600,7 @@ fn test_read_only_show() -> TestResult {
 }
 
 #[test]
-fn test_read_only_create_is_forbidden() -> TestResult {
+fn test_read_only_create_is_forbidden() -> Result {
     let manager = manager()?;
     let response = read_only_serve(
         &manager,
@@ -621,7 +615,7 @@ fn test_read_only_create_is_forbidden() -> TestResult {
 }
 
 #[test]
-fn test_read_only_delete_is_forbidden() -> TestResult {
+fn test_read_only_delete_is_forbidden() -> Result {
     let manager = manager()?;
     let response = read_only_serve(&manager, "DELETE", "/summaries/1", Value::Null)?;
 
@@ -631,7 +625,7 @@ fn test_read_only_delete_is_forbidden() -> TestResult {
 }
 
 #[test]
-fn test_read_only_relationship_read_is_allowed() -> TestResult {
+fn test_read_only_relationship_read_is_allowed() -> Result {
     let manager = manager()?;
     let response = read_only_serve(
         &manager,
@@ -646,7 +640,7 @@ fn test_read_only_relationship_read_is_allowed() -> TestResult {
 }
 
 #[test]
-fn test_read_only_relationship_write_is_forbidden() -> TestResult {
+fn test_read_only_relationship_write_is_forbidden() -> Result {
     let manager = manager()?;
     let response = read_only_serve(
         &manager,
@@ -663,7 +657,7 @@ fn test_read_only_relationship_write_is_forbidden() -> TestResult {
 // --- relationship families and configuration -------------------------------
 
 #[test]
-fn test_linkage_only_family_omits_related_link() -> TestResult {
+fn test_linkage_only_family_omits_related_link() -> Result {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let comments = manager.registry().schema("comments")?;
@@ -703,7 +697,7 @@ fn test_linkage_only_family_omits_related_link() -> TestResult {
 }
 
 #[test]
-fn test_related_only_family_omits_self_link() -> TestResult {
+fn test_related_only_family_omits_self_link() -> Result {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let comments = manager.registry().schema("comments")?;
@@ -743,7 +737,7 @@ fn test_related_only_family_omits_self_link() -> TestResult {
 }
 
 #[test]
-fn test_at_override_relocates_relationship_paths() -> TestResult {
+fn test_at_override_relocates_relationship_paths() -> Result {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let comments = manager.registry().schema("comments")?;
@@ -796,7 +790,7 @@ fn test_at_override_relocates_relationship_paths() -> TestResult {
 }
 
 #[test]
-fn test_read_only_relationship_config_forbids_writes() -> TestResult {
+fn test_read_only_relationship_config_forbids_writes() -> Result {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let comments = manager.registry().schema("comments")?;
@@ -836,7 +830,7 @@ fn test_read_only_relationship_config_forbids_writes() -> TestResult {
 }
 
 #[test]
-fn test_relationships_subset_mounts_only_named() -> TestResult {
+fn test_relationships_subset_mounts_only_named() -> Result {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let comments = manager.registry().schema("comments")?;
@@ -876,7 +870,7 @@ fn test_relationships_subset_mounts_only_named() -> TestResult {
 }
 
 #[test]
-fn test_all_relationships_enumerates_every_relationship() -> TestResult {
+fn test_all_relationships_enumerates_every_relationship() -> Result {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let comments = manager.registry().schema("comments")?;
@@ -920,7 +914,7 @@ fn test_all_relationships_enumerates_every_relationship() -> TestResult {
 // --- non-resourceful routes: custom routes ---------------------------------
 
 #[test]
-fn test_member_route_is_record_scoped() -> TestResult {
+fn test_member_route_is_record_scoped() -> Result {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let router = Router::try_new(BaseUri::Relative, |root| {
@@ -944,7 +938,7 @@ fn test_member_route_is_record_scoped() -> TestResult {
 }
 
 #[test]
-fn test_collection_route_is_collection_scoped() -> TestResult {
+fn test_collection_route_is_collection_scoped() -> Result {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     // A resource builder's own verbs mount collection-scoped schema-bound routes.
@@ -969,7 +963,7 @@ fn test_collection_route_is_collection_scoped() -> TestResult {
 }
 
 #[test]
-fn test_unbound_leaf_route() -> TestResult {
+fn test_unbound_leaf_route() -> Result {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     // A raw route side-mounted into a resource's path space, declared before the resource so it wins
@@ -997,7 +991,7 @@ fn test_unbound_leaf_route() -> TestResult {
 }
 
 #[test]
-fn test_unknown_route_is_not_found() -> TestResult {
+fn test_unknown_route_is_not_found() -> Result {
     let manager = manager()?;
     let response = serve(&manager, "GET", "/widgets", Value::Null)?;
 
@@ -1009,7 +1003,7 @@ fn test_unknown_route_is_not_found() -> TestResult {
 // --- try_new validation ----------------------------------------------------
 
 #[test]
-fn test_duplicate_resource_is_rejected() -> TestResult {
+fn test_duplicate_resource_is_rejected() -> Result {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let result = Router::try_new(BaseUri::Relative, |root| {
@@ -1023,7 +1017,7 @@ fn test_duplicate_resource_is_rejected() -> TestResult {
 }
 
 #[test]
-fn test_duplicate_relationship_slot_is_rejected() -> TestResult {
+fn test_duplicate_relationship_slot_is_rejected() -> Result {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let comments = manager.registry().schema("comments")?;
@@ -1043,7 +1037,7 @@ fn test_duplicate_relationship_slot_is_rejected() -> TestResult {
 }
 
 #[test]
-fn test_all_relationships_after_individual_is_rejected() -> TestResult {
+fn test_all_relationships_after_individual_is_rejected() -> Result {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let comments = manager.registry().schema("comments")?;
@@ -1063,7 +1057,7 @@ fn test_all_relationships_after_individual_is_rejected() -> TestResult {
 }
 
 #[test]
-fn test_unknown_relationship_is_rejected() -> TestResult {
+fn test_unknown_relationship_is_rejected() -> Result {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let result = Router::try_new(BaseUri::Relative, |root| {
@@ -1081,7 +1075,7 @@ fn test_unknown_relationship_is_rejected() -> TestResult {
 }
 
 #[test]
-fn test_unmounted_resource_is_allowed() -> TestResult {
+fn test_unmounted_resource_is_allowed() -> Result {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     // `comments`, `drafts`, and `summaries` are registered but never mounted.
@@ -1182,7 +1176,7 @@ impl<'sch> ResourceMiddleware<'sch, SqliteAdapter> for DenyResource {
 }
 
 #[test]
-fn test_primary_guard_falls_through_when_unmet() -> TestResult {
+fn test_primary_guard_falls_through_when_unmet() -> Result {
     let manager = manager()?;
     let router = Router::try_new(BaseUri::Relative, |root| {
         root.middleware(RequireHeader("x-key"), |root| root.get("health", health))
@@ -1205,7 +1199,7 @@ fn test_primary_guard_falls_through_when_unmet() -> TestResult {
 }
 
 #[test]
-fn test_primary_middleware_rewrites_response() -> TestResult {
+fn test_primary_middleware_rewrites_response() -> Result {
     let manager = manager()?;
     let router = Router::try_new(BaseUri::Relative, |root| {
         root.middleware(StampResponse, |root| root.get("health", health))
@@ -1225,7 +1219,7 @@ fn test_primary_middleware_rewrites_response() -> TestResult {
 }
 
 #[test]
-fn test_primary_middleware_short_circuits_handler() -> TestResult {
+fn test_primary_middleware_short_circuits_handler() -> Result {
     let manager = manager()?;
     let router = Router::try_new(BaseUri::Relative, |root| {
         root.middleware(Deny, |root| root.get("health", health))
@@ -1238,7 +1232,7 @@ fn test_primary_middleware_short_circuits_handler() -> TestResult {
 }
 
 #[test]
-fn test_middleware_scope_is_bounded() -> TestResult {
+fn test_middleware_scope_is_bounded() -> Result {
     let manager = manager()?;
     let router = Router::try_new(BaseUri::Relative, |root| {
         root.middleware(Deny, |denied| denied.get("locked", health))
@@ -1258,7 +1252,7 @@ fn test_middleware_scope_is_bounded() -> TestResult {
 }
 
 #[test]
-fn test_middleware_at_scopes_and_guards() -> TestResult {
+fn test_middleware_at_scopes_and_guards() -> Result {
     let manager = manager()?;
     let router = Router::try_new(BaseUri::Relative, |root| {
         root.middleware_at("api", RequireHeader("x-key"), |api| {
@@ -1287,7 +1281,7 @@ fn test_middleware_at_scopes_and_guards() -> TestResult {
 }
 
 #[test]
-fn test_resource_middleware_guard_falls_through() -> TestResult {
+fn test_resource_middleware_guard_falls_through() -> Result {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let comments = manager.registry().schema("comments")?;
@@ -1329,7 +1323,7 @@ fn test_resource_middleware_guard_falls_through() -> TestResult {
 }
 
 #[test]
-fn test_resource_middleware_rewrites_response() -> TestResult {
+fn test_resource_middleware_rewrites_response() -> Result {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let comments = manager.registry().schema("comments")?;
@@ -1361,7 +1355,7 @@ fn test_resource_middleware_rewrites_response() -> TestResult {
 }
 
 #[test]
-fn test_resource_middleware_short_circuits_handler() -> TestResult {
+fn test_resource_middleware_short_circuits_handler() -> Result {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let comments = manager.registry().schema("comments")?;
@@ -1388,7 +1382,7 @@ fn test_resource_middleware_short_circuits_handler() -> TestResult {
 // --- JSON:API boundary (the crossing) --------------------------------------
 
 #[test]
-fn test_crossing_stamps_jsonapi_content_type() -> TestResult {
+fn test_crossing_stamps_jsonapi_content_type() -> Result {
     let manager = manager()?;
     let response = serve(&manager, "GET", "/articles/1", Value::Null)?;
 
@@ -1405,7 +1399,7 @@ fn test_crossing_stamps_jsonapi_content_type() -> TestResult {
 }
 
 #[test]
-fn test_crossing_rejects_parameterised_content_type() -> TestResult {
+fn test_crossing_rejects_parameterised_content_type() -> Result {
     let manager = manager()?;
     let router = standard_router(&manager)?;
     let response = send(
@@ -1423,7 +1417,7 @@ fn test_crossing_rejects_parameterised_content_type() -> TestResult {
 }
 
 #[test]
-fn test_crossing_rejects_parameterised_accept() -> TestResult {
+fn test_crossing_rejects_parameterised_accept() -> Result {
     let manager = manager()?;
     let router = standard_router(&manager)?;
     let response = send(
@@ -1441,7 +1435,7 @@ fn test_crossing_rejects_parameterised_accept() -> TestResult {
 }
 
 #[test]
-fn test_crossing_renders_error_as_document() -> TestResult {
+fn test_crossing_renders_error_as_document() -> Result {
     let manager = manager()?;
     let response = serve(&manager, "GET", "/articles/999", Value::Null)?;
 
@@ -1453,7 +1447,7 @@ fn test_crossing_renders_error_as_document() -> TestResult {
 }
 
 #[test]
-fn test_crossing_rejects_unparseable_body() -> TestResult {
+fn test_crossing_rejects_unparseable_body() -> Result {
     let manager = manager()?;
     let router = standard_router(&manager)?;
     // Genuinely malformed JSON (not merely the wrong shape) is a syntax error — a 400 at the parse.
@@ -1473,7 +1467,7 @@ fn test_crossing_rejects_unparseable_body() -> TestResult {
 }
 
 #[test]
-fn test_crossing_accepts_a_clean_jsonapi_instance_among_parameterised() -> TestResult {
+fn test_crossing_accepts_a_clean_jsonapi_instance_among_parameterised() -> Result {
     let manager = manager()?;
     let router = standard_router(&manager)?;
     // One instance is parameterised (and so ignored), but a clean instance remains — acceptable.
@@ -1495,7 +1489,7 @@ fn test_crossing_accepts_a_clean_jsonapi_instance_among_parameterised() -> TestR
 }
 
 #[test]
-fn test_crossing_accepts_a_profile_in_content_type() -> TestResult {
+fn test_crossing_accepts_a_profile_in_content_type() -> Result {
     let manager = manager()?;
     let router = standard_router(&manager)?;
     // `profile` is an allowed media type parameter; an unrecognised one is ignored, not rejected.
@@ -1517,7 +1511,7 @@ fn test_crossing_accepts_a_profile_in_content_type() -> TestResult {
 }
 
 #[test]
-fn test_crossing_accepts_a_profile_in_accept() -> TestResult {
+fn test_crossing_accepts_a_profile_in_accept() -> Result {
     let manager = manager()?;
     let router = standard_router(&manager)?;
     // An unrecognised `profile` in `Accept` must be ignored, leaving the instance acceptable.
@@ -1539,7 +1533,7 @@ fn test_crossing_accepts_a_profile_in_accept() -> TestResult {
 }
 
 #[test]
-fn test_crossing_rejects_an_unsupported_extension_in_content_type() -> TestResult {
+fn test_crossing_rejects_an_unsupported_extension_in_content_type() -> Result {
     let manager = manager()?;
     let router = standard_router(&manager)?;
     // We support no extensions, so any `ext` URI is unsupported and the content type is refused.
@@ -1561,7 +1555,7 @@ fn test_crossing_rejects_an_unsupported_extension_in_content_type() -> TestResul
 }
 
 #[test]
-fn test_crossing_rejects_an_unsupported_extension_in_accept() -> TestResult {
+fn test_crossing_rejects_an_unsupported_extension_in_accept() -> Result {
     let manager = manager()?;
     let router = standard_router(&manager)?;
     // The sole acceptable instance demands an unsupported extension, so none is acceptable.
@@ -1633,7 +1627,7 @@ impl<'sch> PrimaryMiddleware<'sch, SqliteAdapter> for AppendMark {
 }
 
 #[test]
-fn test_primary_fault_escapes_to_embedder() -> TestResult {
+fn test_primary_fault_escapes_to_embedder() -> Result {
     let manager = manager()?;
     let router = Router::try_new(BaseUri::Relative, |root| {
         root.middleware(Fault, |root| root.get("health", health))
@@ -1651,7 +1645,7 @@ fn test_primary_fault_escapes_to_embedder() -> TestResult {
 }
 
 #[test]
-fn test_middleware_stacks_in_nesting_order() -> TestResult {
+fn test_middleware_stacks_in_nesting_order() -> Result {
     let manager = manager()?;
     let router = Router::try_new(BaseUri::Relative, |root| {
         root.middleware(AppendMark("outer"), |outer| {
@@ -1673,7 +1667,7 @@ fn test_middleware_stacks_in_nesting_order() -> TestResult {
 }
 
 #[test]
-fn test_primary_middleware_wraps_resource() -> TestResult {
+fn test_primary_middleware_wraps_resource() -> Result {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let router = Router::try_new(BaseUri::Relative, |root| {
@@ -1704,7 +1698,7 @@ fn test_primary_middleware_wraps_resource() -> TestResult {
 }
 
 #[test]
-fn test_raw_route_streams_body() -> TestResult {
+fn test_raw_route_streams_body() -> Result {
     let manager = manager()?;
     let router = Router::try_new(BaseUri::Relative, |root| root.get("download", download))?;
 
@@ -1716,7 +1710,7 @@ fn test_raw_route_streams_body() -> TestResult {
 }
 
 #[test]
-fn test_raw_route_omits_jsonapi_content_type() -> TestResult {
+fn test_raw_route_omits_jsonapi_content_type() -> Result {
     let manager = manager()?;
     let router = Router::try_new(BaseUri::Relative, |root| root.get("health", health))?;
 
@@ -1729,7 +1723,7 @@ fn test_raw_route_omits_jsonapi_content_type() -> TestResult {
 }
 
 #[test]
-fn test_resource_middleware_guards_custom_route() -> TestResult {
+fn test_resource_middleware_guards_custom_route() -> Result {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     let router = Router::try_new(BaseUri::Relative, |root| {
@@ -1771,7 +1765,7 @@ fn test_resource_middleware_guards_custom_route() -> TestResult {
 // --- wildcard routes -------------------------------------------------------
 
 // A router with an anonymous wildcard that echoes the captured tail into the response body.
-fn wildcard_echo_router<'a>() -> Result<Router<'a, SqliteAdapter>, Box<dyn StdError>> {
+fn wildcard_echo_router<'a>() -> Result<Router<'a, SqliteAdapter>> {
     Ok(Router::try_new(BaseUri::Relative, |root| {
         root.get(
             "files/*",
@@ -1794,7 +1788,7 @@ fn captured_tail(response: &Response<Vec<u8>>) -> String {
 }
 
 #[test]
-fn test_wildcard_captures_multiple_levels() -> TestResult {
+fn test_wildcard_captures_multiple_levels() -> Result {
     let manager = manager()?;
     let router = wildcard_echo_router()?;
 
@@ -1806,7 +1800,7 @@ fn test_wildcard_captures_multiple_levels() -> TestResult {
 }
 
 #[test]
-fn test_wildcard_captures_a_single_level() -> TestResult {
+fn test_wildcard_captures_a_single_level() -> Result {
     let manager = manager()?;
     let router = wildcard_echo_router()?;
 
@@ -1818,7 +1812,7 @@ fn test_wildcard_captures_a_single_level() -> TestResult {
 }
 
 #[test]
-fn test_wildcard_preserves_a_flat_encoded_segment() -> TestResult {
+fn test_wildcard_preserves_a_flat_encoded_segment() -> Result {
     let manager = manager()?;
     let router = wildcard_echo_router()?;
 
@@ -1831,7 +1825,7 @@ fn test_wildcard_preserves_a_flat_encoded_segment() -> TestResult {
 }
 
 #[test]
-fn test_wildcard_preserves_a_nested_encoded_slash() -> TestResult {
+fn test_wildcard_preserves_a_nested_encoded_slash() -> Result {
     let manager = manager()?;
     let router = wildcard_echo_router()?;
 
@@ -1851,7 +1845,7 @@ fn test_wildcard_preserves_a_nested_encoded_slash() -> TestResult {
 }
 
 #[test]
-fn test_wildcard_requires_at_least_one_segment() -> TestResult {
+fn test_wildcard_requires_at_least_one_segment() -> Result {
     let manager = manager()?;
     let router = wildcard_echo_router()?;
 
@@ -1864,7 +1858,7 @@ fn test_wildcard_requires_at_least_one_segment() -> TestResult {
 }
 
 #[test]
-fn test_wildcard_reaches_the_resource_tier() -> TestResult {
+fn test_wildcard_reaches_the_resource_tier() -> Result {
     let manager = manager()?;
     let articles = manager.registry().schema("articles")?;
     // A resource-tier catch-all, declared last so it only claims paths no canonical route matched.
@@ -1905,7 +1899,7 @@ fn test_wildcard_reaches_the_resource_tier() -> TestResult {
 }
 
 #[test]
-fn test_misplaced_wildcard_is_rejected() -> TestResult {
+fn test_misplaced_wildcard_is_rejected() -> Result {
     let result = Router::try_new(BaseUri::Relative, |root| root.get("*/tail", health));
 
     assert!(matches!(result, Err(RouterError::MisplacedGlob { .. })));
@@ -1914,7 +1908,7 @@ fn test_misplaced_wildcard_is_rejected() -> TestResult {
 }
 
 #[test]
-fn test_named_wildcard_is_rejected() -> TestResult {
+fn test_named_wildcard_is_rejected() -> Result {
     // A wildcard must be the anonymous `*`; a named one is a build-time fault.
     let result = Router::try_new(BaseUri::Relative, |root| root.get("files/*rest", health));
 
@@ -1924,7 +1918,7 @@ fn test_named_wildcard_is_rejected() -> TestResult {
 }
 
 #[test]
-fn test_duplicate_capture_is_rejected() -> TestResult {
+fn test_duplicate_capture_is_rejected() -> Result {
     // A repeated `:name` collides on resolution.
     let repeated = Router::try_new(BaseUri::Relative, |root| root.get(":id/sub/:id", health));
     assert!(matches!(
@@ -1938,7 +1932,7 @@ fn test_duplicate_capture_is_rejected() -> TestResult {
 // --- named segment capture -------------------------------------------------
 
 // A router that echoes a captured (decoded) `:id` into the response body.
-fn named_echo_router<'a>() -> Result<Router<'a, SqliteAdapter>, Box<dyn StdError>> {
+fn named_echo_router<'a>() -> Result<Router<'a, SqliteAdapter>> {
     Ok(Router::try_new(BaseUri::Relative, |root| {
         root.get(
             "items/:id",
@@ -1956,7 +1950,7 @@ fn named_echo_router<'a>() -> Result<Router<'a, SqliteAdapter>, Box<dyn StdError
 }
 
 #[test]
-fn test_named_segment_is_percent_decoded() -> TestResult {
+fn test_named_segment_is_percent_decoded() -> Result {
     let manager = manager()?;
     let router = named_echo_router()?;
 
@@ -1969,7 +1963,7 @@ fn test_named_segment_is_percent_decoded() -> TestResult {
 }
 
 #[test]
-fn test_named_segment_with_invalid_encoding_does_not_match() -> TestResult {
+fn test_named_segment_with_invalid_encoding_does_not_match() -> Result {
     let manager = manager()?;
     let router = named_echo_router()?;
 
